@@ -38,7 +38,8 @@ function validateConfig_(input) {
     typeof c.fetchRemoteImages !== 'boolean' || !/^gemini-[a-z0-9._-]+$/.test(c.model) ||
     !/^[a-z][a-z0-9-]*$/.test(c.vertexLocation)) fail_('CONFIG');
   ['spreadsheetName', 'sheetName', 'labelName'].forEach(function (k) {
-    if (typeof c[k] !== 'string' || !c[k].trim() || c[k].length > 200 || /[\x00-\x1f]/.test(c[k])) fail_('CONFIG');
+    const limit = k === 'sheetName' ? 100 : 200;
+    if (typeof c[k] !== 'string' || !c[k].trim() || c[k].length > limit || /[\x00-\x1f]/.test(c[k])) fail_('CONFIG');
   });
   if (/[\[\]*?:/\\]/.test(c.sheetName) || c.sheetName.toLowerCase() === MC.journalName.toLowerCase() ||
     c.labelName.split('/').some(function (p) { return !p.trim(); })) fail_('CONFIG');

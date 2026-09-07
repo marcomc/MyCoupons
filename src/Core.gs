@@ -7,8 +7,12 @@ function digest_(s) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, s, Utilities.Charset.UTF_8)
     .map(function (v) { return ('0' + ((v + 256) % 256).toString(16)).slice(-2); }).join('');
 }
+function boundedText_(text, limit) {
+  const prefix = text.slice(0, limit);
+  return /[\ud800-\udbff]$/.test(prefix) && /[\udc00-\udfff]/.test(text.charAt(limit)) ? prefix.slice(0, -1) : prefix;
+}
 function textCell_(s) {
-  const value = String(s == null ? '' : s).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '').slice(0, 4000);
+  const value = boundedText_(String(s == null ? '' : s).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, ''), 4000);
   return /^[\s]*[=+@-]/.test(value) ? "'" + value : value;
 }
 function normalized_(s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); }
@@ -20,9 +24,19 @@ function decodeHtml_(s) {
     return {amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' '}[n.toLowerCase()];
   });
 }
+function mapHtmlTags_(html, visit) {
+  // Consume comments and raw text atomically, so their embedded markup is not visited.
+  const attributes = `(?:[^>"']|"[^"]*"|'[^']*')*`;
+  const token = new RegExp('<!--[\\s\\S]*?(?:-->|$)|<(script|style)(?=[\\s/>])' + attributes +
+    '>[\\s\\S]*?(?:<\\/\\1(?=[\\s/>])' + attributes + '>|$)|<(?=/?[a-z]|[!?])' + attributes + '>', 'gi');
+  return String(html).replace(token, function (tag, rawText) {
+    return rawText || tag.startsWith('<!--') ? '' : visit(tag);
+  });
+}
 function htmlText_(html) {
-  return decodeHtml_(html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
-    .replace(/<(?:br|\/p|\/div|\/tr)\b[^>]*>/gi, '\n').replace(/<[^>]*>/g, ' '));
+  return decodeHtml_(mapHtmlTags_(html, function (tag) {
+    return /^<(?:br|\/p|\/div|\/tr)(?=[\s/>])/i.test(tag) ? '\n' : ' ';
+  }));
 }
 function safeUrl_(s) {
   if (typeof s !== 'string' || s.length > 2048 || /[\s\\\x00-\x1f]/.test(s)) return '';
@@ -34,7 +48,8 @@ function safeUrl_(s) {
 }
 function remoteImageUrls_(html) {
   const urls = [];
-  String(html).replace(/<img\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi, function (tag) {
+  mapHtmlTags_(html, function (tag) {
+    if (!/^<img(?=[\s/>])/i.test(tag)) return tag;
     const attrs = Object.create(null);
     const re = /\s+([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
     let match;
@@ -65,18 +80,24 @@ function deterministicCandidates_(message) {
   let match;
   while ((match = re.exec(message.text))) {
     const code = codeLexemes_(match[1])[0];
-    if (code && code.length >= 3 && code.length <= 40 && /^[\p{L}\p{N}][\p{L}\p{N}\p{M}_-]*$/u.test(code) &&
+    const length = code ? Array.from(code).length : 0;
+    if (length >= 3 && length <= 40 && /^[\p{L}\p{N}][\p{L}\p{N}\p{M}_-]*$/u.test(code) &&
       codes.indexOf(code) < 0) codes.push(code);
   }
   return codes.slice(0, MC.maxCandidates).map(function (code) {
-    return {code: code, notes: message.text.slice(0, 3500), confidence: 'low', review: true};
+    return {code: code, notes: boundedText_(message.text, 3500), confidence: 'low', review: true};
   });
 }
 function fieldInQuote_(field, value, quote) {
   if (field === 'code') return codeLexemes_(quote).indexOf(value) >= 0;
   if (field === 'website') {
     const urls = quote.match(/https:\/\/[^\s<>"']+/gi) || [];
-    return urls.indexOf(value) >= 0;
+    if (urls.indexOf(value) >= 0) return true;
+    // Only invalid authority suffixes are prose. Path/query punctuation can be identity.
+    if (!/^https:\/\/[a-z0-9.-]+(?::443)?$/i.test(value) || !safeUrl_(value)) return false;
+    return urls.some(function (url) {
+      return url.startsWith(value) && /^[.,;!?)\]}]+$/.test(url.slice(value.length)) && !safeUrl_(url);
+    });
   }
   const source = normalized_(quote);
   const needle = normalized_(value);
@@ -101,13 +122,13 @@ function normalizeCandidate_(raw, message) {
     const value = (raw[k] || '').trim();
     const limit = k === 'notes' ? 3500 : 1000;
     if (value.length > limit) truncated = true;
-    c[k] = value.slice(0, limit);
+    c[k] = value.length > limit && k !== 'notes' ? '' : boundedText_(value, limit);
   });
   c.website = safeUrl_(c.website);
   if (c.expiry && !validDate_(c.expiry)) c.expiry = '';
   c.confidence = ['high', 'medium', 'low'].indexOf(raw.confidence) >= 0 ? raw.confidence : 'low';
   c.review = raw.review !== false || c.confidence !== 'high' || !c.merchant ||
-    !(c.code || (c.discountType && c.discountValue) || c.website) || message.incomplete || truncated ||
+    !(c.code || (c.discountType && c.discountValue) || c.website) || message.incomplete !== false || truncated ||
     Boolean(raw.website && !c.website || raw.expiry && !c.expiry);
   // Every asserted field must be anchored to supplied text or an inspected image.
   const evidence = raw.evidence || {};

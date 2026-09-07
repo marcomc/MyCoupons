@@ -315,3 +315,144 @@ test('notes require text or image provenance even when other fields are grounded
   const copied = ctx.deterministicCandidates_({text})[0];
   assert.equal(copied.notes, text.slice(0, 3500)); assert.equal(copied.review, true);
 });
+
+test('oversized structured fields are cleared rather than changed into prefixes', () => {
+  const {ctx} = harness();
+  const fields = JSON.parse(require('node:vm').runInContext('JSON.stringify(MC.fields)', ctx));
+  for (const field of fields.filter(k => k !== 'notes')) {
+    for (const size of [1000, 1001]) {
+      const value = field === 'website' ? 'https://shop.com/' + 'x'.repeat(size - 17) : 'X'.repeat(size);
+      for (const evidence of [undefined, {quote: value}, {image: 0}]) {
+        const actual = ctx.normalizeCandidate_({[field]: value, evidence: {[field]: evidence}},
+          {text: value, images: [{}], incomplete: false});
+        const retained = size === 1000 && evidence && field !== 'expiry';
+        assert.equal(actual[field], retained ? value : '', field + ': ' + size);
+        assert.equal(actual.review, true);
+      }
+    }
+  }
+  for (const field of ['code', 'merchant']) {
+    const value = 'X'.repeat(999) + '𐐀';
+    const actual = ctx.normalizeCandidate_({[field]: value, evidence: {[field]: {image: 0}}},
+      {text: '', images: [{}], incomplete: false});
+    assert.equal(actual[field], '');
+  }
+});
+
+test('deterministic code bounds count Unicode code points without altering spelling', () => {
+  const {ctx} = harness();
+  for (const letter of ['A', 'é', '𐐀']) {
+    for (const count of [2, 3, 21, 40, 41]) {
+      const code = letter.repeat(count);
+      const actual = ctx.deterministicCandidates_({text: 'Coupon code ' + code});
+      assert.deepEqual(Array.from(actual, c => c.code), count >= 3 && count <= 40 ? [code] : []);
+    }
+  }
+  const code = 'A𐐀\u0301';
+  assert.deepEqual(Array.from(ctx.deterministicCandidates_({text: 'Coupon code ' + code + ' Coupon code ' + code}), c => c.code), [code]);
+});
+
+test('HTML extraction excludes hidden lexical contexts without losing following visible text', () => {
+  const {ctx} = harness();
+  const hidden = 'Shop Coupon code HIDDEN';
+  const visible = '<p>Visible &amp; Coupon code REAL20</p>';
+  const cases = [];
+  for (const tag of ['script', 'style']) {
+    for (const close of ['</' + tag + ' >', '</' + tag.toUpperCase() + '\n>', '</' + tag + '/>']) {
+      cases.push(['<' + tag + '>' + hidden + close + visible, 'Visible & Coupon code REAL20']);
+    }
+    cases.push([visible + '<' + tag + '>' + hidden, 'Visible & Coupon code REAL20']);
+    cases.push(['<' + tag + '>"<!--";' + hidden + '</' + tag + '>' + visible, 'Visible & Coupon code REAL20']);
+    cases.push(['Visible 1 < 2 <' + tag + '>' + hidden + '</' + tag + '>', 'Visible 1 < 2']);
+  }
+  cases.push(['<!-- <b>' + hidden + '</b> <script> -->' + visible, 'Visible & Coupon code REAL20'],
+    [visible + '<!-- > <script>' + hidden, 'Visible & Coupon code REAL20'],
+    ['<p title="> ' + hidden + '">Visible</p>', 'Visible'],
+    ['<script-name>Keep</script-name><script>hidden</script>', 'Keep'],
+    ['<style-name>Keep</style-name><style>hidden</style>', 'Keep'],
+    ['&lt;script&gt;Visible&lt;/script&gt;', '<script>Visible</script>']);
+  for (const [html, expected] of cases) {
+    const text = ctx.htmlText_(html);
+    assert.equal(text.trim().replace(/\s+/g, ' '), expected, html);
+    assert.ok(!ctx.deterministicCandidates_({text}).some(c => c.code === 'HIDDEN'));
+    const actual = ctx.normalizeCandidate_({merchant: 'Shop', code: 'HIDDEN', confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote: 'HIDDEN'}}}, {text, images: [], incomplete: false});
+    assert.equal(actual.code, ''); assert.equal(actual.review, true);
+  }
+});
+
+test('only explicit boolean completeness can allow automatic confirmation', () => {
+  const {ctx} = harness();
+  const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
+  for (const state of [undefined, null, 0, '', 'false', [], {}, true, false]) {
+    const message = {text: 'Shop SAVE20', images: []};
+    if (state !== undefined) message.incomplete = state;
+    assert.equal(ctx.normalizeCandidate_(raw, message).review, state !== false);
+  }
+});
+
+test('website prose delimiters cannot shorten path or query identities', () => {
+  const {ctx} = harness();
+  function normalize(value, quote, source) {
+    return ctx.normalizeCandidate_({merchant: 'Shop', website: value, confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, website: {quote}}},
+    {text: 'Shop ' + source, images: [], incomplete: false});
+  }
+  const url = 'https://shop.com';
+  for (const source of ['Visit ' + url + '.', '(' + url + ')', url + ', next', '[' + url + ']', url + '!']) {
+    for (const quote of [url, source]) {
+      const actual = normalize(url, quote, source);
+      assert.equal(actual.website, url); assert.equal(actual.review, false);
+    }
+  }
+  for (const token of [url + '/path.', url + '/path,', url + '/item_(v1)', url + '/path)',
+    url + '/?token=secret.', url + '/?token=secret,', url + '/#section.', url + '?']) {
+    assert.equal(normalize(token, token, token).website, token);
+    const shortened = token.slice(0, -1);
+    for (const quote of [shortened, token]) {
+      const actual = normalize(shortened, quote, token);
+      assert.equal(actual.website, ''); assert.equal(actual.review, true);
+    }
+  }
+  assert.equal(normalize(url, url, url + '.evil.com').website, '');
+  assert.equal(normalize(url, url, url + '/terms').website, '');
+  assert.equal(normalize(url + '/path', url + '/path', '"' + url + '/path".').website, url + '/path');
+});
+
+test('bounded text never creates half a surrogate pair in notes or cells', () => {
+  const {ctx} = harness();
+  for (const limit of [3500, 4000]) {
+    const text = 'X'.repeat(limit - 1) + '𐐀tail';
+    if (limit === 4000) assert.equal(ctx.textCell_(text), 'X'.repeat(limit - 1));
+    else {
+      const actual = ctx.normalizeCandidate_({notes: text, evidence: {notes: {image: 0}}},
+        {text: '', images: [{}], incomplete: false});
+      assert.equal(actual.notes, 'X'.repeat(limit - 1)); assert.equal(actual.review, true);
+      const intro = 'Coupon code SAVE20 ';
+      const source = intro + 'X'.repeat(limit - 1 - intro.length) + '𐐀tail';
+      assert.equal(ctx.deterministicCandidates_({text: source})[0].notes, source.slice(0, limit - 1));
+    }
+  }
+  assert.equal(ctx.textCell_('X'.repeat(3998) + '𐐀tail'), 'X'.repeat(3998) + '𐐀');
+  const notes = 'X'.repeat(3499) + ' end';
+  const actual = ctx.normalizeCandidate_({notes, evidence: {notes: {quote: notes}}},
+    {text: notes, images: [], incomplete: false});
+  assert.equal(actual.notes, notes.slice(0, 3500)); assert.equal(actual.review, true);
+});
+
+test('image discovery shares rawtext and comment exclusion with text extraction', () => {
+  const {ctx} = harness();
+  const hidden = '<img src="https://shop.com/hidden.jpg">';
+  const real = '<img src="https://shop.com/real.jpg">';
+  for (const html of ['<!-- > ' + hidden + ' -->' + real,
+    '<script>' + hidden + '</script >' + real, '<style>' + hidden + '</style\n>' + real,
+    real + '<script>' + hidden, real + '<!-- ' + hidden,
+    '<div title=\'' + hidden + '\'>Visible</div>' + real,
+    '<script>"<!--";' + hidden + '</script>' + real,
+    '<!-- <script>' + hidden + ' -->' + real,
+    'Visible 1 < 2 <script>' + hidden + '</script>' + real,
+    '<img-other src="https://shop.com/hidden.jpg">' + real]) {
+    assert.deepEqual([...ctx.remoteImageUrls_(html)], ['https://shop.com/real.jpg'], html);
+  }
+});

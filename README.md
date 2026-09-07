@@ -30,15 +30,20 @@ The example configuration contains product defaults only.
   Deterministic candidates currently require review. Tokens end at whitespace,
   ASCII quotes or angle brackets; punctuation inside a token is never silently removed.
   The deterministic parser skips complete tokens outside its supported Unicode
-  letter/number/mark, underscore and hyphen syntax.
+  letter/number/mark, underscore and hyphen syntax and 3–40 code-point length.
 - Normalize proposed fields, including notes, against quoted source text.
   Unsubstantiated fields become empty; code evidence preserves exact spelling
-  and complete tokens, including punctuation. Image-based proposals and truncated
-  conditions require review. This increment makes no AI requests and does not
-  establish completeness of extracted offers.
+  and complete tokens, including punctuation. Oversized structured values become
+  empty; bounded notes retain complete Unicode characters and require review.
+  Image-based proposals and unknown message completeness also require review.
+  Website evidence recognizes prose around bare host URLs while preserving
+  punctuation in paths and queries. This increment makes no AI requests and does
+  not establish completeness of extracted offers.
 - Quote formula-like spreadsheet text. Discover HTTPS image URLs while excluding
   recognizable trackers, IP literals, and local hostnames. This is a lexical
   filter; it does not resolve DNS or download images.
+- Extract text and image tags with a shared HTML traversal that excludes comments
+  and script/style bodies. This is lexical extraction, not CSS visibility analysis.
 - Use stable review action identifiers with English labels: `Confirm`, `Ignore`,
   and `Retry with AI`. Any ignored candidate keeps its source message unchanged;
   archiving requires all candidates to be confirmed.
@@ -50,7 +55,8 @@ they must be resolved before a future importer can use them for deduplication.
 
 `config/example.json` documents product defaults. Copy it to a `*.local.json`
 file for private settings. The coupon tab cannot use the reserved internal title
-`_MyCoupons Messages`, regardless of case. The manifest declares the intended owner-only Apps
+`_MyCoupons Messages`, regardless of case, and its name is limited to 100 UTF-16
+units. The manifest declares the intended owner-only Apps
 Script runtime; no permissions are granted merely by checking out these files.
 
 ## Local validation
