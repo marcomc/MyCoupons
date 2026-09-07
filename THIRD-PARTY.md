@@ -11,10 +11,11 @@ packages and integrity hashes. Upstream sources are not patched.
 The bundle exports only `MC_HTML.parse`. Parsed text and attributes
 already have context-correct character references; never decode them again.
 MyCoupons parses each input as an HTML document with scripting disabled and
-traverses ordinary child nodes,
-excluding comments, non-content containers, inert template contents and HTML
-`hidden` subtrees. This is content extraction without CSS layout or visibility
-evaluation. Document parsing retains `html`/`body` attributes; ordinary snippets
+extracts content from ordinary child nodes, excluding comments, non-content containers, inert template contents and HTML
+`hidden` subtrees. Foreign SVG/MathML subtrees are excluded from evidence and
+mark coverage incomplete, including when nested inside suppressed containers.
+Candidate consumers retain this coverage through raw HTML input. This is content
+extraction without CSS layout or visibility evaluation. Document parsing retains `html`/`body` attributes; ordinary snippets
 receive implicit wrappers. Leading document whitespace and orphan table tags
 follow standard document rules; no fragment container context is guessed.
 No scripts execute and no external resources are loaded.

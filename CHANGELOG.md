@@ -11,9 +11,12 @@
   boundaries, Unicode-aware bounds and evidence for notes; oversized structured
   values are cleared and unknown completeness cannot authorize confirmation.
 - Standards-based HTML text/image traversal with malformed-input handling,
-  hidden-content exclusions and normalized tracker dimensions.
+  hidden-content exclusions and normalized tracker dimensions. Unsupported
+  SVG/MathML coverage propagates to review through the raw-HTML source adapter.
 - Complete HTML character-reference decoding with separate text/attribute rules
   and a reproducible, pinned local parser bundle.
+- Strict candidate/evidence schemas and complete introducer, code-token and URL
+  evidence boundaries.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

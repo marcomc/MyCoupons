@@ -21,6 +21,7 @@ function htmlContent_(html) {
   const stack = [{node: root}];
   const pieces = [];
   const images = [];
+  let incomplete = false;
   function newline() {
     if (pieces.length && !pieces[pieces.length - 1].endsWith('\n')) pieces.push('\n');
   }
@@ -28,24 +29,27 @@ function htmlContent_(html) {
     const entry = stack.pop();
     if (entry.exit) { newline(); continue; }
     const node = entry.node;
-    if (node.nodeName === '#text') { if (node.value) pieces.push(node.value); continue; }
+    if (node.nodeName === '#text') { if (!entry.suppressed && node.value) pieces.push(node.value); continue; }
     const tag = node.tagName || '';
     const isHtml = node.namespaceURI === 'http://www.w3.org/1999/xhtml';
-    if (/^(?:script|style)$/.test(tag) || isHtml &&
-      (/^(?:template|title|head|iframe|noembed|noframes)$/.test(tag) ||
-        (node.attrs || []).some(function (attr) { return attr.name === 'hidden'; }))) continue;
-    const block = isHtml && /^(?:address|article|aside|blockquote|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)$/.test(tag);
-    if (block || isHtml && tag === 'br') newline();
+    const foreign = Boolean(tag && !isHtml);
+    if (foreign) incomplete = true;
+    const suppressed = entry.suppressed || foreign || isHtml &&
+      (/^(?:script|style|template|title|head|iframe|noembed|noframes)$/.test(tag) ||
+        (node.attrs || []).some(function (attr) { return attr.name === 'hidden'; }));
+    const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)$/.test(tag);
+    if (block || !suppressed && isHtml && tag === 'br') newline();
     if (block) stack.push({exit: true});
-    if (isHtml && tag === 'img') {
+    if (!suppressed && isHtml && tag === 'img') {
       const attrs = Object.create(null);
       (node.attrs || []).forEach(function (attr) { attrs[attr.name] = attr.value; });
       images.push(attrs);
     }
-    const children = node.childNodes || [];
-    for (let i = children.length - 1; i >= 0; i--) stack.push({node: children[i]});
+    // Suppressed and inert subtrees still contribute unsupported-namespace coverage.
+    const children = node.content ? node.content.childNodes : node.childNodes || [];
+    for (let i = children.length - 1; i >= 0; i--) stack.push({node: children[i], suppressed: suppressed});
   }
-  return {text: pieces.join(''), images: images};
+  return {text: pieces.join(''), images: images, incomplete: incomplete};
 }
 function htmlText_(html) {
   return htmlContent_(html).text;
@@ -76,30 +80,46 @@ function remoteImageUrls_(html) {
 function couponSignal_(text) {
   return /\b(coupon|voucher|promo(?:tion|code)?|discount|sconto|codice|offert[ae]|redeem|cashback|sale|save|risparmi|buono|buoni|deal)\b|\d\s*%/i.test(text);
 }
+function candidateSource_(message) {
+  if (!message || typeof message !== 'object' || Array.isArray(message) ||
+    message.text !== undefined && typeof message.text !== 'string' ||
+    Object.prototype.hasOwnProperty.call(message, 'html') && typeof message.html !== 'string' ||
+    message.images !== undefined && !Array.isArray(message.images)) fail_('AI');
+  const html = message.html === undefined ? {text: '', incomplete: false} : htmlContent_(message.html);
+  return {text: [message.text || '', html.text].filter(Boolean).join('\n'),
+    images: message.images === undefined ? [] : message.images,
+    incomplete: message.incomplete !== false || html.incomplete};
+}
 function codeLexemes_(text) {
-  // Other punctuation belongs to the code, never to a silently discarded suffix.
-  return text.match(/[^\s"'<>]+/gu) || [];
+  // Peel one explicit outer wrapper; punctuation inside a token remains identity.
+  return (text.match(/\S+/gu) || []).map(function (token) {
+    return /^(?:"[\s\S]*"|'[\s\S]*'|<[\s\S]*>)$/.test(token) ? token.slice(1, -1) : token;
+  });
 }
 function deterministicCandidates_(message) {
   // Only explicit code syntax is deterministic. Preserve the full bounded terms
   // and require review: a regex cannot establish the completeness of an offer.
+  const source = candidateSource_(message);
   const codes = [];
-  const re = /\b(?:coupon\s+code|promo(?:tional)?\s+code|discount\s+code|use\s+(?:the\s+)?code|codice(?:\s+sconto)?)\s*[:=]?\s*(\S+)/giu;
+  const re = /(?:^|[^\p{L}\p{N}\p{M}_])(?:coupon\s+code|promo(?:tional)?\s+code|discount\s+code|use\s+(?:the\s+)?code|codice\s+sconto|codice(?!\s+sconto(?:\s|[:=]|$)))(?:\s*[:=]\s*|\s+)(\S+)/giu;
   let match;
-  while ((match = re.exec(message.text))) {
+  while ((match = re.exec(source.text))) {
     const code = codeLexemes_(match[1])[0];
     const length = code ? Array.from(code).length : 0;
     if (length >= 3 && length <= 40 && /^[\p{L}\p{N}][\p{L}\p{N}\p{M}_-]*$/u.test(code) &&
       codes.indexOf(code) < 0) codes.push(code);
   }
   return codes.slice(0, MC.maxCandidates).map(function (code) {
-    return {code: code, notes: boundedText_(message.text, 3500), confidence: 'low', review: true};
+    return {code: code, notes: boundedText_(source.text, 3500), confidence: 'low', review: true};
   });
 }
 function fieldInQuote_(field, value, quote) {
   if (field === 'code') return codeLexemes_(quote).indexOf(value) >= 0;
   if (field === 'website') {
-    const urls = quote.match(/https:\/\/[^\s<>"']+/gi) || [];
+    const urls = [];
+    const re = /(?:^|[\s"'([{<])(https:\/\/[^\s<>"']+)/gi;
+    let match;
+    while ((match = re.exec(quote))) urls.push(match[1]);
     if (urls.indexOf(value) >= 0) return true;
     // Only invalid authority suffixes are prose. Path/query punctuation can be identity.
     if (!/^https:\/\/[a-z0-9.-]+(?::443)?$/i.test(value) || !safeUrl_(value)) return false;
@@ -122,7 +142,23 @@ function fieldInQuote_(field, value, quote) {
   return false;
 }
 function normalizeCandidate_(raw, message) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail_('AI');
+  function objectWithKeys(value, keys) {
+    return value && typeof value === 'object' && !Array.isArray(value) &&
+      Object.keys(value).every(function (key) { return keys.indexOf(key) >= 0; });
+  }
+  if (!objectWithKeys(raw, MC.fields.concat(['confidence', 'review', 'evidence'])) ||
+    raw.confidence !== undefined && ['high', 'medium', 'low'].indexOf(raw.confidence) < 0 ||
+    raw.review !== undefined && typeof raw.review !== 'boolean') fail_('AI');
+  const evidence = raw.evidence === undefined ? {} : raw.evidence;
+  if (!objectWithKeys(evidence, MC.fields)) fail_('AI');
+  Object.keys(evidence).forEach(function (key) {
+    const ev = evidence[key];
+    if (ev === undefined) return;
+    if (!objectWithKeys(ev, ['quote', 'image']) ||
+      ev.quote !== undefined && typeof ev.quote !== 'string' ||
+      ev.image !== undefined && !Number.isInteger(ev.image)) fail_('AI');
+  });
+  const source = candidateSource_(message);
   const c = {};
   let truncated = false;
   MC.fields.forEach(function (k) {
@@ -136,16 +172,15 @@ function normalizeCandidate_(raw, message) {
   if (c.expiry && !validDate_(c.expiry)) c.expiry = '';
   c.confidence = ['high', 'medium', 'low'].indexOf(raw.confidence) >= 0 ? raw.confidence : 'low';
   c.review = raw.review !== false || c.confidence !== 'high' || !c.merchant ||
-    !(c.code || (c.discountType && c.discountValue) || c.website) || message.incomplete !== false || truncated ||
+    !(c.code || (c.discountType && c.discountValue) || c.website) || source.incomplete || truncated ||
     Boolean(raw.website && !c.website || raw.expiry && !c.expiry);
   // Every asserted field must be anchored to supplied text or an inspected image.
-  const evidence = raw.evidence || {};
   MC.fields.filter(function (k) { return c[k]; }).forEach(function (k) {
     const ev = evidence[k];
     const groundedText = ev && typeof ev.quote === 'string' && ev.quote.trim().length > 1 &&
-      (k === 'code' || k === 'website' ? message.text.includes(ev.quote) : normalized_(message.text).includes(normalized_(ev.quote))) &&
-      fieldInQuote_(k, c[k], ev.quote) && fieldInQuote_(k, c[k], message.text);
-    const groundedImage = ev && Number.isInteger(ev.image) && ev.image >= 0 && ev.image < message.images.length;
+      (k === 'code' || k === 'website' ? source.text.includes(ev.quote) : normalized_(source.text).includes(normalized_(ev.quote))) &&
+      fieldInQuote_(k, c[k], ev.quote) && fieldInQuote_(k, c[k], source.text);
+    const groundedImage = ev && Number.isInteger(ev.image) && ev.image >= 0 && ev.image < source.images.length;
     if (!groundedText && !groundedImage) { c[k] = ''; c.review = true; }
     // OCR-only evidence is a proposal, not independently verified import authority.
     if (groundedImage && !groundedText) c.review = true;

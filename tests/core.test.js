@@ -67,6 +67,8 @@ test('normalized date claimed by AI does not independently establish expiry', ()
   const {ctx} = harness();
   const raw = {merchant: 'Shop', code: 'SAVE20', expiry: '2026-09-30', confidence: 'high', review: false,
     evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, expiry: {quote: 'next month', normalizedDate: '2026-09-30'}}};
+  assert.throws(() => ctx.normalizeCandidate_(raw, {text: 'Shop SAVE20 next month', images: [], incomplete: false}), /AI/);
+  raw.evidence.expiry = {quote: 'next month'};
   const candidate = ctx.normalizeCandidate_(raw, {text: 'Shop SAVE20 next month', images: [], incomplete: false});
   assert.equal(candidate.expiry, '');
   assert.equal(candidate.review, true);
@@ -293,7 +295,7 @@ test('notes require text or image provenance even when other fields are grounded
     {text, images, incomplete: false});
   }
   for (const evidence of [undefined, {quote: 'Works forever'}, {quote: 'Shop SAVE20'},
-    {image: -1}, {image: 0}, {image: 0.5}, {image: '0'}]) {
+    {image: -1}, {image: 0}]) {
     const result = normalize('Works forever', evidence);
     assert.equal(result.notes, ''); assert.equal(result.review, true);
   }
@@ -606,7 +608,7 @@ test('only the actual HTML hidden attribute excludes a complete subtree', () => 
     assert.deepEqual([...ctx.remoteImageUrls_('<div ' + attribute + '>' + hidden + '</div>')],
       ['https://shop.com/hidden.jpg']);
   }
-  assert.equal(ctx.htmlText_('<svg><text hidden>Foreign visible</text></svg>'), 'Foreign visible');
+  assert.equal(ctx.htmlText_('<svg><text hidden>Foreign visible</text></svg>'), '');
 });
 
 test('document wrapper attributes remain authoritative for text and images', () => {
@@ -635,4 +637,159 @@ test('document wrapper attributes remain authoritative for text and images', () 
     assert.deepEqual([...ctx.remoteImageUrls_(html)], ['https://shop.com/offer.jpg']);
   }
   assert.equal(ctx.htmlText_('<table><tr><td>First</td><td>Second</td></tr></table>'), 'First\nSecond\n');
+});
+
+test('unsupported namespaces retain coverage through hidden and inert ancestors', () => {
+  const {ctx} = harness();
+  const foreign = [
+    '<svg><defs><text>Coupon code HIDDEN</text></defs></svg>',
+    '<svg><symbol><text>Coupon code HIDDEN</text></symbol></svg>',
+    '<svg><metadata>Coupon code HIDDEN</metadata></svg>',
+    '<svg><text>Coupon code HIDDEN</text></svg>', '<svg><path d="M0 0"/></svg>',
+    '<math><mtext>Coupon code HIDDEN</mtext></math>',
+    '<svg><foreignObject><div>Coupon code HIDDEN<img src="https://shop.com/hidden.jpg"></div><math/></foreignObject></svg>'
+  ];
+  const raw = {merchant: 'Shop', code: 'REAL20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'REAL20'}}};
+  for (const content of foreign) {
+    for (const wrap of [s => s, s => '<div hidden>' + s + '</div>', s => '<template>' + s + '</template>',
+      s => '<template><div hidden><template>' + s + '</template></div></template>']) {
+      const html = wrap(content) + '<p>Shop Coupon code REAL20</p><img src="https://shop.com/real.jpg">';
+      const result = ctx.htmlContent_(html);
+      assert.equal(result.incomplete, true, html);
+      assert.equal(result.text, 'Shop Coupon code REAL20\n');
+      assert.deepEqual([...ctx.remoteImageUrls_(html)], ['https://shop.com/real.jpg']);
+      const message = {text: '', html, images: [], incomplete: false};
+      assert.deepEqual(Array.from(ctx.deterministicCandidates_(message), c => c.code), ['REAL20']);
+      const candidate = ctx.normalizeCandidate_(raw, message);
+      assert.equal(candidate.code, 'REAL20'); assert.equal(candidate.review, true);
+      const hidden = ctx.normalizeCandidate_({...raw, code: 'HIDDEN',
+        evidence: {...raw.evidence, code: {quote: 'HIDDEN'}}}, message);
+      assert.equal(hidden.code, '');
+      assert.equal(ctx.normalizeCandidate_(raw, {...message, text: 'Shop REAL20'}).review, true);
+    }
+  }
+  assert.equal(ctx.htmlContent_('<div hidden>Hidden</div><template>Hidden</template><p>Visible</p>').incomplete, false);
+});
+
+test('canonical candidate sources preserve raw HTML coverage and inspected image authority', () => {
+  const {ctx} = harness();
+  const raw = {merchant: 'Shop', code: 'REAL20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'REAL20'}}};
+  for (const message of [{text: 'Shop REAL20', incomplete: false},
+    {text: 'Shop', html: '<p>REAL20</p>', incomplete: false},
+    {html: '<p>Shop REAL20</p>', incomplete: false}]) {
+    assert.equal(ctx.normalizeCandidate_(raw, message).review, false);
+  }
+  for (const incomplete of [undefined, null, 0, '', 'false', true]) {
+    assert.equal(ctx.normalizeCandidate_(raw, {html: '<p>Shop REAL20</p>', incomplete}).review, true);
+  }
+  const imageRaw = {...raw, evidence: {...raw.evidence, code: {image: 0}}};
+  const message = {text: 'Shop', html: '<img src="https://shop.com/real.jpg">', incomplete: false};
+  assert.equal(ctx.normalizeCandidate_(imageRaw, message).code, '');
+  assert.equal(ctx.normalizeCandidate_(imageRaw, {...message, images: [{}]}).code, 'REAL20');
+  for (const change of [{html: null}, {html: 4}, {html: {}}, {html: []}, {text: 4}, {images: {}}, {images: null}]) {
+    for (const consumer of [ctx.normalizeCandidate_.bind(null, raw), ctx.deterministicCandidates_]) {
+      assert.throws(() => consumer({text: 'Shop REAL20', incomplete: false, ...change}), /AI/);
+    }
+  }
+  const source = ctx.candidateSource_({text: 'Coupon code SAVE', html: '<span>20</span>', incomplete: false});
+  assert.equal(source.text, 'Coupon code SAVE\n20');
+  assert.equal(ctx.deterministicCandidates_({text: 'Coupon code SAVE', html: '<span>20</span>'})[0].code, 'SAVE');
+});
+
+test('internal quote and angle characters remain part of complete code identities', () => {
+  const {ctx} = harness();
+  function normalize(code, quote, source) {
+    return ctx.normalizeCandidate_({merchant: 'Shop', code, confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote}}},
+    {text: 'Shop ' + source, images: [], incomplete: false});
+  }
+  for (const token of ["SAVE'20", 'SAVE"20', 'SAVE<20', 'SAVE>20', "'SAVE20", 'SAVE20"', '<SAVE20', 'SAVE20>']) {
+    assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + token}).length, 0, token);
+    assert.equal(normalize(token, token, token).review, false, token);
+    for (const part of ['SAVE', 'SAVE20', '20']) {
+      for (const [quote, source] of [[part, token], [token, token], [token, part]]) {
+        assert.equal(normalize(part, quote, source).code, '', token + ': ' + part);
+      }
+    }
+  }
+  for (const token of ['"SAVE20"', "'SAVE20'", '<SAVE20>']) {
+    assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + token})[0].code, 'SAVE20');
+    assert.equal(normalize('SAVE20', 'SAVE20', token).review, false);
+  }
+  for (const token of ['"<SAVE20>"', "''SAVE20''", '<<SAVE20>>']) {
+    assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + token}).length, 0);
+    assert.equal(normalize('SAVE20', 'SAVE20', token).code, '');
+  }
+});
+
+test('coupon introducers require a delimiter after the complete phrase', () => {
+  const {ctx} = harness();
+  for (const text of ['discount codebase', 'use codependency', 'Coupon codeSAVE20', 'codicesconto',
+    'promotional codeword', 'coupon code-SAVE20', 'codice sconto']) {
+    assert.deepEqual([...ctx.deterministicCandidates_({text})], [], text);
+  }
+  for (const phrase of ['Coupon code', 'PROMOTIONAL CODE', 'Use the code', 'codice sconto', 'codice']) {
+    for (const prefix of ['x', 'é', '𐐀', '4', '４', '𝟜', '\u0301', '_']) {
+      assert.deepEqual([...ctx.deterministicCandidates_({text: prefix + phrase + ' SAVE20'})], [], prefix + phrase);
+    }
+    for (const prefix of [' ', '\n', '.', '(', '😀']) {
+      assert.equal(ctx.deterministicCandidates_({text: prefix + phrase + ' SAVE20'})[0].code, 'SAVE20');
+    }
+    for (const delimiter of [' ', '\t', '\n', ':', '=', ' : ', ' = ']) {
+      assert.equal(ctx.deterministicCandidates_({text: phrase + delimiter + 'MiXeD20'})[0].code, 'MiXeD20');
+    }
+  }
+});
+
+test('candidate schema rejects unknown facts and malformed controls before projection', () => {
+  const {ctx} = harness();
+  const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
+  const message = {text: 'Shop SAVE20', images: [], incomplete: false};
+  for (const key of ['expiryDate', 'minimumSpent', 'unsupported', '__proto__']) {
+    for (const value of ['2026-09-30', '', null, undefined]) {
+      assert.throws(() => ctx.normalizeCandidate_({...raw, [key]: value}, message), /AI/, key);
+      assert.throws(() => ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, [key]: value}}, message), /AI/);
+      assert.throws(() => ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {quote: 'SAVE20', [key]: value}}}, message), /AI/);
+    }
+  }
+  for (const change of [{review: null}, {review: 0}, {review: 'false'}, {confidence: null}, {confidence: 4},
+    {confidence: 'certain'}, {evidence: null}, {evidence: []}, {evidence: 'SAVE20'},
+    {evidence: {code: null}}, {evidence: {code: []}}, {evidence: {code: 'SAVE20'}},
+    {evidence: {code: {quote: 4}}}, {evidence: {code: {quote: null}}},
+    {evidence: {code: {image: 0.5}}}, {evidence: {code: {image: '0'}}}, {evidence: {code: {image: null}}}]) {
+    assert.throws(() => ctx.normalizeCandidate_({...raw, ...change}, message), /AI/);
+  }
+  for (const partial of [{}, {merchant: null}, {code: 'SAVE20'}, {evidence: {}},
+    {evidence: {code: {}}}, {confidence: 'low', review: true}]) {
+    assert.equal(ctx.normalizeCandidate_(partial, message).review, true);
+  }
+  for (const image of [-1, 0, 4]) {
+    assert.equal(ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {image}}}, message).code, '');
+  }
+});
+
+test('website evidence requires a leading boundary in both quote and complete source', () => {
+  const {ctx} = harness();
+  const url = 'https://shop.com';
+  function normalize(quote, source, website = url) {
+    return ctx.normalizeCandidate_({merchant: 'Shop', website, confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, website: {quote}}},
+    {text: 'Shop ' + source, images: [], incomplete: false});
+  }
+  for (const source of ['abc' + url, '_' + url, '/' + url, '=' + url, '?' + url, '&' + url,
+    'https://outer.com/?next=' + url, 'https://outer.com/' + url]) {
+    for (const quote of [url, source]) {
+      const actual = normalize(quote, source);
+      assert.equal(actual.website, '', source); assert.equal(actual.review, true);
+    }
+  }
+  for (const prefix of ['', ' ', '\n', '"', "'", '(', '[', '{', '<']) {
+    assert.equal(normalize(url, prefix + url).review, false, prefix);
+  }
+  const exact = 'https://shop.com/path?next=https://other.com';
+  assert.equal(normalize(exact, exact, exact).review, false);
+  assert.equal(normalize(url, url + '/path').website, '');
 });

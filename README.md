@@ -27,11 +27,14 @@ The example configuration contains product defaults only.
 - Recover from the latest real coupon email date, including that entire day in
   `Europe/Rome`; exclude technical scan rows. An empty sheet needs `initialDate`.
 - Detect explicitly introduced coupon codes and retain source text as notes.
-  Deterministic candidates currently require review. Tokens end at whitespace,
-  ASCII quotes or angle brackets; punctuation inside a token is never silently removed.
+  Deterministic candidates currently require review. Tokens end at whitespace;
+  one matching pair of outer ASCII quotes or angle brackets may wrap a token.
+  Internal punctuation is never silently removed. Introducers require whitespace
+  or an explicit colon/equal delimiter before the code.
   The deterministic parser skips complete tokens outside its supported Unicode
   letter/number/mark, underscore and hyphen syntax and 3–40 code-point length.
-- Normalize proposed fields, including notes, against quoted source text.
+- Reject unknown candidate or evidence keys and malformed control fields before
+  normalizing proposed fields, including notes, against quoted source text.
   Unsubstantiated fields become empty; code evidence preserves exact spelling
   and complete tokens, including punctuation. Oversized structured values become
   empty; bounded notes retain complete Unicode characters and require review.
@@ -47,9 +50,20 @@ The example configuration contains product defaults only.
   scripts, styles, metadata, inert templates and
   `hidden` subtrees; include `noscript` fallback content. No CSS visibility analysis
   or script execution occurs. Image dimensions follow HTML pixel/percentage rules.
+  Entire SVG/MathML subtrees are excluded from text/image evidence and mark source
+  coverage incomplete, even for text-free graphics or content inside templates.
+  Their presence requires review; there is no automatic logo exemption.
 - Use stable review action identifiers with English labels: `Confirm`, `Ignore`,
   and `Retry with AI`. Any ignored candidate keeps its source message unchanged;
   archiving requires all candidates to be confirmed.
+
+Candidate helpers accept optional raw `message.html` alongside independent
+`message.text` (plain text and subject) and independently inspected `message.images`.
+Both extraction and normalization derive HTML coverage through the same adapter;
+`incomplete: false` cannot override unsupported HTML content. Do not premerge an
+HTML projection into `message.text`. The string-only `htmlText_` and URL-discovery
+helpers cannot establish source completeness. Future image processing must retain
+these coverage signals rather than treat omitted vector content as processed.
 
 Source identity recovery accepts hexadecimal Gmail links under `mail.google.com`
 using `#all/`, `#inbox/`, `#search/<query>/`, or the `th` query parameter.

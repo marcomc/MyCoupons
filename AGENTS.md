@@ -32,9 +32,16 @@
 - Validate calendar fields before constructing dates. Technical-row exclusions
   use explicit schema markers, not words found in merchant names.
 - HTML image discovery distinguishes exact attributes from `data-*` attributes
-  and text inside other attribute values. Text and image extraction share an
+  and text inside other attribute values. Text and image extraction share a
   standards-parsed traversal that excludes comments, non-content containers and
   HTML `hidden` subtrees. Never recover malformed markup with separate regexes.
+- Exclude foreign SVG/MathML subtrees from evidence and retain incomplete
+  coverage, including text-free graphics and presence inside hidden/templates.
+  Candidate consumers must derive coverage from raw `message.html`; keep
+  `message.text` independent of HTML projections and images independently inspected.
+  A caller-provided complete flag cannot erase unsupported coverage.
+- Validate complete candidate/evidence key sets before projection. Internal code
+  punctuation remains identity; only one matching outer wrapper may be removed.
 - Decode references once per original text span or attribute context. Never
   decode concatenated fragments across removed markup or reparse decoded tags.
   Rebuild the vendored parser from locked dependencies; verify the artifact and
