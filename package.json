@@ -1,0 +1,11 @@
+{
+  "name": "mycoupons",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private Gmail coupon importer for Google Sheets",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check": "node scripts/check.mjs"
+  },
+  "engines": {"node": ">=22", "npm": ">=10"}
+}

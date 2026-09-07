@@ -1,0 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+const root = path.resolve(import.meta.dirname, '..');
+const files = fs.readdirSync(path.join(root, 'src'), {recursive: true}).filter(f => f.endsWith('.gs'));
+for (const file of files) new vm.Script(fs.readFileSync(path.join(root, 'src', file), 'utf8'), {filename: file});
+const manifest = JSON.parse(fs.readFileSync(path.join(root, 'src/appsscript.json')));
+if (manifest.executionApi.access !== 'MYSELF' || manifest.webapp) throw Error('Owner-only execution required');
+const payload = files.map(f => fs.readFileSync(path.join(root, 'src', f), 'utf8')).join('\n');
+if (/console\.(?:log|error)|Logger\.log/.test(payload)) throw Error('Runtime must not log message or credential payloads');
+console.log(`Syntax and manifest checks passed (${files.length} Apps Script files).`);

@@ -5,18 +5,42 @@ Private Gmail-to-Google-Sheets coupon importer built with Google Apps Script.
 ## Table of contents
 
 - [Status](#status)
+- [Core behavior](#core-behavior)
 - [Local validation](#local-validation)
 - [Public information pages](#public-information-pages)
 
 ## Status
 
-Implementation and installation are in progress. The current source includes
-email and image extraction, Gemini routing, a processing journal, review actions
-and owner-only setup entry points. Deployment and end-to-end operation have not
-been validated. Do not treat the current checkout as a completed installation.
+The first implementation increment provides configuration validation, coupon
+candidate parsing and normalization, historical recovery dates, and English
+localization. It is a tested foundation; Gmail ingestion, AI requests,
+spreadsheet writes, review triggers, and installation are subsequent increments.
+There is no active importer or deployment in this increment.
 
 Private installation identifiers and credentials belong outside version control.
 The example configuration contains product defaults only.
+
+## Core behavior
+
+- Preserve the existing 26 English coupon headers. Additional user columns are
+  outside the core schema.
+- Recover from the latest real coupon email date, including that entire day in
+  `Europe/Rome`; exclude technical scan rows. An empty sheet needs `initialDate`.
+- Detect explicitly introduced coupon codes and retain source text as notes.
+  Deterministic candidates currently require review.
+- Normalize proposed fields against quoted source text. Unsubstantiated fields
+  become empty; image-based proposals require review. This increment makes no
+  AI requests and does not establish completeness of extracted offers.
+- Quote formula-like spreadsheet text. Discover HTTPS image URLs while excluding
+  recognizable trackers, IP literals, and local hostnames. This is a lexical
+  filter; it does not resolve DNS or download images.
+- Use stable review action identifiers with English labels: `Confirm`, `Ignore`,
+  and `Retry with AI`. Any ignored candidate keeps its source message unchanged;
+  archiving requires all candidates to be confirmed.
+
+`config/example.json` documents product defaults. Copy it to a `*.local.json`
+file for private settings. The manifest declares the intended owner-only Apps
+Script runtime; no permissions are granted merely by checking out these files.
 
 ## Local validation
 
@@ -24,7 +48,7 @@ Requires Node.js 22 or later. Run the currently available checks:
 
 ```sh
 npm run check
-node --test tests/*.test.js
+npm test
 ```
 
 ## Public information pages
