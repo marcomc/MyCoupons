@@ -32,8 +32,8 @@ function utf16Boundary_(value, index) {
 }
 function numericRangeEndpoint_(before, after) {
   const space = '[\\t\\n\\f\\r ]*';
-  const unit = '(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[\\p{L}\\p{M}]+)?';
-  const qualifier = '(?:[\\t\\n\\f\\r ]+[\\p{L}\\p{M}]+)*';
+  const unit = '(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)?';
+  const qualifier = '(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?';
   const amount = '[€$£]?\\d+(?:[.,]\\d+)?' + unit;
   const separator = '[-−–—/:]';
   const nextAmount = '[€$£]?\\d';
@@ -53,12 +53,14 @@ function htmlContent_(html) {
   let evidence = '';
   const images = [];
   let incomplete = false;
+  let pendingImageBoundary = false;
   function flushEvidence() {
     if (evidence) evidenceSpans.push(evidence);
     evidence = '';
   }
   function newline(block) {
     if (pieces.length && !pieces[pieces.length - 1].endsWith('\n')) pieces.push('\n');
+    pendingImageBoundary = false;
     if (block) {
       flushEvidence();
     } else if (evidence && !evidence.endsWith('\n')) evidence += '\n';
@@ -68,7 +70,10 @@ function htmlContent_(html) {
     if (entry.exit) { newline(true); continue; }
     const node = entry.node;
     if (node.nodeName === '#text') {
-      if (!entry.suppressed && node.value) { pieces.push(node.value); evidence += node.value; }
+      if (!entry.suppressed && node.value) {
+        if (pendingImageBoundary) { pieces.push('\n'); pendingImageBoundary = false; }
+        pieces.push(node.value); evidence += node.value;
+      }
       continue;
     }
     const tag = node.tagName || '';
@@ -85,11 +90,16 @@ function htmlContent_(html) {
     if (!contextSuppressed && isHtml && (tag === 'picture' || (tag === 'img' || tag === 'source') &&
       nodeAttrs.some(function (attr) { return attr.name === 'srcset'; }))) incomplete = true;
     if (isHtml && tag === 'select' && !contextSuppressed) incomplete = true;
+    if (isHtml && tag === 'input' && !contextSuppressed && !nodeAttrs.some(function (attr) {
+      return attr.name === 'type' && String(attr.value).toLowerCase() === 'hidden';
+    })) incomplete = true;
     const suppressed = contextSuppressed || isHtml && /^(?:select|optgroup|option)$/.test(tag);
     const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|caption|center|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|hr|legend|li|listing|main|menu|nav|ol|p|plaintext|pre|search|section|summary|table|tbody|td|tfoot|th|thead|tr|ul|xmp)$/.test(tag);
     if (block || !suppressed && isHtml && tag === 'br') newline(block);
     if (block) stack.push({exit: true});
     if (!suppressed && isHtml && tag === 'img') {
+      flushEvidence();
+      pendingImageBoundary = pendingImageBoundary || pieces.length && !pieces[pieces.length - 1].endsWith('\n');
       const imageAttrs = Object.create(null);
       nodeAttrs.forEach(function (attr) { imageAttrs[attr.name] = attr.value; });
       images.push(imageAttrs);

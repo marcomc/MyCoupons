@@ -35,6 +35,9 @@
 - Closed native popovers are excluded from evidence, single-character factual
   quotes can ground valid symbols, timestamp offsets are limited to ±14:00, and
   malformed UTF-16 evidence is rejected before matching.
+- Qualified numeric ranges recognize only the supported `off` marker; rendered
+  image elements split text/evidence spans, and unmodeled visible inputs force
+  review without projecting their attributes as text.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

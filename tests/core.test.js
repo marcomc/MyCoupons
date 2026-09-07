@@ -669,6 +669,22 @@ test('HTML inline identity and block boundaries survive iterative deeply nested 
   assert.deepEqual([...ctx.remoteImageUrls_(html)], ['https://shop.com/real.jpg']);
 });
 
+test('rendered images split text and factual evidence spans', () => {
+  const {ctx} = harness();
+  const split = 'Shop Coupon code SAVE<img src="https://shop.com/divider.png">20';
+  const content = ctx.htmlContent_(split);
+  assert.equal(content.text, 'Shop Coupon code SAVE\n20');
+  assert.deepEqual(Array.from(content.evidenceSpans), ['Shop Coupon code SAVE', '20']);
+  assert.ok(!ctx.deterministicCandidates_({html: split}).some(function (candidate) { return candidate.code === 'SAVE20'; }));
+  const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
+  const candidate = ctx.normalizeCandidate_(raw, {html: split, images: [], incomplete: false});
+  assert.equal(candidate.code, ''); assert.equal(candidate.review, true);
+  const compatible = 'Shop Coupon code SAVE20<img src="https://shop.com/offer.jpg">Terms';
+  assert.ok(ctx.deterministicCandidates_({html: compatible}).some(function (item) { return item.code === 'SAVE20'; }));
+  assert.deepEqual(Array.from(ctx.remoteImageUrls_(compatible)), ['https://shop.com/offer.jpg']);
+});
+
 test('remaining rendered blocks and non-rendered controls preserve evidence boundaries', () => {
   const {ctx} = harness();
   const blocks = [
@@ -698,6 +714,23 @@ test('remaining rendered blocks and non-rendered controls preserve evidence boun
   assert.equal(hiddenCandidate.code, ''); assert.equal(hiddenCandidate.review, true);
   const select = '<select><option>Shop Coupon code SELECT20</option></select><p>Shop Coupon code REAL20</p>';
   assert.equal(ctx.htmlContent_(select).incomplete, true); assert.ok(!ctx.htmlText_(select).includes('SELECT20'));
+  for (const type of ['button', '', 'submit', 'reset', 'image']) {
+    const input = '<p>Shop Coupon code REAL20</p><input' + (type ? ' type="' + type + '"' : '') + ' value="SAVE30">';
+    const result = ctx.htmlContent_(input);
+    assert.equal(result.incomplete, true, type || 'default'); assert.ok(!result.text.includes('SAVE30'), type || 'default');
+    assert.equal(ctx.normalizeCandidate_({merchant: 'Shop', code: 'REAL20', confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote: 'REAL20'}}}, {html: input, images: [], incomplete: false}).review, true);
+  }
+  for (const html of [
+    '<input type="hidden" value="SAVE30"><p>Shop REAL20</p>',
+    '<input type="HIDDEN" value="SAVE30"><p>Shop REAL20</p>',
+    '<template><input value="SAVE30"></template><p>Shop REAL20</p>',
+    '<div hidden><input value="SAVE30"></div><p>Shop REAL20</p>',
+    '<dialog><input value="SAVE30"></dialog><p>Shop REAL20</p>',
+    '<div popover><input value="SAVE30"></div><p>Shop REAL20</p>',
+    '<details><summary>Shop</summary><input value="SAVE30"></details><p>REAL20</p>',
+    '<datalist><input value="SAVE30"></datalist><p>Shop REAL20</p>'
+  ]) assert.equal(ctx.htmlContent_(html).incomplete, false, html);
   for (const html of [
     '<template><select><option>SELECT20</option></select></template><p>Shop REAL20</p>',
     '<div hidden><select><option>SELECT20</option></select></div><p>Shop REAL20</p>',
@@ -989,7 +1022,7 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     return ctx.normalizeCandidate_(data, {text: 'Shop SAVE20 ' + source, images: [], incomplete: false})[field];
   }
   for (const source of ['20−30%', '20 to 30%', 'between 20 and 30%', '20% to 30%', '20% off to 30% off',
-    'between 20% off and 30% off', '€20 to €30', '€20 off to €30 off', '20 euros to 30 euros',
+    '20% OFF to 30% OFF', 'between 20% oFf and 30% oFf', '€20 to €30', '€20 off to €30 off', '20 euros to 30 euros',
     '20 euros off to 30 euros off', '20%-30%', '€20-€30', 'between €20 and €30']) {
     for (const field of ['discountValue', 'minimumSpend']) {
       for (const endpoint of ['20', '30']) {
@@ -999,6 +1032,15 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     }
   }
   for (const source of ['20%', '€20', '20 euros', '20% off today', '€20 off today', '20 euros off today']) {
+    for (const field of ['discountValue', 'minimumSpend']) assert.equal(numericCandidate(field, '20', source), '20', source);
+  }
+  const standalone = 'Save €20 on purchases through today to 30 September';
+  assert.equal(ctx.fieldInQuote_('discountValue', '20', standalone), true);
+  const standaloneCandidate = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', minimumSpend: '20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, minimumSpend: {quote: standalone}}},
+  {text: 'Shop SAVE20 ' + standalone, images: [], incomplete: false});
+  assert.equal(standaloneCandidate.minimumSpend, '20'); assert.equal(standaloneCandidate.review, false);
+  for (const source of ['20 coffee to 30 tea', '20 offer to 30 people', '20 percentage to 30 percentage']) {
     for (const field of ['discountValue', 'minimumSpend']) assert.equal(numericCandidate(field, '20', source), '20', source);
   }
 });

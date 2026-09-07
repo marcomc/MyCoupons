@@ -40,7 +40,7 @@ The example configuration contains product defaults only.
   Unsubstantiated fields become empty; code evidence preserves exact spelling
   and complete tokens, including punctuation, and numeric values cannot be range,
   ratio, Unicode-minus, or supported word-delimited interval endpoints, including
-  units and currency. Oversized
+  units, currency, and the range qualifier `off`. Oversized
   structured values become empty; bounded notes
   retain complete Unicode characters and require review. A supplied image-evidence
   index must identify a present independently inspected image.
@@ -56,8 +56,9 @@ The example configuration contains product defaults only.
   scripts, styles, metadata, inert templates, non-rendered `datalist`/`rp`
   content, closed dialogs and popovers, closed-details content except its first
   direct `summary`, and `hidden` subtrees; include `noscript` fallback content.
-  Rendered blocks retain text boundaries. Select controls are excluded because
-  their selected state is not modeled and therefore force review. Direct
+  Rendered blocks and image elements retain text boundaries. Select controls and
+  visible inputs are excluded because their rendered state is not modeled and
+  therefore force review. Direct
   image URLs trim only surrounding ASCII attribute whitespace. Responsive
   `srcset`/`picture` resources in active rendered content are not selected and
   force review. No CSS visibility analysis or script execution occurs. Image dimensions follow HTML pixel/percentage
