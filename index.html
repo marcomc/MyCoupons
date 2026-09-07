@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="MyCoupons is a private Gmail-to-Google-Sheets coupon manager for its owner's personal use.">
+  <title>MyCoupons — Your offers, in one place</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header><a class="brand" href="./">MyCoupons</a><nav aria-label="Main"><a href="privacy.html">Privacy policy</a></nav></header>
+  <main>
+    <p class="eyebrow">A personal coupon manager</p>
+    <h1>Your offers,<br>in one place.</h1>
+    <p class="lead">MyCoupons helps its owner collect coupon codes, discounts and vouchers from Gmail into a private Google Sheet.</p>
+    <p class="notice">This is a private project currently being implemented and configured. It is not open for public registration. This website provides application and privacy information; it does not display email or coupon data.</p>
+    <section aria-labelledby="workflow"><h2 id="workflow">How it works</h2>
+      <ol>
+        <li><strong>Read the offer.</strong> Inspect email text and images for coupon codes, discounts, expiry dates and conditions.</li>
+        <li><strong>Keep a useful record.</strong> Save offers and links to their source emails in the owner's Google Sheet.</li>
+        <li><strong>Review uncertain details.</strong> Flag incomplete information so the owner can check the original email before confirming it.</li>
+      </ol>
+    </section>
+    <section aria-labelledby="access"><h2 id="access">Why Google account access is needed</h2>
+      <p>Gmail access allows the importer to inspect messages and images and to label and archive messages after a confirmed import. Sheets access stores offers and review decisions. Drive access identifies and checks the destination spreadsheet. Scheduled Apps Script executions run the workflow and send relevant summaries to the owner.</p>
+      <p>When AI extraction is needed, email text and images are sent to Google's Gemini API or the configured Vertex AI backend. Downloading remotely hosted email images can reveal to the sender that an image was requested. These data flows are described in the <a href="privacy.html">privacy policy</a>.</p>
+    </section>
+    <section aria-labelledby="owner"><h2 id="owner">Owner and contact</h2>
+      <p>MyCoupons is operated by Marco Massari Calderone for personal use. For questions about the application or its use of Google account data, contact <a href="mailto:massaric@gmail.com">massaric@gmail.com</a>.</p>
+    </section>
+  </main>
+  <footer><span>MyCoupons · Marco Massari Calderone</span><a href="privacy.html">Privacy policy</a></footer>
+</body>
+</html>
