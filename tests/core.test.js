@@ -988,8 +988,9 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     data[field] = value; data.evidence[field] = {quote: value};
     return ctx.normalizeCandidate_(data, {text: 'Shop SAVE20 ' + source, images: [], incomplete: false})[field];
   }
-  for (const source of ['20−30%', '20 to 30%', 'between 20 and 30%', '20% to 30%', '€20 to €30',
-    '20 euros to 30 euros', '20%-30%', '€20-€30', 'between €20 and €30']) {
+  for (const source of ['20−30%', '20 to 30%', 'between 20 and 30%', '20% to 30%', '20% off to 30% off',
+    'between 20% off and 30% off', '€20 to €30', '€20 off to €30 off', '20 euros to 30 euros',
+    '20 euros off to 30 euros off', '20%-30%', '€20-€30', 'between €20 and €30']) {
     for (const field of ['discountValue', 'minimumSpend']) {
       for (const endpoint of ['20', '30']) {
         assert.equal(ctx.fieldInQuote_(field, endpoint, source), false, field + ': ' + source);
@@ -997,7 +998,7 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
       }
     }
   }
-  for (const source of ['20%', '€20', '20 euros']) {
+  for (const source of ['20%', '€20', '20 euros', '20% off today', '€20 off today', '20 euros off today']) {
     for (const field of ['discountValue', 'minimumSpend']) assert.equal(numericCandidate(field, '20', source), '20', source);
   }
 });

@@ -33,16 +33,17 @@ function utf16Boundary_(value, index) {
 function numericRangeEndpoint_(before, after) {
   const space = '[\\t\\n\\f\\r ]*';
   const unit = '(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[\\p{L}\\p{M}]+)?';
+  const qualifier = '(?:[\\t\\n\\f\\r ]+[\\p{L}\\p{M}]+)*';
   const amount = '[€$£]?\\d+(?:[.,]\\d+)?' + unit;
   const separator = '[-−–—/:]';
   const nextAmount = '[€$£]?\\d';
   return new RegExp('^' + unit + space + separator + space + nextAmount, 'u').test(after) ||
     new RegExp(amount + space + separator + space + '[€$£]?$', 'u').test(before) ||
-    new RegExp('^' + unit + '[\\t\\n\\f\\r ]+to[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) ||
-    new RegExp(amount + '[\\t\\n\\f\\r ]+to[\\t\\n\\f\\r ]+[€$£]?$', 'u').test(before) ||
-    new RegExp('^' + unit + '[\\t\\n\\f\\r ]+and[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) &&
+    new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+to[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) ||
+    new RegExp(amount + qualifier + '[\\t\\n\\f\\r ]+to[\\t\\n\\f\\r ]+[€$£]?$', 'u').test(before) ||
+    new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+and[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) &&
       new RegExp('\\bbetween[\\t\\n\\f\\r ]*[€$£]?$', 'u').test(before) ||
-    new RegExp('\\bbetween[\\t\\n\\f\\r ]+' + amount + '[\\t\\n\\f\\r ]+and[\\t\\n\\f\\r ]+[€$£]?$', 'u').test(before);
+    new RegExp('\\bbetween[\\t\\n\\f\\r ]+' + amount + qualifier + '[\\t\\n\\f\\r ]+and[\\t\\n\\f\\r ]+[€$£]?$', 'u').test(before);
 }
 function htmlContent_(html) {
   const root = MC_HTML.parse(String(html), {scriptingEnabled: false});
