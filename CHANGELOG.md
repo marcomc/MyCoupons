@@ -22,6 +22,9 @@
   HTML evidence; unselected responsive resources force review. Gmail identity
   normalizes the supported authority/default port, supplied image slots must be
   present, and numeric range endpoints cannot ground factual values.
+- Rendered disclosure blocks preserve text boundaries; direct image URL attributes
+  trim surrounding ASCII whitespace; opaque Gmail IDs remain canonical; and numeric
+  evidence rejects Unicode-minus and supported word-delimited intervals.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

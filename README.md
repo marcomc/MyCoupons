@@ -36,8 +36,9 @@ The example configuration contains product defaults only.
 - Reject unknown candidate or evidence keys and malformed control fields before
   normalizing proposed fields, including notes, against quoted source text.
   Unsubstantiated fields become empty; code evidence preserves exact spelling
-  and complete tokens, including punctuation, and numeric values cannot be range
-  or ratio endpoints. Oversized structured values become empty; bounded notes
+  and complete tokens, including punctuation, and numeric values cannot be range,
+  ratio, Unicode-minus, or supported word-delimited interval endpoints. Oversized
+  structured values become empty; bounded notes
   retain complete Unicode characters and require review. A supplied image-evidence
   index must identify a present independently inspected image.
   Image-based proposals and unknown message completeness also require review.
@@ -51,9 +52,11 @@ The example configuration contains product defaults only.
   document traversal, preserving `html`/`body` attributes. Exclude comments,
   scripts, styles, metadata, inert templates, closed dialogs, closed-details
   content except its first direct `summary`, and `hidden` subtrees; include
-  `noscript` fallback content. Responsive `srcset`/`picture` resources are not
-  selected and force review. No CSS visibility analysis or script execution occurs.
-  Image dimensions follow HTML pixel/percentage rules.
+  `noscript` fallback content. Rendered blocks retain text boundaries. Direct
+  image URLs trim only surrounding ASCII attribute whitespace. Responsive
+  `srcset`/`picture` resources are not selected and force review. No CSS visibility
+  analysis or script execution occurs. Image dimensions follow HTML pixel/percentage
+  rules.
   Entire SVG/MathML subtrees are excluded from text/image evidence and mark source
   coverage incomplete, even for text-free graphics or content inside templates.
   Their presence requires review; there is no automatic logo exemption.
@@ -66,13 +69,13 @@ Candidate helpers accept optional raw `message.html` alongside independent
 Both extraction and normalization derive HTML coverage through the same adapter;
 `incomplete: false` cannot override unsupported HTML content. Do not premerge an
 HTML projection into `message.text`, and keep evidence matches within one source
-representation. The string-only `htmlText_` and URL-discovery helpers cannot
+representation or across a rendered block boundary. The string-only `htmlText_` and URL-discovery helpers cannot
 establish source completeness. Future image processing must retain these coverage
 signals rather than treat omitted vector content as processed.
 
-Source identity recovery accepts hexadecimal Gmail links under `mail.google.com`
-(case-insensitive with optional default port `:443`) using `#all/`, `#inbox/`,
-`#search/<query>/`, or the `th` query parameter.
+Source identity recovery accepts canonical lowercase hexadecimal Gmail links under
+`mail.google.com` (case-insensitive with optional default port `:443`) using
+`#all/`, `#inbox/`, `#search/<query>/`, or the `th` query parameter.
 Unsupported opaque Gmail UI links such as `permmsgid=msg-f:...` return no identity;
 they must be resolved before a future importer can use them for deduplication.
 

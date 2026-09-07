@@ -38,6 +38,14 @@ test('remote image discovery excludes trackers, private literals and unsafe sche
   for (const url of ['http://shop.com/a', 'https://127.0.0.1/x', 'https://[::1]/x', 'https://foo.local/x', 'https://foo.LOCAL/x', 'https://x.com@evil.com/x', 'https://0x7f000001/x', 'https://example.com:8080/x']) assert.equal(ctx.safeUrl_(url), '');
   const html = '<img src="https://shop.com/promo.jpg"><img src="https://shop.com/pixel.gif"><img width="1" src="https://shop.com/a"><img src="https://shop.com/promo.jpg">';
   assert.deepEqual([...ctx.remoteImageUrls_(html)], ['https://shop.com/promo.jpg']);
+  for (const whitespace of [' ', '\t', '\n\f\r ']) {
+    assert.deepEqual([...ctx.remoteImageUrls_('<img src="' + whitespace + 'https://shop.com/coupon.jpg' + whitespace + '">')],
+      ['https://shop.com/coupon.jpg']);
+    assert.deepEqual([...ctx.remoteImageUrls_('<img src="' + whitespace + 'https://shop.com/pixel.gif' + whitespace + '">')], []);
+  }
+  for (const url of ['https://shop.com/coupon image.jpg', '\u00a0https://shop.com/coupon.jpg\u00a0']) {
+    assert.deepEqual([...ctx.remoteImageUrls_('<img src="' + url + '">')], []);
+  }
 });
 test('deterministic codes and ungrounded AI fields do not grant archive authority', () => {
   const {ctx} = harness();
@@ -168,7 +176,9 @@ test('only canonical Gmail links provide an identity without partial token colli
     'https://mail.google.com/mail/#search/receipt?th=deadbeef',
     'https://mail.google.com/mail/#garbage#all/deadbeef',
     'https://mail.google.com/mail/?th=deadbeef&th=face',
-    'https://mail.google.com/mail/?th=' + id + ':bad']) assert.equal(ctx.sourceId_(url), '');
+    'https://mail.google.com/mail/?th=' + id + ':bad',
+    'https://mail.google.com/mail/#all/ABCD1234',
+    'https://mail.google.com/mail/?th=ABCD1234']) assert.equal(ctx.sourceId_(url), '');
 });
 
 test('coupon introducers are case-insensitive and never truncate the code token', () => {
@@ -744,19 +754,50 @@ test('closed details expose only their first direct summary subtree', () => {
   const closed = '<details>leading<summary>Shop Coupon code SUMMARY20' + summaryImage +
     '</summary><p>Coupon code HIDDEN20' + hiddenImage + '</p><summary>Coupon code SECOND20</summary></details>';
   const open = '<details open><summary>Shop Coupon code OPEN20</summary><p>Coupon code BODY20' + hiddenImage + '</p></details>';
-  assert.equal(ctx.htmlText_(closed), 'Shop Coupon code SUMMARY20');
+  assert.equal(ctx.htmlText_(closed), 'Shop Coupon code SUMMARY20\n');
   assert.deepEqual(Array.from(ctx.remoteImageUrls_(closed)), ['https://shop.com/summary.jpg']);
   assert.equal(ctx.htmlContent_(closed).incomplete, false);
   assert.ok(ctx.htmlText_(open).includes('OPEN20'));
   assert.ok(ctx.htmlText_(open).includes('BODY20'));
   assert.deepEqual(Array.from(ctx.remoteImageUrls_(open)), ['https://shop.com/hidden.jpg']);
   const nested = '<details open><summary>Outer</summary><details><summary>Nested</summary><p>INNERHIDDEN</p></details></details>';
-  assert.equal(ctx.htmlText_(nested), 'OuterNested');
+  assert.equal(ctx.htmlText_(nested), 'Outer\nNested\n');
   assert.ok(!ctx.htmlText_(nested).includes('INNERHIDDEN'));
   const raw = {merchant: 'Shop', code: 'HIDDEN20', confidence: 'high', review: false,
     evidence: {merchant: {quote: 'Shop'}, code: {quote: 'HIDDEN20'}}};
   const candidate = ctx.normalizeCandidate_(raw, {html: closed, images: [], incomplete: false});
   assert.equal(candidate.code, ''); assert.equal(candidate.review, true);
+});
+
+test('rendered disclosure blocks cannot manufacture a token or factual evidence', () => {
+  const {ctx} = harness();
+  const split = [
+    '<details open>Coupon code SAVE</details><details open>20</details>',
+    '<summary>Coupon code SAVE</summary><summary>20</summary>',
+    '<dialog open>Coupon code SAVE</dialog><dialog open>20</dialog>',
+    '<ul><li>Coupon code SAVE</li><li>20</li></ul>'
+  ];
+  for (const html of split) {
+    const text = ctx.htmlText_(html);
+    assert.ok(!text.includes('SAVE20'), html);
+    assert.ok(!ctx.deterministicCandidates_({text}).some(function (candidate) { return candidate.code === 'SAVE20'; }), html);
+  }
+  assert.equal(ctx.htmlText_('<span>Coupon code SAVE</span><b>20</b>'), 'Coupon code SAVE20');
+  assert.equal(ctx.deterministicCandidates_({text: 'Coupon code SAVE20'})[0].code, 'SAVE20');
+  const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
+  const candidate = ctx.normalizeCandidate_(raw, {html: '<p>Shop</p>' + split[0], images: [], incomplete: false});
+  assert.equal(candidate.code, ''); assert.equal(candidate.review, true);
+  const fieldRaw = {merchant: 'Shop Outlet', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop Outlet'}, code: {quote: 'SAVE20'}}};
+  const fieldCandidate = ctx.normalizeCandidate_(fieldRaw,
+    {html: '<details open>Shop</details><details open>Outlet</details><p>SAVE20</p>', images: [], incomplete: false});
+  assert.equal(fieldCandidate.merchant, ''); assert.equal(fieldCandidate.code, 'SAVE20'); assert.equal(fieldCandidate.review, true);
+  const sourceCharacter = ctx.normalizeCandidate_(
+    {merchant: 'Shop', code: 'SAVE', confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE'}}},
+    {html: '<p>Shop SAVE&#xE000;20</p>', images: [], incomplete: false});
+  assert.equal(sourceCharacter.code, ''); assert.equal(sourceCharacter.review, true);
 });
 
 test('responsive image resources preserve incomplete coverage without selecting a source', () => {
@@ -808,6 +849,20 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, minimumSpend: {quote: '20'}}};
   assert.equal(ctx.normalizeCandidate_(spend, {text: 'Shop SAVE20 minimum 20-30', images: [], incomplete: false}).minimumSpend, '');
   assert.equal(ctx.normalizeCandidate_(spend, {text: 'Shop SAVE20 minimum 20 euros', images: [], incomplete: false}).minimumSpend, '20');
+  function numericCandidate(field, value, source) {
+    const data = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
+    data[field] = value; data.evidence[field] = {quote: value};
+    return ctx.normalizeCandidate_(data, {text: 'Shop SAVE20 ' + source, images: [], incomplete: false})[field];
+  }
+  for (const source of ['20−30%', '20 to 30%', 'between 20 and 30%']) {
+    for (const field of ['discountValue', 'minimumSpend']) {
+      for (const endpoint of ['20', '30']) {
+        assert.equal(ctx.fieldInQuote_(field, endpoint, source), false, field + ': ' + source);
+        assert.equal(numericCandidate(field, endpoint, source), '', field + ': ' + source);
+      }
+    }
+  }
 });
 
 test('field boundary checks do not rebuild growing Unicode prefixes', () => {

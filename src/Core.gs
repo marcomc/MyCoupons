@@ -20,16 +20,28 @@ function htmlContent_(html) {
   const root = MC_HTML.parse(String(html), {scriptingEnabled: false});
   const stack = [{node: root}];
   const pieces = [];
+  const evidenceSpans = [];
+  let evidence = '';
   const images = [];
   let incomplete = false;
-  function newline() {
+  function flushEvidence() {
+    if (evidence) evidenceSpans.push(evidence);
+    evidence = '';
+  }
+  function newline(block) {
     if (pieces.length && !pieces[pieces.length - 1].endsWith('\n')) pieces.push('\n');
+    if (block) {
+      flushEvidence();
+    } else if (evidence && !evidence.endsWith('\n')) evidence += '\n';
   }
   while (stack.length) {
     const entry = stack.pop();
-    if (entry.exit) { newline(); continue; }
+    if (entry.exit) { newline(true); continue; }
     const node = entry.node;
-    if (node.nodeName === '#text') { if (!entry.suppressed && node.value) pieces.push(node.value); continue; }
+    if (node.nodeName === '#text') {
+      if (!entry.suppressed && node.value) { pieces.push(node.value); evidence += node.value; }
+      continue;
+    }
     const tag = node.tagName || '';
     const isHtml = node.namespaceURI === 'http://www.w3.org/1999/xhtml';
     const foreign = Boolean(tag && !isHtml);
@@ -42,8 +54,8 @@ function htmlContent_(html) {
     const suppressed = entry.suppressed || foreign || isHtml &&
       (/^(?:script|style|template|title|head|iframe|noembed|noframes)$/.test(tag) ||
         closedDialog || nodeAttrs.some(function (attr) { return attr.name === 'hidden'; }));
-    const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)$/.test(tag);
-    if (block || !suppressed && isHtml && tag === 'br') newline();
+    const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|summary|table|tbody|td|tfoot|th|thead|tr|ul)$/.test(tag);
+    if (block || !suppressed && isHtml && tag === 'br') newline(block);
     if (block) stack.push({exit: true});
     if (!suppressed && isHtml && tag === 'img') {
       const imageAttrs = Object.create(null);
@@ -64,7 +76,8 @@ function htmlContent_(html) {
       stack.push({node: children[i], suppressed: suppressed || closedDetails && children[i] !== visibleSummary});
     }
   }
-  return {text: pieces.join(''), images: images, incomplete: incomplete};
+  flushEvidence();
+  return {text: pieces.join(''), evidenceSpans: evidenceSpans, images: images, incomplete: incomplete};
 }
 function htmlText_(html) {
   return htmlContent_(html).text;
@@ -85,9 +98,10 @@ function smallImageDimension_(value) {
 function remoteImageUrls_(html) {
   const urls = [];
   htmlContent_(html).images.forEach(function (attrs) {
-    if (!attrs.src || ['width', 'height'].some(function (key) { return smallImageDimension_(attrs[key]); }) ||
-      /(?:pixel|tracking|tracker|beacon|\/open[/.?]|transparent|spacer)/i.test(attrs.src)) return;
-    const url = safeUrl_(attrs.src);
+    const src = typeof attrs.src === 'string' ? attrs.src.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '') : '';
+    if (!src || ['width', 'height'].some(function (key) { return smallImageDimension_(attrs[key]); }) ||
+      /(?:pixel|tracking|tracker|beacon|\/open[/.?]|transparent|spacer)/i.test(src)) return;
+    const url = safeUrl_(src);
     if (url && urls.indexOf(url) < 0) urls.push(url);
   });
   return urls;
@@ -100,8 +114,9 @@ function candidateSource_(message) {
     message.text !== undefined && typeof message.text !== 'string' ||
     Object.prototype.hasOwnProperty.call(message, 'html') && typeof message.html !== 'string' ||
     message.images !== undefined && !Array.isArray(message.images)) fail_('AI');
-  const html = message.html === undefined ? {text: '', incomplete: false} : htmlContent_(message.html);
+  const html = message.html === undefined ? {text: '', evidenceSpans: [], incomplete: false} : htmlContent_(message.html);
   return {spans: [message.text || '', html.text].filter(Boolean),
+    evidenceSpans: [message.text || ''].concat(html.evidenceSpans).filter(Boolean),
     images: message.images === undefined ? [] : message.images,
     incomplete: message.incomplete !== false || html.incomplete};
 }
@@ -154,9 +169,15 @@ function fieldInQuote_(field, value, quote) {
     const after = afterStart < source.length ? String.fromCodePoint(source.codePointAt(afterStart)) : '';
     const boundary = /[\p{L}\p{N}\p{M}_]/u;
     const numericField = ['discountValue', 'minimumSpend'].indexOf(field) >= 0 && /\d/.test(needle);
+    const beforeText = source.slice(0, start);
+    const afterText = source.slice(afterStart);
     const numericRange = numericField &&
-      (/^[\t\n\f\r ]*[-–—/:][\t\n\f\r ]*[€$£]?\d/.test(source.slice(afterStart)) ||
-        /\d[%€$£]?[\t\n\f\r ]*[-–—/:][\t\n\f\r ]*$/.test(source.slice(0, start)));
+      (/^[\t\n\f\r ]*[-−–—/:][\t\n\f\r ]*[€$£]?\d/.test(afterText) ||
+        /\d[%€$£]?[\t\n\f\r ]*[-−–—/:][\t\n\f\r ]*$/.test(beforeText) ||
+        /^[\t\n\f\r ]+to[\t\n\f\r ]+[€$£]?\d/.test(afterText) ||
+        /^[\t\n\f\r ]+and[\t\n\f\r ]+[€$£]?\d/.test(afterText) && /\bbetween[\t\n\f\r ]*$/.test(beforeText) ||
+        /[€$£]?\d+(?:[.,]\d+)?[%€$£]?[\t\n\f\r ]+to[\t\n\f\r ]*$/.test(beforeText) ||
+        /\bbetween[\t\n\f\r ]+[€$£]?\d+(?:[.,]\d+)?[%€$£]?[\t\n\f\r ]+and[\t\n\f\r ]*$/.test(beforeText));
     if ((!before || !boundary.test(before)) && (!after || !boundary.test(after)) && !numericRange &&
       !( /\d$/.test(needle) && /^[.,]\d/.test(source.slice(afterStart, afterStart + 2))) &&
       !( /^\d/.test(needle) && /\d[.,]$/.test(source.slice(Math.max(0, start - 2), start)))) return true;
@@ -202,7 +223,7 @@ function normalizeCandidate_(raw, message) {
   MC.fields.filter(function (k) { return c[k]; }).forEach(function (k) {
     const ev = evidence[k];
     const groundedText = ev && typeof ev.quote === 'string' && ev.quote.trim().length > 1 &&
-      fieldInQuote_(k, c[k], ev.quote) && source.spans.some(function (span) {
+      fieldInQuote_(k, c[k], ev.quote) && source.evidenceSpans.some(function (span) {
         const containsQuote = k === 'code' || k === 'website' ? span.includes(ev.quote) :
           normalized_(span).includes(normalized_(ev.quote));
         return containsQuote && fieldInQuote_(k, c[k], span);
@@ -225,13 +246,13 @@ function sourceId_(value) {
   if (['mail.google.com', 'mail.google.com:443'].indexOf(link[1].toLowerCase()) < 0 ||
     !/^\/mail\/(?:u\/\d+\/)?$/.test(link[2] || '')) return '';
   if (link[4] !== undefined) {
-    const fragment = /^(?:all|inbox|search\/[^/#]+)\/([a-f0-9]+)$/i.exec(link[4]);
-    return fragment ? fragment[1].toLowerCase() : '';
+    const fragment = /^(?:all|inbox|search\/[^/#]+)\/([a-f0-9]+)$/.exec(link[4]);
+    return fragment ? fragment[1] : '';
   }
   const threads = (link[3] || '').split('&').filter(function (param) { return /^th=/.test(param); });
   if (threads.length !== 1) return '';
-  const thread = /^th=([a-f0-9]+)$/i.exec(threads[0]);
-  return thread ? thread[1].toLowerCase() : '';
+  const thread = /^th=([a-f0-9]+)$/.exec(threads[0]);
+  return thread ? thread[1] : '';
 }
 function realCouponRow_(row) {
   if ([row[4], row[17]].some(function (v) { return /^(?:scan|scanned|technical|no coupons?|no offers?)$/i.test(String(v).trim()); })) return false;

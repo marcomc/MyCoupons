@@ -26,7 +26,8 @@
   when loading persisted configuration.
 - Parse Gmail URL components before extracting identity, normalizing only the
   supported Gmail hostname and default HTTPS port. Reject unsupported UI tokens;
-  never truncate them or infer an undocumented API-ID conversion.
+  preserve canonical opaque-ID serialization; never truncate them or infer an
+  undocumented API-ID conversion.
 - Information lost through truncation requires review. Only an explicit
   complete-message state can allow automatic confirmation; unknown or malformed
   candidate states must never grant archive authority.
@@ -34,17 +35,19 @@
   use explicit schema markers, not words found in merchant names.
 - HTML image discovery distinguishes exact attributes from `data-*` attributes
   and text inside other attribute values. Text and image extraction share a
-  standards-parsed traversal that excludes comments, non-content containers,
-  closed dialogs, closed-details content other than the first direct `summary`,
-  and HTML `hidden` subtrees. Responsive `srcset`/`picture` resources are not
-  selected; they retain incomplete coverage. Never recover malformed markup with
-  separate regexes.
+  standards-parsed traversal that preserves boundaries between rendered blocks,
+  excludes comments, non-content containers, closed dialogs, closed-details
+  content other than the first direct `summary`, and HTML `hidden` subtrees.
+  Normalize only surrounding ASCII whitespace in exact `img[src]` values.
+  Responsive `srcset`/`picture` resources are not selected; they retain
+  incomplete coverage. Never recover malformed markup with separate regexes.
 - Exclude foreign SVG/MathML subtrees from evidence and retain incomplete
   coverage, including text-free graphics and presence inside hidden/templates.
   Candidate consumers must derive coverage from raw `message.html`; keep
   `message.text` independent of HTML projections and images independently inspected.
-  A factual quote must match wholly within one original source span and a
-  numerical value cannot be only a range or ratio endpoint. A supplied image
+  A factual quote must match wholly within one original source span and cannot
+  cross a rendered block boundary. A numerical value cannot be only a range,
+  ratio, Unicode-minus, or supported word-delimited interval endpoint. A supplied image
   index must identify a present inspected image. A caller-provided complete flag
   cannot erase unsupported coverage.
 - Validate complete candidate/evidence key sets before projection. Internal code
