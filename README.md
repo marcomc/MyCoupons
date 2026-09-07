@@ -29,7 +29,8 @@ The example configuration contains product defaults only.
 - Detect explicitly introduced coupon codes and retain source text as notes.
   Deterministic candidates currently require review.
 - Normalize proposed fields against quoted source text. Unsubstantiated fields
-  become empty; image-based proposals require review. This increment makes no
+  become empty; code evidence preserves exact spelling and complete tokens.
+  Image-based proposals and truncated conditions require review. This increment makes no
   AI requests and does not establish completeness of extracted offers.
 - Quote formula-like spreadsheet text. Discover HTTPS image URLs while excluding
   recognizable trackers, IP literals, and local hostnames. This is a lexical
@@ -37,6 +38,11 @@ The example configuration contains product defaults only.
 - Use stable review action identifiers with English labels: `Confirm`, `Ignore`,
   and `Retry with AI`. Any ignored candidate keeps its source message unchanged;
   archiving requires all candidates to be confirmed.
+
+Source identity recovery accepts hexadecimal Gmail links under `mail.google.com`
+using `#all/`, `#inbox/`, `#search/<query>/`, or the `th` query parameter.
+Unsupported opaque Gmail UI links such as `permmsgid=msg-f:...` return no identity;
+they must be resolved before a future importer can use them for deduplication.
 
 `config/example.json` documents product defaults. Copy it to a `*.local.json`
 file for private settings. The manifest declares the intended owner-only Apps

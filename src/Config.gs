@@ -20,7 +20,9 @@ function props_() { return PropertiesService.getScriptProperties(); }
 function config_() {
   const raw = props_().getProperty(MC.configKey);
   if (!raw) fail_('CONFIG');
-  return validateConfig_(JSON.parse(raw));
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch (e) { fail_('CONFIG'); }
+  return validateConfig_(parsed);
 }
 function validateConfig_(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail_('CONFIG');
@@ -49,7 +51,7 @@ function validateConfig_(input) {
   return c;
 }
 function fail_(code) { const e = new Error(code); e.code = code; throw e; }
-function errorCode_(e) { return e && EN.errorCodes[e.code] ? e.code : 'INTERNAL'; }
+function errorCode_(e) { return e && Object.prototype.hasOwnProperty.call(EN.errorCodes, e.code) ? e.code : 'INTERNAL'; }
 function t_(key, values) {
   let text = EN[key];
   if (typeof text !== 'string') fail_('CONFIG');
