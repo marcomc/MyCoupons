@@ -25,6 +25,9 @@
 - Rendered disclosure blocks preserve text boundaries; direct image URL attributes
   trim surrounding ASCII whitespace; opaque Gmail IDs remain canonical; and numeric
   evidence rejects Unicode-minus and supported word-delimited intervals.
+- Remaining default-rendered HTML blocks preserve evidence boundaries; non-rendered
+  control content is excluded, unmodeled selections force review, numeric interval
+  units cannot ground an endpoint, and recovery ignores partial discount rows.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

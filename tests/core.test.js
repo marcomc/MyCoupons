@@ -15,6 +15,16 @@ test('recover full latest real import day in Rome, excluding technical scan rows
   const real = Array(26).fill(''); Object.assign(real, {0: '2026-05-22', 1: 'Shop', 3: 'CODE', 11: 'offer'});
   const scan = [...real]; scan[0] = '2026-09-07'; scan[4] = 'Scan';
   assert.equal(ctx.recoveryStart_([real, scan], config), Date.parse('2026-05-21T22:00:00Z'));
+  for (const partial of [{4: 'percent'}, {5: '20'}]) {
+    const row = Array(26).fill(''); Object.assign(row, {0: 'not a date', 1: 'Shop', 11: 'offer'}, partial);
+    assert.equal(ctx.realCouponRow_(row), false);
+    assert.equal(ctx.recoveryStart_([real, row], config), Date.parse('2026-05-21T22:00:00Z'));
+  }
+  for (const offer of [{3: 'CODE'}, {2: 'https://shop.example'}, {4: 'percent', 5: '20'}]) {
+    const row = Array(26).fill(''); Object.assign(row, {0: '2026-06-30', 1: 'Shop', 11: 'offer'}, offer);
+    assert.equal(ctx.realCouponRow_(row), true);
+    assert.equal(ctx.recoveryStart_([real, row], config), Date.parse('2026-06-29T22:00:00Z'));
+  }
   assert.throws(() => ctx.recoveryStart_([], {...config, initialDate: ''}), /INITIAL_DATE/);
   real[0] = '05/06/2026'; assert.throws(() => ctx.recoveryStart_([real], config), /DATE/);
 });
@@ -599,6 +609,45 @@ test('HTML inline identity and block boundaries survive iterative deeply nested 
   assert.deepEqual([...ctx.remoteImageUrls_(html)], ['https://shop.com/real.jpg']);
 });
 
+test('remaining rendered blocks and non-rendered controls preserve evidence boundaries', () => {
+  const {ctx} = harness();
+  const blocks = [
+    '<table><caption>20</caption></table>', '<center>20</center>', '<dir><li>20</li></dir>',
+    '<hgroup>20</hgroup>', '<fieldset><legend>20</legend></fieldset>', '<listing>20</listing>',
+    '<menu><li>20</li></menu>', '<search>20</search>', '<xmp>20</xmp>', '<plaintext>20'
+  ];
+  for (const suffix of blocks) {
+    const text = ctx.htmlText_('<span>Coupon code SAVE</span>' + suffix);
+    assert.ok(!text.includes('SAVE20'), suffix);
+    assert.ok(!ctx.deterministicCandidates_({text}).some(function (candidate) { return candidate.code === 'SAVE20'; }), suffix);
+  }
+  const raw = {merchant: 'Shop Outlet', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop Outlet'}, code: {quote: 'SAVE20'}}};
+  const candidate = ctx.normalizeCandidate_(raw,
+    {html: '<fieldset><legend>Shop</legend><legend>Outlet</legend><p>SAVE20</p></fieldset>', images: [], incomplete: false});
+  assert.equal(candidate.merchant, ''); assert.equal(candidate.code, 'SAVE20'); assert.equal(candidate.review, true);
+  const hidden = '<datalist><option>Shop Coupon code HIDDEN20<img src="https://shop.com/hidden.jpg"></option></datalist>' +
+    '<ruby>Visible<rp> Coupon code RUBY20</rp></ruby><p>Shop Coupon code REAL20<img src="https://shop.com/real.jpg"></p>';
+  assert.equal(ctx.htmlContent_(hidden).incomplete, false);
+  assert.ok(!ctx.htmlText_(hidden).includes('HIDDEN20')); assert.ok(!ctx.htmlText_(hidden).includes('RUBY20'));
+  assert.deepEqual([...ctx.remoteImageUrls_(hidden)], ['https://shop.com/real.jpg']);
+  const hiddenCandidate = ctx.normalizeCandidate_(
+    {merchant: 'Shop', code: 'HIDDEN20', confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote: 'HIDDEN20'}}},
+    {html: hidden, images: [], incomplete: false});
+  assert.equal(hiddenCandidate.code, ''); assert.equal(hiddenCandidate.review, true);
+  const select = '<select><option>Shop Coupon code SELECT20</option></select><p>Shop Coupon code REAL20</p>';
+  assert.equal(ctx.htmlContent_(select).incomplete, true); assert.ok(!ctx.htmlText_(select).includes('SELECT20'));
+  for (const html of [
+    '<template><select><option>SELECT20</option></select></template><p>Shop REAL20</p>',
+    '<div hidden><select><option>SELECT20</option></select></div><p>Shop REAL20</p>',
+    '<dialog><select><option>SELECT20</option></select></dialog><p>Shop REAL20</p>',
+    '<details><summary>Shop</summary><select><option>SELECT20</option></select></details><p>REAL20</p>',
+    '<datalist><select><option>SELECT20</option></select></datalist><p>Shop REAL20</p>'
+  ]) assert.equal(ctx.htmlContent_(html).incomplete, false, html);
+  assert.equal(ctx.htmlContent_('<datalist><svg><text>Hidden</text></svg></datalist>').incomplete, true);
+});
+
 test('image dimensions use HTML length parsing without treating responsive percentages as pixels', () => {
   const {ctx} = harness();
   const url = 'https://shop.com/promo.jpg';
@@ -855,13 +904,17 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     data[field] = value; data.evidence[field] = {quote: value};
     return ctx.normalizeCandidate_(data, {text: 'Shop SAVE20 ' + source, images: [], incomplete: false})[field];
   }
-  for (const source of ['20−30%', '20 to 30%', 'between 20 and 30%']) {
+  for (const source of ['20−30%', '20 to 30%', 'between 20 and 30%', '20% to 30%', '€20 to €30',
+    '20 euros to 30 euros', '20%-30%', '€20-€30', 'between €20 and €30']) {
     for (const field of ['discountValue', 'minimumSpend']) {
       for (const endpoint of ['20', '30']) {
         assert.equal(ctx.fieldInQuote_(field, endpoint, source), false, field + ': ' + source);
         assert.equal(numericCandidate(field, endpoint, source), '', field + ': ' + source);
       }
     }
+  }
+  for (const source of ['20%', '€20', '20 euros']) {
+    for (const field of ['discountValue', 'minimumSpend']) assert.equal(numericCandidate(field, '20', source), '20', source);
   }
 });
 

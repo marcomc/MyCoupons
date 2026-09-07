@@ -25,7 +25,9 @@ The example configuration contains product defaults only.
 - Preserve the existing 26 English coupon headers. Additional user columns are
   outside the core schema.
 - Recover from the latest real coupon email date, including that entire day in
-  `Europe/Rome`; exclude technical scan rows. An empty sheet needs `initialDate`.
+  `Europe/Rome`; exclude technical scan rows and partial discount rows. A real
+  offer has a code, website, or both discount type and value. An empty sheet
+  needs `initialDate`.
 - Detect explicitly introduced coupon codes and retain source text as notes.
   Deterministic candidates currently require review. Tokens end at whitespace;
   one matching pair of outer ASCII quotes or angle brackets may wrap a token.
@@ -37,7 +39,8 @@ The example configuration contains product defaults only.
   normalizing proposed fields, including notes, against quoted source text.
   Unsubstantiated fields become empty; code evidence preserves exact spelling
   and complete tokens, including punctuation, and numeric values cannot be range,
-  ratio, Unicode-minus, or supported word-delimited interval endpoints. Oversized
+  ratio, Unicode-minus, or supported word-delimited interval endpoints, including
+  units and currency. Oversized
   structured values become empty; bounded notes
   retain complete Unicode characters and require review. A supplied image-evidence
   index must identify a present independently inspected image.
@@ -50,9 +53,11 @@ The example configuration contains product defaults only.
   filter; it does not resolve DNS or download images.
 - Extract text and actual image elements with a shared standards-based HTML
   document traversal, preserving `html`/`body` attributes. Exclude comments,
-  scripts, styles, metadata, inert templates, closed dialogs, closed-details
-  content except its first direct `summary`, and `hidden` subtrees; include
-  `noscript` fallback content. Rendered blocks retain text boundaries. Direct
+  scripts, styles, metadata, inert templates, non-rendered `datalist`/`rp`
+  content, closed dialogs, closed-details content except its first direct
+  `summary`, and `hidden` subtrees; include `noscript` fallback content.
+  Rendered blocks retain text boundaries. Select controls are excluded because
+  their selected state is not modeled and therefore force review. Direct
   image URLs trim only surrounding ASCII attribute whitespace. Responsive
   `srcset`/`picture` resources are not selected and force review. No CSS visibility
   analysis or script execution occurs. Image dimensions follow HTML pixel/percentage
@@ -69,7 +74,8 @@ Candidate helpers accept optional raw `message.html` alongside independent
 Both extraction and normalization derive HTML coverage through the same adapter;
 `incomplete: false` cannot override unsupported HTML content. Do not premerge an
 HTML projection into `message.text`, and keep evidence matches within one source
-representation or across a rendered block boundary. The string-only `htmlText_` and URL-discovery helpers cannot
+representation and never across a rendered block boundary. The string-only
+`htmlText_` and URL-discovery helpers cannot
 establish source completeness. Future image processing must retain these coverage
 signals rather than treat omitted vector content as processed.
 

@@ -16,6 +16,20 @@ function textCell_(s) {
   return /^[\s]*[=+@-]/.test(value) ? "'" + value : value;
 }
 function normalized_(s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); }
+function numericRangeEndpoint_(before, after) {
+  const space = '[\\t\\n\\f\\r ]*';
+  const unit = '(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[\\p{L}\\p{M}]+)?';
+  const amount = '[€$£]?\\d+(?:[.,]\\d+)?' + unit;
+  const separator = '[-−–—/:]';
+  const nextAmount = '[€$£]?\\d';
+  return new RegExp('^' + unit + space + separator + space + nextAmount, 'u').test(after) ||
+    new RegExp(amount + space + separator + space + '[€$£]?$', 'u').test(before) ||
+    new RegExp('^' + unit + '[\\t\\n\\f\\r ]+to[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) ||
+    new RegExp(amount + '[\\t\\n\\f\\r ]+to[\\t\\n\\f\\r ]+[€$£]?$', 'u').test(before) ||
+    new RegExp('^' + unit + '[\\t\\n\\f\\r ]+and[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) &&
+      new RegExp('\\bbetween[\\t\\n\\f\\r ]*[€$£]?$', 'u').test(before) ||
+    new RegExp('\\bbetween[\\t\\n\\f\\r ]+' + amount + '[\\t\\n\\f\\r ]+and[\\t\\n\\f\\r ]+[€$£]?$', 'u').test(before);
+}
 function htmlContent_(html) {
   const root = MC_HTML.parse(String(html), {scriptingEnabled: false});
   const stack = [{node: root}];
@@ -51,10 +65,12 @@ function htmlContent_(html) {
     const closedDetails = isHtml && tag === 'details' && !nodeAttrs.some(function (attr) { return attr.name === 'open'; });
     if (isHtml && (tag === 'picture' || (tag === 'img' || tag === 'source') &&
       nodeAttrs.some(function (attr) { return attr.name === 'srcset'; }))) incomplete = true;
-    const suppressed = entry.suppressed || foreign || isHtml &&
-      (/^(?:script|style|template|title|head|iframe|noembed|noframes)$/.test(tag) ||
+    const contextSuppressed = entry.suppressed || foreign || isHtml &&
+      (/^(?:script|style|template|title|head|iframe|noembed|noframes|datalist|rp)$/.test(tag) ||
         closedDialog || nodeAttrs.some(function (attr) { return attr.name === 'hidden'; }));
-    const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|summary|table|tbody|td|tfoot|th|thead|tr|ul)$/.test(tag);
+    if (isHtml && tag === 'select' && !contextSuppressed) incomplete = true;
+    const suppressed = contextSuppressed || isHtml && /^(?:select|optgroup|option)$/.test(tag);
+    const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|caption|center|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|hr|legend|li|listing|main|menu|nav|ol|p|plaintext|pre|search|section|summary|table|tbody|td|tfoot|th|thead|tr|ul|xmp)$/.test(tag);
     if (block || !suppressed && isHtml && tag === 'br') newline(block);
     if (block) stack.push({exit: true});
     if (!suppressed && isHtml && tag === 'img') {
@@ -171,13 +187,7 @@ function fieldInQuote_(field, value, quote) {
     const numericField = ['discountValue', 'minimumSpend'].indexOf(field) >= 0 && /\d/.test(needle);
     const beforeText = source.slice(0, start);
     const afterText = source.slice(afterStart);
-    const numericRange = numericField &&
-      (/^[\t\n\f\r ]*[-−–—/:][\t\n\f\r ]*[€$£]?\d/.test(afterText) ||
-        /\d[%€$£]?[\t\n\f\r ]*[-−–—/:][\t\n\f\r ]*$/.test(beforeText) ||
-        /^[\t\n\f\r ]+to[\t\n\f\r ]+[€$£]?\d/.test(afterText) ||
-        /^[\t\n\f\r ]+and[\t\n\f\r ]+[€$£]?\d/.test(afterText) && /\bbetween[\t\n\f\r ]*$/.test(beforeText) ||
-        /[€$£]?\d+(?:[.,]\d+)?[%€$£]?[\t\n\f\r ]+to[\t\n\f\r ]*$/.test(beforeText) ||
-        /\bbetween[\t\n\f\r ]+[€$£]?\d+(?:[.,]\d+)?[%€$£]?[\t\n\f\r ]+and[\t\n\f\r ]*$/.test(beforeText));
+    const numericRange = numericField && numericRangeEndpoint_(beforeText, afterText);
     if ((!before || !boundary.test(before)) && (!after || !boundary.test(after)) && !numericRange &&
       !( /\d$/.test(needle) && /^[.,]\d/.test(source.slice(afterStart, afterStart + 2))) &&
       !( /^\d/.test(needle) && /\d[.,]$/.test(source.slice(Math.max(0, start - 2), start)))) return true;
@@ -256,7 +266,7 @@ function sourceId_(value) {
 }
 function realCouponRow_(row) {
   if ([row[4], row[17]].some(function (v) { return /^(?:scan|scanned|technical|no coupons?|no offers?)$/i.test(String(v).trim()); })) return false;
-  return Boolean(row[1] && (row[3] || row[4] || row[5] || row[2]) && (row[11] || row[13]));
+  return Boolean(row[1] && (row[3] || row[2] || row[4] && row[5]) && (row[11] || row[13]));
 }
 function emailDate_(value, zone) {
   if (value instanceof Date && isFinite(value.getTime())) return value;
