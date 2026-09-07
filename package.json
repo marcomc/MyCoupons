@@ -5,7 +5,19 @@
   "description": "Private Gmail coupon importer for Google Sheets",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check": "node scripts/check.mjs"
+    "check": "node scripts/check.mjs",
+    "build:html": "node scripts/build-html.mjs",
+    "check:html-build": "node scripts/build-html.mjs --check"
   },
-  "engines": {"node": ">=22", "npm": ">=10"}
+  "engines": {
+    "node": ">=22",
+    "npm": ">=10"
+  },
+  "devDependencies": {
+    "esbuild-wasm": "0.28.2",
+    "parse5": "7.3.0"
+  },
+  "overrides": {
+    "entities": "6.0.1"
+  }
 }

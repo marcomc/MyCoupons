@@ -10,9 +10,10 @@
 - Complete coupon-token and Gmail-link identity validation, including punctuation
   boundaries, Unicode-aware bounds and evidence for notes; oversized structured
   values are cleared and unknown completeness cannot authorize confirmation.
-- Shared HTML text/image traversal excluding comments and script/style content.
+- Standards-based HTML text/image traversal with malformed-input handling,
+  hidden-content exclusions and normalized tracker dimensions.
 - Complete HTML character-reference decoding with separate text/attribute rules
-  and pinned local third-party source.
+  and a reproducible, pinned local parser bundle.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

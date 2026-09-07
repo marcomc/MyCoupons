@@ -8,6 +8,8 @@
   and push reviewed corrections and continue the review loop.
 - Run `npm test` and `npm run check` for runtime changes. Tests must not depend
   on ignored drafts, credentials, or live Google resources.
+- When changing the parser bundle or build inputs, run `npm run check:html-build`
+  after installing locked dependencies with `npm ci --ignore-scripts`.
 - Follow the supplied user-wide Markdown and shell validation requirements.
 
 ## Source and mutation contracts
@@ -31,9 +33,13 @@
   use explicit schema markers, not words found in merchant names.
 - HTML image discovery distinguishes exact attributes from `data-*` attributes
   and text inside other attribute values. Text and image extraction share an
-  atomic traversal that excludes comments and script/style bodies.
+  standards-parsed traversal that excludes comments, non-content containers and
+  HTML `hidden` subtrees. Never recover malformed markup with separate regexes.
 - Decode references once per original text span or attribute context. Never
   decode concatenated fragments across removed markup or reparse decoded tags.
-  Preserve vendored decoder bytes and license; verify their pinned checksums.
+  Rebuild the vendored parser from locked dependencies; verify the artifact and
+  license checksums and run it without Node or browser globals.
+- Parse image dimensions using HTML length/percentage semantics before applying
+  the small-pixel filter; spelling variants must not bypass it.
 - URL evidence may recognize unambiguous prose around an authority, but must
   preserve punctuation within paths, queries and fragments.

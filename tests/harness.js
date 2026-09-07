@@ -28,8 +28,8 @@ function harness({vendorLast = false} = {}) {
   };
   vm.createContext(ctx);
   const names = ['locales/en', 'Config', 'Core'];
-  if (vendorLast) names.push('vendor/He');
-  else names.unshift('vendor/He');
+  if (vendorLast) names.push('vendor/Html');
+  else names.unshift('vendor/Html');
   for (const name of names) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../src', name + '.gs'), 'utf8'), ctx, {filename: name});
   }

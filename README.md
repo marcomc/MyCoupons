@@ -42,8 +42,11 @@ The example configuration contains product defaults only.
 - Quote formula-like spreadsheet text. Discover HTTPS image URLs while excluding
   recognizable trackers, IP literals, and local hostnames. This is a lexical
   filter; it does not resolve DNS or download images.
-- Extract text and image tags with a shared HTML traversal that excludes comments
-  and script/style bodies. This is lexical extraction, not CSS visibility analysis.
+- Extract text and actual image elements with a shared standards-based HTML
+  document traversal, preserving `html`/`body` attributes. Exclude comments,
+  scripts, styles, metadata, inert templates and
+  `hidden` subtrees; include `noscript` fallback content. No CSS visibility analysis
+  or script execution occurs. Image dimensions follow HTML pixel/percentage rules.
 - Use stable review action identifiers with English labels: `Confirm`, `Ignore`,
   and `Retry with AI`. Any ignored candidate keeps its source message unchanged;
   archiving requires all candidates to be confirmed.
@@ -68,7 +71,7 @@ npm run check
 npm test
 ```
 
-HTML character references use a pinned local decoder. See
+HTML parsing uses a pinned, bundled parser. See
 [third-party provenance and update checks](THIRD-PARTY.md); no dependency download
 is needed to run these checks.
 

@@ -31,7 +31,7 @@ test('date parsing handles DST boundaries and timestamp local day', () => {
 test('formula injection is quoted, and HTML text preserves conditions', () => {
   const {ctx} = harness();
   for (const x of ['=IMPORTXML("https://bad.test")', ' +cmd', '@test', '-test']) assert.ok(ctx.textCell_(x).startsWith("'"));
-  assert.equal(ctx.htmlText_('<style>secret</style><p>Save &amp; use &#67;ODE</p>'), ' Save & use CODE\n');
+  assert.equal(ctx.htmlText_('<style>secret</style><p>Save &amp; use &#67;ODE</p>'), 'Save & use CODE\n');
 });
 test('remote image discovery excludes trackers, private literals and unsafe schemes', () => {
   const {ctx} = harness();
@@ -515,13 +515,124 @@ test('references separated by lexical markup are never manufactured after concat
   assert.equal(ctx.htmlText_('CAF&Eacute;20'), 'CAFÉ20');
 });
 
-test('the actual vendored decoder loads before or after Core without Node or DOM globals', () => {
+test('the actual vendored parser loads before or after Core without Node or DOM globals', () => {
   for (const vendorLast of [false, true]) {
     const {ctx} = harness({vendorLast});
     for (const name of ['require', 'module', 'exports', 'window', 'document', 'fetch']) assert.equal(ctx[name], undefined);
-    assert.equal(ctx.he.version, '1.2.0');
+    assert.equal(typeof ctx.MC_HTML.parse, 'function');
     assert.equal(ctx.htmlText_('CAF&Eacute;20'), 'CAFÉ20');
     assert.deepEqual([...ctx.remoteImageUrls_('<img src="https://shop.com/promo?x=1&copy=2">')],
       ['https://shop.com/promo?x=1&copy=2']);
   }
+});
+
+test('HTML parser EOF states never promote unfinished tag or attribute content', () => {
+  const {ctx} = harness();
+  const visible = 'Shop Coupon code REAL20 ';
+  for (const tail of ['<img', '<img alt', '<img alt=', '<img alt="Coupon code HIDDEN"',
+    "<img alt='Coupon code HIDDEN", '<img alt=Coupon code HIDDEN', '<script alt="Coupon code HIDDEN"',
+    '<!bogus Coupon code HIDDEN', '<?bogus Coupon code HIDDEN']) {
+    const html = visible + tail;
+    const text = ctx.htmlText_(html);
+    assert.equal(text, visible, tail);
+    assert.deepEqual(Array.from(ctx.deterministicCandidates_({text}), c => c.code), ['REAL20']);
+    const actual = ctx.normalizeCandidate_({merchant: 'Shop', code: 'HIDDEN', confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote: 'HIDDEN'}}}, {text, images: [], incomplete: false});
+    assert.equal(actual.code, ''); assert.equal(actual.review, true);
+    assert.deepEqual([...ctx.remoteImageUrls_(html)], []);
+  }
+});
+
+test('HTML content contexts distinguish inert markup from text and real image nodes', () => {
+  const {ctx} = harness();
+  const image = '<img src="https://shop.com/hidden.jpg">';
+  const real = '<img src="https://shop.com/real.jpg">';
+  for (const tag of ['script', 'style', 'template', 'title', 'iframe', 'noembed', 'noframes']) {
+    const html = '<' + tag + '>Coupon code HIDDEN' + image + '</' + tag + '>Visible' + real;
+    assert.equal(ctx.htmlText_(html), 'Visible', tag);
+    assert.deepEqual([...ctx.remoteImageUrls_(html)], ['https://shop.com/real.jpg'], tag);
+  }
+  for (const tag of ['textarea', 'xmp', 'plaintext']) {
+    const html = '<' + tag + '>' + image + 'Coupon code TEXT';
+    assert.ok(ctx.htmlText_(html).includes(image + 'Coupon code TEXT'));
+    assert.deepEqual([...ctx.remoteImageUrls_(html)], []);
+  }
+  assert.equal(ctx.htmlText_('<noscript>Fallback</noscript>'), 'Fallback');
+  assert.deepEqual([...ctx.remoteImageUrls_('<noscript>' + real + '</noscript>')], ['https://shop.com/real.jpg']);
+  for (const prefix of ['<!-->', '<!--->', '<!bogus>', '<?bogus>']) {
+    assert.equal(ctx.htmlText_(prefix + 'Visible'), 'Visible', prefix);
+    assert.deepEqual([...ctx.remoteImageUrls_(prefix + real)], ['https://shop.com/real.jpg']);
+  }
+  assert.deepEqual([...ctx.remoteImageUrls_('<svg><image href="https://shop.com/hidden.jpg"/></svg>' + real)],
+    ['https://shop.com/real.jpg']);
+  assert.deepEqual([...ctx.remoteImageUrls_('<img src="https://shop.com/real.jpg" src="https://shop.com/hidden.jpg">')],
+    ['https://shop.com/real.jpg']);
+});
+
+test('HTML inline identity and block boundaries survive iterative deeply nested traversal', () => {
+  const {ctx} = harness();
+  const text = ctx.htmlText_('Coupon code SAVE<b>20</b><p>Conditions</p>After<br>End');
+  assert.equal(text, 'Coupon code SAVE20\nConditions\nAfter\nEnd');
+  assert.equal(ctx.deterministicCandidates_({text})[0].code, 'SAVE20');
+  const html = '<div>'.repeat(3000) + 'Visible' + '<img src="https://shop.com/real.jpg">' + '</div>'.repeat(3000);
+  assert.equal(ctx.htmlText_(html).trim(), 'Visible');
+  assert.deepEqual([...ctx.remoteImageUrls_(html)], ['https://shop.com/real.jpg']);
+});
+
+test('image dimensions use HTML length parsing without treating responsive percentages as pixels', () => {
+  const {ctx} = harness();
+  const url = 'https://shop.com/promo.jpg';
+  const small = ['0', '01', '0002', '1.0', '0.5', '1px', '1junk', ' 1 ', '\t01\n', '1 %', '1. %', '&#48;1', '1e3%'];
+  const preserve = ['1%', '0.5%', '1.%', '+1', '-1', '.5', '', 'unknown', '2.1', '003', '100%', '\u00a01'];
+  for (const attr of ['width', 'height']) {
+    for (const dimension of [...small, ...preserve]) {
+      const html = '<img ' + attr + '="' + dimension + '" src="' + url + '">';
+      assert.deepEqual([...ctx.remoteImageUrls_(html)], small.includes(dimension) ? [] : [url], attr + '=' + dimension);
+    }
+  }
+});
+
+test('only the actual HTML hidden attribute excludes a complete subtree', () => {
+  const {ctx} = harness();
+  const hidden = 'Coupon code HIDDEN<img src="https://shop.com/hidden.jpg">';
+  const real = 'Visible<img src="https://shop.com/real.jpg">';
+  for (const attribute of ['hidden', 'hidden=""', 'hidden="false"', 'hidden="until-found"']) {
+    const html = '<div ' + attribute + '><span>' + hidden + '</span></div>' + real;
+    assert.equal(ctx.htmlText_(html), 'Visible');
+    assert.deepEqual([...ctx.remoteImageUrls_(html)], ['https://shop.com/real.jpg']);
+  }
+  for (const attribute of ['', 'data-hidden="true"']) {
+    assert.ok(ctx.htmlText_('<div ' + attribute + '>' + hidden + '</div>').includes('HIDDEN'));
+    assert.deepEqual([...ctx.remoteImageUrls_('<div ' + attribute + '>' + hidden + '</div>')],
+      ['https://shop.com/hidden.jpg']);
+  }
+  assert.equal(ctx.htmlText_('<svg><text hidden>Foreign visible</text></svg>'), 'Foreign visible');
+});
+
+test('document wrapper attributes remain authoritative for text and images', () => {
+  const {ctx} = harness();
+  const offer = 'Shop Coupon code SAVE20<img src="https://shop.com/offer.jpg">';
+  for (const doctype of ['', '<!doctype html>']) {
+    for (const tag of ['html', 'body']) {
+      for (const hidden of ['hidden', 'hidden=""', 'hidden="false"', 'hidden="until-found"']) {
+        const html = doctype + (tag === 'html' ? '<html ' + hidden + '><body>' + offer + '</body></html>' :
+          '<html><head><title>Metadata</title></head><body ' + hidden + '>' + offer + '</body></html>');
+        const text = ctx.htmlText_(html);
+        assert.equal(text, '', html);
+        assert.deepEqual([...ctx.deterministicCandidates_({text})], []);
+        assert.deepEqual([...ctx.remoteImageUrls_(html)], []);
+        const actual = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+          evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}}, {text, images: [], incomplete: false});
+        assert.equal(actual.code, ''); assert.equal(actual.review, true);
+      }
+    }
+  }
+  for (const html of [offer, '<body>' + offer + '</body>', '<!doctype html><html><body>' + offer + '</body></html>',
+    '<html data-hidden="true"><body>' + offer + '</body></html>', '<noscript>' + offer + '</noscript>',
+    '<table><tr><td>' + offer + '</td><td>Conditions</td></tr></table>']) {
+    const text = ctx.htmlText_(html);
+    assert.equal(ctx.deterministicCandidates_({text})[0].code, 'SAVE20');
+    assert.deepEqual([...ctx.remoteImageUrls_(html)], ['https://shop.com/offer.jpg']);
+  }
+  assert.equal(ctx.htmlText_('<table><tr><td>First</td><td>Second</td></tr></table>'), 'First\nSecond\n');
 });

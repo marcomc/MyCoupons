@@ -16,31 +16,39 @@ function textCell_(s) {
   return /^[\s]*[=+@-]/.test(value) ? "'" + value : value;
 }
 function normalized_(s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); }
-function decodeHtml_(s, attribute) {
-  return he.decode(String(s), {isAttributeValue: attribute === true, strict: false});
-}
-function mapHtmlTags_(html, visit, visitText) {
-  // Consume comments and raw text atomically, so their embedded markup is not visited.
-  const attributes = `(?:[^>"']|"[^"]*"|'[^']*')*`;
-  const token = new RegExp('<!--[\\s\\S]*?(?:-->|$)|<(script|style)(?=[\\s/>])' + attributes +
-    '>[\\s\\S]*?(?:<\\/\\1(?=[\\s/>])' + attributes + '>|$)|<(?=/?[a-z]|[!?])' + attributes + '>', 'gi');
-  const source = String(html);
-  const text = visitText || function (span) { return span; };
+function htmlContent_(html) {
+  const root = MC_HTML.parse(String(html), {scriptingEnabled: false});
+  const stack = [{node: root}];
   const pieces = [];
-  let cursor = 0;
-  let match;
-  while ((match = token.exec(source))) {
-    pieces.push(text(source.slice(cursor, match.index)));
-    if (!match[1] && !match[0].startsWith('<!--')) pieces.push(visit(match[0]));
-    cursor = token.lastIndex;
+  const images = [];
+  function newline() {
+    if (pieces.length && !pieces[pieces.length - 1].endsWith('\n')) pieces.push('\n');
   }
-  pieces.push(text(source.slice(cursor)));
-  return pieces.join('');
+  while (stack.length) {
+    const entry = stack.pop();
+    if (entry.exit) { newline(); continue; }
+    const node = entry.node;
+    if (node.nodeName === '#text') { if (node.value) pieces.push(node.value); continue; }
+    const tag = node.tagName || '';
+    const isHtml = node.namespaceURI === 'http://www.w3.org/1999/xhtml';
+    if (/^(?:script|style)$/.test(tag) || isHtml &&
+      (/^(?:template|title|head|iframe|noembed|noframes)$/.test(tag) ||
+        (node.attrs || []).some(function (attr) { return attr.name === 'hidden'; }))) continue;
+    const block = isHtml && /^(?:address|article|aside|blockquote|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)$/.test(tag);
+    if (block || isHtml && tag === 'br') newline();
+    if (block) stack.push({exit: true});
+    if (isHtml && tag === 'img') {
+      const attrs = Object.create(null);
+      (node.attrs || []).forEach(function (attr) { attrs[attr.name] = attr.value; });
+      images.push(attrs);
+    }
+    const children = node.childNodes || [];
+    for (let i = children.length - 1; i >= 0; i--) stack.push({node: children[i]});
+  }
+  return {text: pieces.join(''), images: images};
 }
 function htmlText_(html) {
-  return mapHtmlTags_(html, function (tag) {
-    return /^<(?:br|\/p|\/div|\/tr)(?=[\s/>])/i.test(tag) ? '\n' : ' ';
-  }, decodeHtml_);
+  return htmlContent_(html).text;
 }
 function safeUrl_(s) {
   if (typeof s !== 'string' || s.length > 2048 || /[\s\\\x00-\x1f]/.test(s)) return '';
@@ -50,22 +58,18 @@ function safeUrl_(s) {
     !m[1].split('.').every(function (p) { return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(p); })) return '';
   return s;
 }
+function smallImageDimension_(value) {
+  // HTML dimension rules: digit-led decimal; only an immediately following % is relative.
+  const match = /^[\t\n\f\r ]*([0-9]+(?:\.[0-9]*)?)(%?)/.exec(value || '');
+  return Boolean(match && !match[2] && Number(match[1]) <= 2);
+}
 function remoteImageUrls_(html) {
   const urls = [];
-  mapHtmlTags_(html, function (tag) {
-    if (!/^<img(?=[\s/>])/i.test(tag)) return tag;
-    const attrs = Object.create(null);
-    const re = /\s+([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
-    let match;
-    while ((match = re.exec(tag))) {
-      const name = match[1].toLowerCase();
-      if (!(name in attrs)) attrs[name] = decodeHtml_(match[2] || match[3] || match[4] || '', true);
-    }
-    if (!attrs.src || ['width', 'height'].some(function (key) { return /^[012](?:px)?$/i.test((attrs[key] || '').trim()); }) ||
-      /(?:pixel|tracking|tracker|beacon|\/open[/.?]|transparent|spacer)/i.test(attrs.src)) return tag;
+  htmlContent_(html).images.forEach(function (attrs) {
+    if (!attrs.src || ['width', 'height'].some(function (key) { return smallImageDimension_(attrs[key]); }) ||
+      /(?:pixel|tracking|tracker|beacon|\/open[/.?]|transparent|spacer)/i.test(attrs.src)) return;
     const url = safeUrl_(attrs.src);
     if (url && urls.indexOf(url) < 0) urls.push(url);
-    return tag;
   });
   return urls;
 }

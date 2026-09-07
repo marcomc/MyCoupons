@@ -6,17 +6,22 @@ const root = path.resolve(import.meta.dirname, '..');
 const files = fs.readdirSync(path.join(root, 'src'), {recursive: true}).filter(f => f.endsWith('.gs'));
 for (const file of files) new vm.Script(fs.readFileSync(path.join(root, 'src', file), 'utf8'), {filename: file});
 const vendor = {
-  'He.gs': '76c554d5bbfd032fe620595076a50abea5124b9cbd4e9ffe6ac94a4f855aeceb',
-  'LICENSE-he.txt': '483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a'
+  'Html.gs': 'c634773c81bd808e3177557a274ab5ea71ed8d6b043fbf34cea8b31cac4d4dc7',
+  'LICENSE-parse5.txt': '8c535800331e1e4439835555b3f9edc7fe9dee2fab0d8bbbd5a982e8b8343d4d',
+  'LICENSE-entities.txt': 'cb992345949ccd6e8394b2cd6c465f7b897c864f845937dbf64e8997f389e164'
 };
 for (const [name, checksum] of Object.entries(vendor)) {
   const bytes = fs.readFileSync(path.join(root, 'src/vendor', name));
   if (crypto.createHash('sha256').update(bytes).digest('hex') !== checksum) throw Error('Vendor integrity mismatch: ' + name);
 }
 const context = vm.createContext({});
-vm.runInContext(fs.readFileSync(path.join(root, 'src/vendor/He.gs'), 'utf8'), context);
-if (context.he?.version !== '1.2.0' || context.he.decode('CAF&Eacute;20') !== 'CAFÉ20') {
-  throw Error('HTML decoder must load without Node or browser globals');
+vm.runInContext(fs.readFileSync(path.join(root, 'src/vendor/Html.gs'), 'utf8'), context);
+const parsed = context.MC_HTML?.parse('<body hidden>CAF&Eacute;20<img alt="hidden"', {scriptingEnabled: false});
+const html = parsed?.childNodes.find(node => node.tagName === 'html');
+const body = html?.childNodes.find(node => node.tagName === 'body');
+if (body?.childNodes.length !== 1 || body.childNodes[0].value !== 'CAFÉ20' ||
+  !body.attrs.some(attr => attr.name === 'hidden')) {
+  throw Error('HTML parser must load and parse without Node or browser globals');
 }
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'src/appsscript.json')));
 if (manifest.executionApi.access !== 'MYSELF' || manifest.webapp) throw Error('Owner-only execution required');
