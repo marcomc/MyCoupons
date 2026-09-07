@@ -15,6 +15,21 @@ test('recover full latest real import day in Rome, excluding technical scan rows
   const real = Array(26).fill(''); Object.assign(real, {0: '2026-05-22', 1: 'Shop', 3: 'CODE', 11: 'offer'});
   const scan = [...real]; scan[0] = '2026-09-07'; scan[4] = 'Scan';
   assert.equal(ctx.recoveryStart_([real, scan], config), Date.parse('2026-05-21T22:00:00Z'));
+  const whitespace = ' \t\n\u00a0 ';
+  for (const [offer, field] of [
+    [{3: 'CODE'}, 1], [{3: 'CODE'}, 3], [{2: 'https://shop.example'}, 2],
+    [{4: 'percent', 5: '20'}, 4], [{4: 'percent', 5: '20'}, 5],
+    [{3: 'CODE'}, 11], [{3: 'CODE', 13: 'https://mail.google.com/mail/#all/18a9b0c7', 11: ''}, 13]
+  ]) {
+    const row = Array(26).fill(''); Object.assign(row, {0: 'not a date', 1: 'Shop', 11: 'offer'}, offer);
+    row[field] = whitespace;
+    assert.equal(ctx.realCouponRow_(row), false);
+    assert.equal(ctx.recoveryStart_([real, row], config), Date.parse('2026-05-21T22:00:00Z'));
+  }
+  const trimmed = Array(26).fill('');
+  Object.assign(trimmed, {0: '2026-06-30', 1: ' Shop ', 3: ' CODE ', 11: ' offer '});
+  assert.equal(ctx.realCouponRow_(trimmed), true);
+  assert.equal(ctx.recoveryStart_([real, trimmed], config), Date.parse('2026-06-29T22:00:00Z'));
   for (const partial of [{4: 'percent'}, {5: '20'}]) {
     const row = Array(26).fill(''); Object.assign(row, {0: 'not a date', 1: 'Shop', 11: 'offer'}, partial);
     assert.equal(ctx.realCouponRow_(row), false);
@@ -56,6 +71,11 @@ test('remote image discovery excludes trackers, private literals and unsafe sche
   for (const url of ['https://shop.com/coupon image.jpg', '\u00a0https://shop.com/coupon.jpg\u00a0']) {
     assert.deepEqual([...ctx.remoteImageUrls_('<img src="' + url + '">')], []);
   }
+  for (const url of ['https://shop.com/open', 'https://shop.com/open#receipt', 'https://shop.com/open/',
+    'https://shop.com/open?receipt=1', 'https://shop.com/open.gif']) {
+    assert.deepEqual([...ctx.remoteImageUrls_('<img src="' + url + '">')], [], url);
+  }
+  assert.deepEqual([...ctx.remoteImageUrls_('<img src="https://shop.com/opener">')], ['https://shop.com/opener']);
 });
 test('deterministic codes and ungrounded AI fields do not grant archive authority', () => {
   const {ctx} = harness();
@@ -174,10 +194,16 @@ test('only canonical Gmail links provide an identity without partial token colli
     'https://mail.google.com/mail/?th=' + id + '&view=pt']) assert.equal(ctx.sourceId_(url), id);
   for (const url of ['https://MAIL.GOOGLE.COM/mail/#all/' + id,
     'https://mail.google.com:443/mail/u/1/#inbox/' + id,
-    'https://MAIL.GOOGLE.COM:443/mail/?th=' + id]) assert.equal(ctx.sourceId_(url), id);
+    'https://MAIL.GOOGLE.COM:443/mail/?th=' + id,
+    'https://mail.google.com:0443/mail/#all/' + id,
+    'https://MAIL.GOOGLE.COM:000443/mail/?th=' + id]) assert.equal(ctx.sourceId_(url), id);
   for (const url of ['https://other.example/mail/#all/' + id,
     'https://mail.google.com.evil.example/mail/#all/' + id,
     'https://mail.google.com:444/mail/#all/' + id,
+    'https://mail.google.com:4430/mail/#all/' + id,
+    'https://mail.google.com:04430/mail/#all/' + id,
+    'https://mail.google.com:+443/mail/#all/' + id,
+    'https://mail.google.com:0x1bb/mail/#all/' + id,
     'https://user@mail.google.com/mail/#all/' + id,
     'https://mail.google.com/Mail/#all/' + id,
     'https://mail.google.com/mail/#all/' + id + '-bad',
@@ -865,6 +891,17 @@ test('responsive image resources preserve incomplete coverage without selecting 
     evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
   const candidate = ctx.normalizeCandidate_(raw, {html: '<p>Shop SAVE20</p>' + picture, images: [], incomplete: false});
   assert.equal(candidate.code, 'SAVE20'); assert.equal(candidate.review, true);
+  for (const html of [
+    '<template>' + picture + '</template><p>Shop SAVE20</p>',
+    '<div hidden>' + picture + '</div><p>Shop SAVE20</p>',
+    '<dialog>' + picture + '</dialog><p>Shop SAVE20</p>',
+    '<details><summary>Shop</summary>' + picture + '</details><p>SAVE20</p>'
+  ]) {
+    assert.equal(ctx.htmlContent_(html).incomplete, false, html);
+    assert.equal(ctx.normalizeCandidate_(raw, {html, images: [], incomplete: false}).review, false, html);
+  }
+  assert.equal(ctx.htmlContent_('<details><summary>' + picture + '</summary></details>').incomplete, true);
+  assert.equal(ctx.htmlContent_('<template><svg><text>Hidden</text></svg></template><p>Shop SAVE20</p>').incomplete, true);
 });
 
 test('supplied image evidence indexes must denote inspected images', () => {

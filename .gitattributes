@@ -1,1 +1,3 @@
-src/vendor/Html.gs linguist-vendored
+src/vendor/Html.gs text eol=lf linguist-vendored
+src/vendor/LICENSE-parse5.txt text eol=lf
+src/vendor/LICENSE-entities.txt text eol=lf

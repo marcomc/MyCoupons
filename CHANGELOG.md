@@ -28,6 +28,10 @@
 - Remaining default-rendered HTML blocks preserve evidence boundaries; non-rendered
   control content is excluded, unmodeled selections force review, numeric interval
   units cannot ground an endpoint, and recovery ignores partial discount rows.
+- Gmail identity accepts only normalized default HTTPS ports; terminal `/open`
+  trackers are excluded; suppressed responsive resources do not force review;
+  whitespace-only cells cannot advance recovery; and vendored artifacts have
+  stable LF checkout semantics for checksum verification.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

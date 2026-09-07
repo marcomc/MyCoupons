@@ -63,11 +63,11 @@ function htmlContent_(html) {
     const nodeAttrs = node.attrs || [];
     const closedDialog = isHtml && tag === 'dialog' && !nodeAttrs.some(function (attr) { return attr.name === 'open'; });
     const closedDetails = isHtml && tag === 'details' && !nodeAttrs.some(function (attr) { return attr.name === 'open'; });
-    if (isHtml && (tag === 'picture' || (tag === 'img' || tag === 'source') &&
-      nodeAttrs.some(function (attr) { return attr.name === 'srcset'; }))) incomplete = true;
     const contextSuppressed = entry.suppressed || foreign || isHtml &&
       (/^(?:script|style|template|title|head|iframe|noembed|noframes|datalist|rp)$/.test(tag) ||
         closedDialog || nodeAttrs.some(function (attr) { return attr.name === 'hidden'; }));
+    if (!contextSuppressed && isHtml && (tag === 'picture' || (tag === 'img' || tag === 'source') &&
+      nodeAttrs.some(function (attr) { return attr.name === 'srcset'; }))) incomplete = true;
     if (isHtml && tag === 'select' && !contextSuppressed) incomplete = true;
     const suppressed = contextSuppressed || isHtml && /^(?:select|optgroup|option)$/.test(tag);
     const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|caption|center|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|hr|legend|li|listing|main|menu|nav|ol|p|plaintext|pre|search|section|summary|table|tbody|td|tfoot|th|thead|tr|ul|xmp)$/.test(tag);
@@ -116,7 +116,7 @@ function remoteImageUrls_(html) {
   htmlContent_(html).images.forEach(function (attrs) {
     const src = typeof attrs.src === 'string' ? attrs.src.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '') : '';
     if (!src || ['width', 'height'].some(function (key) { return smallImageDimension_(attrs[key]); }) ||
-      /(?:pixel|tracking|tracker|beacon|\/open[/.?]|transparent|spacer)/i.test(src)) return;
+      /(?:pixel|tracking|tracker|beacon|\/open(?:[/.?#]|$)|transparent|spacer)/i.test(src)) return;
     const url = safeUrl_(src);
     if (url && urls.indexOf(url) < 0) urls.push(url);
   });
@@ -253,7 +253,8 @@ function sourceId_(value) {
   // Accept only the canonical hexadecimal links used by this importer.
   const link = /^https:\/\/([^/?#]+)(\/[^?#]*)?(?:\?([^#]*))?(?:#(.*))?$/i.exec(String(value));
   if (!link) return '';
-  if (['mail.google.com', 'mail.google.com:443'].indexOf(link[1].toLowerCase()) < 0 ||
+  const authority = /^mail\.google\.com(?::(\d+))?$/i.exec(link[1]);
+  if (!authority || authority[1] !== undefined && Number(authority[1]) !== 443 ||
     !/^\/mail\/(?:u\/\d+\/)?$/.test(link[2] || '')) return '';
   if (link[4] !== undefined) {
     const fragment = /^(?:all|inbox|search\/[^/#]+)\/([a-f0-9]+)$/.exec(link[4]);
@@ -265,8 +266,10 @@ function sourceId_(value) {
   return thread ? thread[1] : '';
 }
 function realCouponRow_(row) {
+  function present(value) { return String(value == null ? '' : value).trim() !== ''; }
   if ([row[4], row[17]].some(function (v) { return /^(?:scan|scanned|technical|no coupons?|no offers?)$/i.test(String(v).trim()); })) return false;
-  return Boolean(row[1] && (row[3] || row[2] || row[4] && row[5]) && (row[11] || row[13]));
+  return present(row[1]) && (present(row[3]) || present(row[2]) || present(row[4]) && present(row[5])) &&
+    (present(row[11]) || present(row[13]));
 }
 function emailDate_(value, zone) {
   if (value instanceof Date && isFinite(value.getTime())) return value;

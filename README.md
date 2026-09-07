@@ -59,8 +59,8 @@ The example configuration contains product defaults only.
   Rendered blocks retain text boundaries. Select controls are excluded because
   their selected state is not modeled and therefore force review. Direct
   image URLs trim only surrounding ASCII attribute whitespace. Responsive
-  `srcset`/`picture` resources are not selected and force review. No CSS visibility
-  analysis or script execution occurs. Image dimensions follow HTML pixel/percentage
+  `srcset`/`picture` resources in active rendered content are not selected and
+  force review. No CSS visibility analysis or script execution occurs. Image dimensions follow HTML pixel/percentage
   rules.
   Entire SVG/MathML subtrees are excluded from text/image evidence and mark source
   coverage incomplete, even for text-free graphics or content inside templates.
@@ -80,7 +80,8 @@ establish source completeness. Future image processing must retain these coverag
 signals rather than treat omitted vector content as processed.
 
 Source identity recovery accepts canonical lowercase hexadecimal Gmail links under
-`mail.google.com` (case-insensitive with optional default port `:443`) using
+`mail.google.com` (case-insensitive with an optional decimal serialization of
+the default HTTPS port) using
 `#all/`, `#inbox/`, `#search/<query>/`, or the `th` query parameter.
 Unsupported opaque Gmail UI links such as `permmsgid=msg-f:...` return no identity;
 they must be resolved before a future importer can use them for deduplication.
