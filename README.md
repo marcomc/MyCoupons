@@ -54,8 +54,8 @@ The example configuration contains product defaults only.
 - Extract text and actual image elements with a shared standards-based HTML
   document traversal, preserving `html`/`body` attributes. Exclude comments,
   scripts, styles, metadata, inert templates, non-rendered `datalist`/`rp`
-  content, closed dialogs, closed-details content except its first direct
-  `summary`, and `hidden` subtrees; include `noscript` fallback content.
+  content, closed dialogs and popovers, closed-details content except its first
+  direct `summary`, and `hidden` subtrees; include `noscript` fallback content.
   Rendered blocks retain text boundaries. Select controls are excluded because
   their selected state is not modeled and therefore force review. Direct
   image URLs trim only surrounding ASCII attribute whitespace. Responsive
@@ -77,7 +77,8 @@ HTML projection into `message.text`, and keep evidence matches within one source
 representation and never across a rendered block boundary. The string-only
 `htmlText_` and URL-discovery helpers cannot
 establish source completeness. Future image processing must retain these coverage
-signals rather than treat omitted vector content as processed.
+signals rather than treat omitted vector content as processed. Factual fields and
+quotes must be well-formed UTF-16, including complete astral characters.
 
 Source identity recovery accepts canonical lowercase hexadecimal Gmail links under
 `mail.google.com` (case-insensitive with an optional decimal serialization of

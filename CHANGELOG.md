@@ -32,6 +32,9 @@
   trackers are excluded; suppressed responsive resources do not force review;
   whitespace-only cells cannot advance recovery; and vendored artifacts have
   stable LF checkout semantics for checksum verification.
+- Closed native popovers are excluded from evidence, single-character factual
+  quotes can ground valid symbols, timestamp offsets are limited to ±14:00, and
+  malformed UTF-16 evidence is rejected before matching.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

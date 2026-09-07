@@ -92,6 +92,14 @@ test('grounded complete AI text can confirm, OCR alone requires review', () => {
   assert.equal(ctx.normalizeCandidate_(raw, {text: 'Shop SAVE20', images: [], incomplete: false}).review, false);
   raw.evidence.code = {image: 0};
   assert.equal(ctx.normalizeCandidate_(raw, {text: 'Shop', images: [{}], incomplete: false}).review, true);
+  const minimal = {merchant: 'Shop', code: 'SAVE20', discountType: '%', discountValue: '1', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountType: {quote: '%'}, discountValue: {quote: '1'}}};
+  assert.equal(ctx.normalizeCandidate_(minimal, {text: 'Shop SAVE20 1% off', images: [], incomplete: false}).review, false);
+  minimal.evidence.discountType = {quote: ' '};
+  assert.equal(ctx.normalizeCandidate_(minimal, {text: 'Shop SAVE20 1% off', images: [], incomplete: false}).discountType, '');
+  const currency = {...minimal, discountType: '€', discountValue: '20',
+    evidence: {...minimal.evidence, discountType: {quote: '€'}, discountValue: {quote: '20'}}};
+  assert.equal(ctx.normalizeCandidate_(currency, {text: 'Shop SAVE20 €20 off', images: [], incomplete: false}).review, false);
 });
 test('mixed outcomes consistently leave email unchanged', () => {
   const {ctx} = harness();
@@ -184,6 +192,27 @@ test('evidence must preserve full code tokens, case, numeric magnitude and URL i
   assert.equal(ctx.normalizeCandidate_(raw, {text: 'Shop ' + upperUrl, images: [], incomplete: false}).website, '');
 });
 
+test('factual evidence requires well-formed Unicode boundaries', () => {
+  const {ctx} = harness();
+  for (const half of ['\ud83d', '\ude00']) {
+    assert.equal(ctx.fieldInQuote_('merchant', half, '😀'), false);
+    assert.equal(ctx.fieldInQuote_('website', half, 'https://shop.com/😀'), false);
+    assert.throws(() => ctx.normalizeCandidate_(
+      {merchant: half, code: 'SAVE20', confidence: 'high', review: false,
+        evidence: {merchant: {quote: half}, code: {quote: 'SAVE20'}}},
+      {text: '😀 SAVE20', images: [], incomplete: false}), /AI/);
+    assert.throws(() => ctx.normalizeCandidate_(
+      {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+        evidence: {merchant: {quote: half}, code: {quote: 'SAVE20'}}},
+      {text: 'Shop SAVE20', images: [], incomplete: false}), /AI/);
+  }
+  const complete = ctx.normalizeCandidate_(
+    {merchant: '😀', code: 'SAVE20', confidence: 'high', review: false,
+      evidence: {merchant: {quote: '😀'}, code: {quote: 'SAVE20'}}},
+    {text: '😀 SAVE20', images: [], incomplete: false});
+  assert.equal(complete.review, false);
+});
+
 test('only canonical Gmail links provide an identity without partial token collisions', () => {
   const {ctx} = harness();
   const id = '18a9b0c7';
@@ -240,11 +269,16 @@ test('numeric-leading DNS names are distinct from numeric and hexadecimal IP for
 test('recovery rejects impossible zoned dates and clock values', () => {
   const {ctx} = harness();
   for (const date of ['2026-02-30T00:00:00Z', '2026-02-29T00:00:00Z', '2026-09-07T24:00:00Z',
-    '2026-09-07T10:60:00Z', '2026-09-07T10:00:00+25:00', '2026-09-07T10:00:00']) {
+    '2026-09-07T10:60:00Z', '2026-09-07T10:00:00+25:00', '2026-09-07T10:00:00+14:01',
+    '2026-09-07T10:00:00-14:01', '2026-09-07T10:00:00-23:59', '2026-09-07T10:00:00']) {
     assert.throws(() => ctx.emailDate_(date, 'Europe/Rome'), /DATE/);
   }
   const value = '2026-09-07T10:30:00.123+02:00';
   assert.equal(ctx.emailDate_(value, 'Europe/Rome').getTime(), Date.parse(value));
+  for (const offset of ['+14:00', '-14:00']) {
+    const timestamp = '2026-09-07T10:30:00' + offset;
+    assert.equal(ctx.emailDate_(timestamp, 'Europe/Rome').getTime(), Date.parse(timestamp));
+  }
 });
 
 test('technical markers do not override legitimate merchant names during recovery', () => {
@@ -672,6 +706,19 @@ test('remaining rendered blocks and non-rendered controls preserve evidence boun
     '<datalist><select><option>SELECT20</option></select></datalist><p>Shop REAL20</p>'
   ]) assert.equal(ctx.htmlContent_(html).incomplete, false, html);
   assert.equal(ctx.htmlContent_('<datalist><svg><text>Hidden</text></svg></datalist>').incomplete, true);
+  for (const attribute of ['popover', 'popover=""', 'popover="auto"', 'popover="manual"', 'popover="hint"', 'popover="invalid"']) {
+    const popover = '<div ' + attribute + '>Shop Coupon code HIDDEN20<img src="https://shop.com/hidden.jpg"></div>' +
+      '<p>Shop Coupon code REAL20<img src="https://shop.com/real.jpg"></p>';
+    assert.ok(!ctx.htmlText_(popover).includes('HIDDEN20'), attribute);
+    assert.deepEqual([...ctx.remoteImageUrls_(popover)], ['https://shop.com/real.jpg'], attribute);
+    assert.equal(ctx.normalizeCandidate_(
+      {merchant: 'Shop', code: 'HIDDEN20', confidence: 'high', review: false,
+        evidence: {merchant: {quote: 'Shop'}, code: {quote: 'HIDDEN20'}}},
+      {html: popover, images: [], incomplete: false}).code, '', attribute);
+  }
+  assert.ok(ctx.htmlText_('<div data-popover>Shop Coupon code VISIBLE20</div>').includes('VISIBLE20'));
+  assert.equal(ctx.htmlContent_('<div popover><picture><img src="https://shop.com/hidden.jpg"></picture></div>').incomplete, false);
+  assert.equal(ctx.htmlContent_('<div popover><svg><text>Hidden</text></svg></div>').incomplete, true);
 });
 
 test('image dimensions use HTML length parsing without treating responsive percentages as pixels', () => {

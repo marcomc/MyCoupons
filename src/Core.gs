@@ -16,6 +16,20 @@ function textCell_(s) {
   return /^[\s]*[=+@-]/.test(value) ? "'" + value : value;
 }
 function normalized_(s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); }
+function wellFormedUtf16_(value) {
+  for (let i = 0; i < value.length; i++) {
+    const unit = value.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      if (i + 1 >= value.length || value.charCodeAt(i + 1) < 0xdc00 || value.charCodeAt(i + 1) > 0xdfff) return false;
+      i++;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) return false;
+  }
+  return true;
+}
+function utf16Boundary_(value, index) {
+  return !(index > 0 && index < value.length && value.charCodeAt(index - 1) >= 0xd800 &&
+    value.charCodeAt(index - 1) <= 0xdbff && value.charCodeAt(index) >= 0xdc00 && value.charCodeAt(index) <= 0xdfff);
+}
 function numericRangeEndpoint_(before, after) {
   const space = '[\\t\\n\\f\\r ]*';
   const unit = '(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[\\p{L}\\p{M}]+)?';
@@ -63,9 +77,10 @@ function htmlContent_(html) {
     const nodeAttrs = node.attrs || [];
     const closedDialog = isHtml && tag === 'dialog' && !nodeAttrs.some(function (attr) { return attr.name === 'open'; });
     const closedDetails = isHtml && tag === 'details' && !nodeAttrs.some(function (attr) { return attr.name === 'open'; });
+    const closedPopover = isHtml && nodeAttrs.some(function (attr) { return attr.name === 'popover'; });
     const contextSuppressed = entry.suppressed || foreign || isHtml &&
       (/^(?:script|style|template|title|head|iframe|noembed|noframes|datalist|rp)$/.test(tag) ||
-        closedDialog || nodeAttrs.some(function (attr) { return attr.name === 'hidden'; }));
+        closedDialog || closedPopover || nodeAttrs.some(function (attr) { return attr.name === 'hidden'; }));
     if (!contextSuppressed && isHtml && (tag === 'picture' || (tag === 'img' || tag === 'source') &&
       nodeAttrs.some(function (attr) { return attr.name === 'srcset'; }))) incomplete = true;
     if (isHtml && tag === 'select' && !contextSuppressed) incomplete = true;
@@ -162,7 +177,18 @@ function deterministicCandidates_(message) {
   return codes.slice(0, MC.maxCandidates);
 }
 function fieldInQuote_(field, value, quote) {
+  if (!wellFormedUtf16_(value) || !wellFormedUtf16_(quote)) return false;
   if (field === 'code') return codeLexemes_(quote).indexOf(value) >= 0;
+  if (field === 'discountType' && /^[%€$£]$/.test(value)) {
+    let symbol = quote.indexOf(value);
+    while (symbol >= 0) {
+      const before = symbol > 0 ? quote.charAt(symbol - 1) : '';
+      const after = symbol + 1 < quote.length ? quote.charAt(symbol + 1) : '';
+      if (quote === value || (value === '%' && /\d/.test(before)) || (value !== '%' && /\d/.test(after))) return true;
+      symbol = quote.indexOf(value, symbol + 1);
+    }
+    return false;
+  }
   if (field === 'website') {
     const urls = [];
     const re = /(?:^|[\s"'([{<])(https:\/\/[^\s<>"']+)/gi;
@@ -188,7 +214,8 @@ function fieldInQuote_(field, value, quote) {
     const beforeText = source.slice(0, start);
     const afterText = source.slice(afterStart);
     const numericRange = numericField && numericRangeEndpoint_(beforeText, afterText);
-    if ((!before || !boundary.test(before)) && (!after || !boundary.test(after)) && !numericRange &&
+    if (utf16Boundary_(source, start) && utf16Boundary_(source, afterStart) &&
+      (!before || !boundary.test(before)) && (!after || !boundary.test(after)) && !numericRange &&
       !( /\d$/.test(needle) && /^[.,]\d/.test(source.slice(afterStart, afterStart + 2))) &&
       !( /^\d/.test(needle) && /\d[.,]$/.test(source.slice(Math.max(0, start - 2), start)))) return true;
     start = source.indexOf(needle, start + 1);
@@ -210,14 +237,14 @@ function normalizeCandidate_(raw, message) {
     const ev = evidence[key];
     if (ev === undefined) return;
     if (!objectWithKeys(ev, ['quote', 'image']) ||
-      ev.quote !== undefined && typeof ev.quote !== 'string' ||
+      ev.quote !== undefined && (typeof ev.quote !== 'string' || !wellFormedUtf16_(ev.quote)) ||
       ev.image !== undefined && !Number.isInteger(ev.image)) fail_('AI');
     if (ev.image !== undefined && (ev.image < 0 || ev.image >= source.images.length || source.images[ev.image] == null)) fail_('AI');
   });
   const c = {};
   let truncated = false;
   MC.fields.forEach(function (k) {
-    if (raw[k] != null && typeof raw[k] !== 'string') fail_('AI');
+    if (raw[k] != null && (typeof raw[k] !== 'string' || !wellFormedUtf16_(raw[k]))) fail_('AI');
     const value = (raw[k] || '').trim();
     const limit = k === 'notes' ? 3500 : 1000;
     if (value.length > limit) truncated = true;
@@ -232,7 +259,7 @@ function normalizeCandidate_(raw, message) {
   // Every asserted field must be anchored to supplied text or an inspected image.
   MC.fields.filter(function (k) { return c[k]; }).forEach(function (k) {
     const ev = evidence[k];
-    const groundedText = ev && typeof ev.quote === 'string' && ev.quote.trim().length > 1 &&
+    const groundedText = ev && typeof ev.quote === 'string' && ev.quote.trim().length > 0 &&
       fieldInQuote_(k, c[k], ev.quote) && source.evidenceSpans.some(function (span) {
         const containsQuote = k === 'code' || k === 'website' ? span.includes(ev.quote) :
           normalized_(span).includes(normalized_(ev.quote));
@@ -277,7 +304,7 @@ function emailDate_(value, zone) {
     if (value.length === 10 && validDate_(value)) return Utilities.parseDate(value, zone, 'yyyy-MM-dd');
     // Only explicitly zoned timestamps are portable. Locale-specific strings
     // require correction in Sheets instead of guessing day/month order.
-    if (validDate_(value.slice(0, 10)) && /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value)) {
+    if (/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:(?:0\d|1[0-3]):[0-5]\d|14:00))$/.test(value) && validDate_(value.slice(0, 10))) {
       const d = new Date(value); if (isFinite(d.getTime())) return d;
     }
   }
