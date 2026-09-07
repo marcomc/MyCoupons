@@ -154,8 +154,14 @@ test('only canonical Gmail links provide an identity without partial token colli
     'https://mail.google.com/mail/u/1/#inbox/' + id,
     'https://mail.google.com/mail/#search/coupon/' + id,
     'https://mail.google.com/mail/?th=' + id + '&view=pt']) assert.equal(ctx.sourceId_(url), id);
+  for (const url of ['https://MAIL.GOOGLE.COM/mail/#all/' + id,
+    'https://mail.google.com:443/mail/u/1/#inbox/' + id,
+    'https://MAIL.GOOGLE.COM:443/mail/?th=' + id]) assert.equal(ctx.sourceId_(url), id);
   for (const url of ['https://other.example/mail/#all/' + id,
     'https://mail.google.com.evil.example/mail/#all/' + id,
+    'https://mail.google.com:444/mail/#all/' + id,
+    'https://user@mail.google.com/mail/#all/' + id,
+    'https://mail.google.com/Mail/#all/' + id,
     'https://mail.google.com/mail/#all/' + id + '-bad',
     'https://mail.google.com/mail/?permmsgid=msg-f:123456789',
     'https://mail.google.com/mail/?permmsgid=msg-f:987654321',
@@ -731,6 +737,46 @@ test('closed dialogs do not contribute text or images to evidence', () => {
   assert.equal(candidate.code, ''); assert.equal(candidate.review, true);
 });
 
+test('closed details expose only their first direct summary subtree', () => {
+  const {ctx} = harness();
+  const summaryImage = '<img src="https://shop.com/summary.jpg">';
+  const hiddenImage = '<img src="https://shop.com/hidden.jpg">';
+  const closed = '<details>leading<summary>Shop Coupon code SUMMARY20' + summaryImage +
+    '</summary><p>Coupon code HIDDEN20' + hiddenImage + '</p><summary>Coupon code SECOND20</summary></details>';
+  const open = '<details open><summary>Shop Coupon code OPEN20</summary><p>Coupon code BODY20' + hiddenImage + '</p></details>';
+  assert.equal(ctx.htmlText_(closed), 'Shop Coupon code SUMMARY20');
+  assert.deepEqual(Array.from(ctx.remoteImageUrls_(closed)), ['https://shop.com/summary.jpg']);
+  assert.equal(ctx.htmlContent_(closed).incomplete, false);
+  assert.ok(ctx.htmlText_(open).includes('OPEN20'));
+  assert.ok(ctx.htmlText_(open).includes('BODY20'));
+  assert.deepEqual(Array.from(ctx.remoteImageUrls_(open)), ['https://shop.com/hidden.jpg']);
+  const nested = '<details open><summary>Outer</summary><details><summary>Nested</summary><p>INNERHIDDEN</p></details></details>';
+  assert.equal(ctx.htmlText_(nested), 'OuterNested');
+  assert.ok(!ctx.htmlText_(nested).includes('INNERHIDDEN'));
+  const raw = {merchant: 'Shop', code: 'HIDDEN20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'HIDDEN20'}}};
+  const candidate = ctx.normalizeCandidate_(raw, {html: closed, images: [], incomplete: false});
+  assert.equal(candidate.code, ''); assert.equal(candidate.review, true);
+});
+
+test('responsive image resources preserve incomplete coverage without selecting a source', () => {
+  const {ctx} = harness();
+  const srcset = '<img srcset="https://shop.com/small.jpg 1x, https://shop.com/large.jpg 2x">';
+  const picture = '<picture><source srcset="https://shop.com/wide.jpg 2x"><img src="https://shop.com/fallback.jpg"></picture>';
+  const source = '<source srcset="https://shop.com/source.jpg 1x">';
+  assert.equal(ctx.htmlContent_(srcset).incomplete, true);
+  assert.deepEqual(Array.from(ctx.remoteImageUrls_(srcset)), []);
+  assert.equal(ctx.htmlContent_(picture).incomplete, true);
+  assert.deepEqual(Array.from(ctx.remoteImageUrls_(picture)), ['https://shop.com/fallback.jpg']);
+  assert.equal(ctx.htmlContent_(source).incomplete, true);
+  assert.equal(ctx.htmlContent_('<picture><img src="https://shop.com/picture.jpg"></picture>').incomplete, true);
+  assert.equal(ctx.htmlContent_('<img src="https://shop.com/plain.jpg">').incomplete, false);
+  const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
+  const candidate = ctx.normalizeCandidate_(raw, {html: '<p>Shop SAVE20</p>' + picture, images: [], incomplete: false});
+  assert.equal(candidate.code, 'SAVE20'); assert.equal(candidate.review, true);
+});
+
 test('supplied image evidence indexes must denote inspected images', () => {
   const {ctx} = harness();
   const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
@@ -741,6 +787,27 @@ test('supplied image evidence indexes must denote inspected images', () => {
   }
   assert.equal(ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {image: 0}}},
     {text: 'Shop', images: [{}], incomplete: false}).review, true);
+  for (const images of [[null], [undefined], new Array(1)]) {
+    assert.throws(() => ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {image: 0}}},
+      {text: 'Shop', images, incomplete: false}), /AI/);
+  }
+});
+
+test('numeric factual evidence cannot be a range or ratio endpoint', () => {
+  const {ctx} = harness();
+  const raw = {merchant: 'Shop', code: 'SAVE20', discountType: '%', discountValue: '20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountType: {quote: '%'}, discountValue: {quote: '20'}}};
+  for (const source of ['Shop SAVE20 20-30%', 'Shop SAVE20 20 – 30%', 'Shop SAVE20 20/30', 'Shop SAVE20 20:30']) {
+    const candidate = ctx.normalizeCandidate_(raw, {text: source, images: [], incomplete: false});
+    assert.equal(candidate.discountValue, '', source); assert.equal(candidate.review, true, source);
+  }
+  for (const source of ['Shop SAVE20 20%', 'Shop SAVE20 20 euros']) {
+    assert.equal(ctx.normalizeCandidate_(raw, {text: source, images: [], incomplete: false}).discountValue, '20', source);
+  }
+  const spend = {merchant: 'Shop', code: 'SAVE20', minimumSpend: '20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, minimumSpend: {quote: '20'}}};
+  assert.equal(ctx.normalizeCandidate_(spend, {text: 'Shop SAVE20 minimum 20-30', images: [], incomplete: false}).minimumSpend, '');
+  assert.equal(ctx.normalizeCandidate_(spend, {text: 'Shop SAVE20 minimum 20 euros', images: [], incomplete: false}).minimumSpend, '20');
 });
 
 test('field boundary checks do not rebuild growing Unicode prefixes', () => {

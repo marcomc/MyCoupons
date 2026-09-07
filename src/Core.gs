@@ -34,21 +34,35 @@ function htmlContent_(html) {
     const isHtml = node.namespaceURI === 'http://www.w3.org/1999/xhtml';
     const foreign = Boolean(tag && !isHtml);
     if (foreign) incomplete = true;
-    const closedDialog = isHtml && tag === 'dialog' && !(node.attrs || []).some(function (attr) { return attr.name === 'open'; });
+    const nodeAttrs = node.attrs || [];
+    const closedDialog = isHtml && tag === 'dialog' && !nodeAttrs.some(function (attr) { return attr.name === 'open'; });
+    const closedDetails = isHtml && tag === 'details' && !nodeAttrs.some(function (attr) { return attr.name === 'open'; });
+    if (isHtml && (tag === 'picture' || (tag === 'img' || tag === 'source') &&
+      nodeAttrs.some(function (attr) { return attr.name === 'srcset'; }))) incomplete = true;
     const suppressed = entry.suppressed || foreign || isHtml &&
       (/^(?:script|style|template|title|head|iframe|noembed|noframes)$/.test(tag) ||
-        closedDialog || (node.attrs || []).some(function (attr) { return attr.name === 'hidden'; }));
+        closedDialog || nodeAttrs.some(function (attr) { return attr.name === 'hidden'; }));
     const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)$/.test(tag);
     if (block || !suppressed && isHtml && tag === 'br') newline();
     if (block) stack.push({exit: true});
     if (!suppressed && isHtml && tag === 'img') {
-      const attrs = Object.create(null);
-      (node.attrs || []).forEach(function (attr) { attrs[attr.name] = attr.value; });
-      images.push(attrs);
+      const imageAttrs = Object.create(null);
+      nodeAttrs.forEach(function (attr) { imageAttrs[attr.name] = attr.value; });
+      images.push(imageAttrs);
     }
     // Suppressed and inert subtrees still contribute unsupported-namespace coverage.
     const children = node.content ? node.content.childNodes : node.childNodes || [];
-    for (let i = children.length - 1; i >= 0; i--) stack.push({node: children[i], suppressed: suppressed});
+    let visibleSummary = null;
+    if (!suppressed && closedDetails) {
+      for (let i = 0; i < children.length; i++) {
+        if (children[i].namespaceURI === 'http://www.w3.org/1999/xhtml' && children[i].tagName === 'summary') {
+          visibleSummary = children[i]; break;
+        }
+      }
+    }
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack.push({node: children[i], suppressed: suppressed || closedDetails && children[i] !== visibleSummary});
+    }
   }
   return {text: pieces.join(''), images: images, incomplete: incomplete};
 }
@@ -139,7 +153,11 @@ function fieldInQuote_(field, value, quote) {
     const afterStart = start + needle.length;
     const after = afterStart < source.length ? String.fromCodePoint(source.codePointAt(afterStart)) : '';
     const boundary = /[\p{L}\p{N}\p{M}_]/u;
-    if ((!before || !boundary.test(before)) && (!after || !boundary.test(after)) &&
+    const numericField = ['discountValue', 'minimumSpend'].indexOf(field) >= 0 && /\d/.test(needle);
+    const numericRange = numericField &&
+      (/^[\t\n\f\r ]*[-–—/:][\t\n\f\r ]*[€$£]?\d/.test(source.slice(afterStart)) ||
+        /\d[%€$£]?[\t\n\f\r ]*[-–—/:][\t\n\f\r ]*$/.test(source.slice(0, start)));
+    if ((!before || !boundary.test(before)) && (!after || !boundary.test(after)) && !numericRange &&
       !( /\d$/.test(needle) && /^[.,]\d/.test(source.slice(afterStart, afterStart + 2))) &&
       !( /^\d/.test(needle) && /\d[.,]$/.test(source.slice(Math.max(0, start - 2), start)))) return true;
     start = source.indexOf(needle, start + 1);
@@ -163,7 +181,7 @@ function normalizeCandidate_(raw, message) {
     if (!objectWithKeys(ev, ['quote', 'image']) ||
       ev.quote !== undefined && typeof ev.quote !== 'string' ||
       ev.image !== undefined && !Number.isInteger(ev.image)) fail_('AI');
-    if (ev.image !== undefined && (ev.image < 0 || ev.image >= source.images.length)) fail_('AI');
+    if (ev.image !== undefined && (ev.image < 0 || ev.image >= source.images.length || source.images[ev.image] == null)) fail_('AI');
   });
   const c = {};
   let truncated = false;
@@ -189,7 +207,8 @@ function normalizeCandidate_(raw, message) {
           normalized_(span).includes(normalized_(ev.quote));
         return containsQuote && fieldInQuote_(k, c[k], span);
       });
-    const groundedImage = ev && Number.isInteger(ev.image) && ev.image >= 0 && ev.image < source.images.length;
+    const groundedImage = ev && Number.isInteger(ev.image) && ev.image >= 0 && ev.image < source.images.length &&
+      source.images[ev.image] != null;
     if (!groundedText && !groundedImage) { c[k] = ''; c.review = true; }
     // OCR-only evidence is a proposal, not independently verified import authority.
     if (groundedImage && !groundedText) c.review = true;
@@ -201,13 +220,15 @@ function gmailLink_(id) { return 'https://mail.google.com/mail/u/0/#all/' + id; 
 function sourceId_(value) {
   // Gmail's opaque UI tokens (including msg-f:) are not REST message IDs.
   // Accept only the canonical hexadecimal links used by this importer.
-  const link = /^https:\/\/mail\.google\.com\/mail\/(?:u\/\d+\/)?(?:\?([^#]*))?(?:#(.*))?$/.exec(String(value));
+  const link = /^https:\/\/([^/?#]+)(\/[^?#]*)?(?:\?([^#]*))?(?:#(.*))?$/i.exec(String(value));
   if (!link) return '';
-  if (link[2] !== undefined) {
-    const fragment = /^(?:all|inbox|search\/[^/#]+)\/([a-f0-9]+)$/i.exec(link[2]);
+  if (['mail.google.com', 'mail.google.com:443'].indexOf(link[1].toLowerCase()) < 0 ||
+    !/^\/mail\/(?:u\/\d+\/)?$/.test(link[2] || '')) return '';
+  if (link[4] !== undefined) {
+    const fragment = /^(?:all|inbox|search\/[^/#]+)\/([a-f0-9]+)$/i.exec(link[4]);
     return fragment ? fragment[1].toLowerCase() : '';
   }
-  const threads = (link[1] || '').split('&').filter(function (param) { return /^th=/.test(param); });
+  const threads = (link[3] || '').split('&').filter(function (param) { return /^th=/.test(param); });
   if (threads.length !== 1) return '';
   const thread = /^th=([a-f0-9]+)$/i.exec(threads[0]);
   return thread ? thread[1].toLowerCase() : '';

@@ -36,9 +36,10 @@ The example configuration contains product defaults only.
 - Reject unknown candidate or evidence keys and malformed control fields before
   normalizing proposed fields, including notes, against quoted source text.
   Unsubstantiated fields become empty; code evidence preserves exact spelling
-  and complete tokens, including punctuation. Oversized structured values become
-  empty; bounded notes retain complete Unicode characters and require review.
-  A supplied image-evidence index must identify an independently inspected image.
+  and complete tokens, including punctuation, and numeric values cannot be range
+  or ratio endpoints. Oversized structured values become empty; bounded notes
+  retain complete Unicode characters and require review. A supplied image-evidence
+  index must identify a present independently inspected image.
   Image-based proposals and unknown message completeness also require review.
   Website evidence recognizes prose around bare host URLs while preserving
   punctuation in paths and queries. This increment makes no AI requests and does
@@ -48,9 +49,11 @@ The example configuration contains product defaults only.
   filter; it does not resolve DNS or download images.
 - Extract text and actual image elements with a shared standards-based HTML
   document traversal, preserving `html`/`body` attributes. Exclude comments,
-  scripts, styles, metadata, inert templates, closed dialogs and
-  `hidden` subtrees; include `noscript` fallback content. No CSS visibility analysis
-  or script execution occurs. Image dimensions follow HTML pixel/percentage rules.
+  scripts, styles, metadata, inert templates, closed dialogs, closed-details
+  content except its first direct `summary`, and `hidden` subtrees; include
+  `noscript` fallback content. Responsive `srcset`/`picture` resources are not
+  selected and force review. No CSS visibility analysis or script execution occurs.
+  Image dimensions follow HTML pixel/percentage rules.
   Entire SVG/MathML subtrees are excluded from text/image evidence and mark source
   coverage incomplete, even for text-free graphics or content inside templates.
   Their presence requires review; there is no automatic logo exemption.
@@ -68,7 +71,8 @@ establish source completeness. Future image processing must retain these coverag
 signals rather than treat omitted vector content as processed.
 
 Source identity recovery accepts hexadecimal Gmail links under `mail.google.com`
-using `#all/`, `#inbox/`, `#search/<query>/`, or the `th` query parameter.
+(case-insensitive with optional default port `:443`) using `#all/`, `#inbox/`,
+`#search/<query>/`, or the `th` query parameter.
 Unsupported opaque Gmail UI links such as `permmsgid=msg-f:...` return no identity;
 they must be resolved before a future importer can use them for deduplication.
 

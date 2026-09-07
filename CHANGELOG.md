@@ -18,8 +18,10 @@
 - Strict candidate/evidence schemas and complete introducer, code-token and URL
   evidence boundaries, including valid inspected-image indexes and one-source-span
   factual evidence.
-- Closed native dialogs are excluded from HTML text and image evidence; field
-  boundary checks avoid repeated Unicode-prefix scans.
+- Closed native dialogs and non-summary closed-details content are excluded from
+  HTML evidence; unselected responsive resources force review. Gmail identity
+  normalizes the supported authority/default port, supplied image slots must be
+  present, and numeric range endpoints cannot ground factual values.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.
