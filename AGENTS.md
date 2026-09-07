@@ -39,7 +39,9 @@
   coverage, including text-free graphics and presence inside hidden/templates.
   Candidate consumers must derive coverage from raw `message.html`; keep
   `message.text` independent of HTML projections and images independently inspected.
-  A caller-provided complete flag cannot erase unsupported coverage.
+  A factual quote must match wholly within one original source span. A supplied
+  image index must identify an inspected image. A caller-provided complete flag
+  cannot erase unsupported coverage.
 - Validate complete candidate/evidence key sets before projection. Internal code
   punctuation remains identity; only one matching outer wrapper may be removed.
 - Decode references once per original text span or attribute context. Never

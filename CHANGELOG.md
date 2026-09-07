@@ -16,7 +16,10 @@
 - Complete HTML character-reference decoding with separate text/attribute rules
   and a reproducible, pinned local parser bundle.
 - Strict candidate/evidence schemas and complete introducer, code-token and URL
-  evidence boundaries.
+  evidence boundaries, including valid inspected-image indexes and one-source-span
+  factual evidence.
+- Closed native dialogs are excluded from HTML text and image evidence; field
+  boundary checks avoid repeated Unicode-prefix scans.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

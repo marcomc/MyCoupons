@@ -34,9 +34,10 @@ function htmlContent_(html) {
     const isHtml = node.namespaceURI === 'http://www.w3.org/1999/xhtml';
     const foreign = Boolean(tag && !isHtml);
     if (foreign) incomplete = true;
+    const closedDialog = isHtml && tag === 'dialog' && !(node.attrs || []).some(function (attr) { return attr.name === 'open'; });
     const suppressed = entry.suppressed || foreign || isHtml &&
       (/^(?:script|style|template|title|head|iframe|noembed|noframes)$/.test(tag) ||
-        (node.attrs || []).some(function (attr) { return attr.name === 'hidden'; }));
+        closedDialog || (node.attrs || []).some(function (attr) { return attr.name === 'hidden'; }));
     const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)$/.test(tag);
     if (block || !suppressed && isHtml && tag === 'br') newline();
     if (block) stack.push({exit: true});
@@ -86,7 +87,7 @@ function candidateSource_(message) {
     Object.prototype.hasOwnProperty.call(message, 'html') && typeof message.html !== 'string' ||
     message.images !== undefined && !Array.isArray(message.images)) fail_('AI');
   const html = message.html === undefined ? {text: '', incomplete: false} : htmlContent_(message.html);
-  return {text: [message.text || '', html.text].filter(Boolean).join('\n'),
+  return {spans: [message.text || '', html.text].filter(Boolean),
     images: message.images === undefined ? [] : message.images,
     incomplete: message.incomplete !== false || html.incomplete};
 }
@@ -101,17 +102,19 @@ function deterministicCandidates_(message) {
   // and require review: a regex cannot establish the completeness of an offer.
   const source = candidateSource_(message);
   const codes = [];
-  const re = /(?:^|[^\p{L}\p{N}\p{M}_])(?:coupon\s+code|promo(?:tional)?\s+code|discount\s+code|use\s+(?:the\s+)?code|codice\s+sconto|codice(?!\s+sconto(?:\s|[:=]|$)))(?:\s*[:=]\s*|\s+)(\S+)/giu;
-  let match;
-  while ((match = re.exec(source.text))) {
-    const code = codeLexemes_(match[1])[0];
-    const length = code ? Array.from(code).length : 0;
-    if (length >= 3 && length <= 40 && /^[\p{L}\p{N}][\p{L}\p{N}\p{M}_-]*$/u.test(code) &&
-      codes.indexOf(code) < 0) codes.push(code);
-  }
-  return codes.slice(0, MC.maxCandidates).map(function (code) {
-    return {code: code, notes: boundedText_(source.text, 3500), confidence: 'low', review: true};
+  source.spans.forEach(function (text) {
+    const re = /(?:^|[^\p{L}\p{N}\p{M}_])(?:coupon\s+code|promo(?:tional)?\s+code|discount\s+code|use\s+(?:the\s+)?code|codice\s+sconto|codice(?!\s+sconto(?:\s|[:=]|$)))(?:\s*[:=]\s*|\s+)(\S+)/giu;
+    let match;
+    while ((match = re.exec(text))) {
+      const code = codeLexemes_(match[1])[0];
+      const length = code ? Array.from(code).length : 0;
+      if (length >= 3 && length <= 40 && /^[\p{L}\p{N}][\p{L}\p{N}\p{M}_-]*$/u.test(code) &&
+        !codes.some(function (candidate) { return candidate.code === code; })) {
+        codes.push({code: code, notes: boundedText_(text, 3500), confidence: 'low', review: true});
+      }
+    }
   });
+  return codes.slice(0, MC.maxCandidates);
 }
 function fieldInQuote_(field, value, quote) {
   if (field === 'code') return codeLexemes_(quote).indexOf(value) >= 0;
@@ -131,12 +134,14 @@ function fieldInQuote_(field, value, quote) {
   const needle = normalized_(value);
   let start = source.indexOf(needle);
   while (start >= 0) {
-    const before = source.slice(0, start);
-    const after = source.slice(start + needle.length);
+    const beforeStart = start > 0 && /[\udc00-\udfff]/.test(source.charAt(start - 1)) ? start - 2 : start - 1;
+    const before = beforeStart >= 0 ? String.fromCodePoint(source.codePointAt(beforeStart)) : '';
+    const afterStart = start + needle.length;
+    const after = afterStart < source.length ? String.fromCodePoint(source.codePointAt(afterStart)) : '';
     const boundary = /[\p{L}\p{N}\p{M}_]/u;
-    if ((!before || !boundary.test(Array.from(before).slice(-1)[0])) && (!after || !boundary.test(Array.from(after)[0])) &&
-      !( /\d$/.test(needle) && /^[.,]\d/.test(after)) &&
-      !( /^\d/.test(needle) && /\d[.,]$/.test(before))) return true;
+    if ((!before || !boundary.test(before)) && (!after || !boundary.test(after)) &&
+      !( /\d$/.test(needle) && /^[.,]\d/.test(source.slice(afterStart, afterStart + 2))) &&
+      !( /^\d/.test(needle) && /\d[.,]$/.test(source.slice(Math.max(0, start - 2), start)))) return true;
     start = source.indexOf(needle, start + 1);
   }
   return false;
@@ -151,14 +156,15 @@ function normalizeCandidate_(raw, message) {
     raw.review !== undefined && typeof raw.review !== 'boolean') fail_('AI');
   const evidence = raw.evidence === undefined ? {} : raw.evidence;
   if (!objectWithKeys(evidence, MC.fields)) fail_('AI');
+  const source = candidateSource_(message);
   Object.keys(evidence).forEach(function (key) {
     const ev = evidence[key];
     if (ev === undefined) return;
     if (!objectWithKeys(ev, ['quote', 'image']) ||
       ev.quote !== undefined && typeof ev.quote !== 'string' ||
       ev.image !== undefined && !Number.isInteger(ev.image)) fail_('AI');
+    if (ev.image !== undefined && (ev.image < 0 || ev.image >= source.images.length)) fail_('AI');
   });
-  const source = candidateSource_(message);
   const c = {};
   let truncated = false;
   MC.fields.forEach(function (k) {
@@ -178,8 +184,11 @@ function normalizeCandidate_(raw, message) {
   MC.fields.filter(function (k) { return c[k]; }).forEach(function (k) {
     const ev = evidence[k];
     const groundedText = ev && typeof ev.quote === 'string' && ev.quote.trim().length > 1 &&
-      (k === 'code' || k === 'website' ? source.text.includes(ev.quote) : normalized_(source.text).includes(normalized_(ev.quote))) &&
-      fieldInQuote_(k, c[k], ev.quote) && fieldInQuote_(k, c[k], source.text);
+      fieldInQuote_(k, c[k], ev.quote) && source.spans.some(function (span) {
+        const containsQuote = k === 'code' || k === 'website' ? span.includes(ev.quote) :
+          normalized_(span).includes(normalized_(ev.quote));
+        return containsQuote && fieldInQuote_(k, c[k], span);
+      });
     const groundedImage = ev && Number.isInteger(ev.image) && ev.image >= 0 && ev.image < source.images.length;
     if (!groundedText && !groundedImage) { c[k] = ''; c.review = true; }
     // OCR-only evidence is a proposal, not independently verified import authority.

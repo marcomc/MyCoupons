@@ -38,6 +38,7 @@ The example configuration contains product defaults only.
   Unsubstantiated fields become empty; code evidence preserves exact spelling
   and complete tokens, including punctuation. Oversized structured values become
   empty; bounded notes retain complete Unicode characters and require review.
+  A supplied image-evidence index must identify an independently inspected image.
   Image-based proposals and unknown message completeness also require review.
   Website evidence recognizes prose around bare host URLs while preserving
   punctuation in paths and queries. This increment makes no AI requests and does
@@ -47,7 +48,7 @@ The example configuration contains product defaults only.
   filter; it does not resolve DNS or download images.
 - Extract text and actual image elements with a shared standards-based HTML
   document traversal, preserving `html`/`body` attributes. Exclude comments,
-  scripts, styles, metadata, inert templates and
+  scripts, styles, metadata, inert templates, closed dialogs and
   `hidden` subtrees; include `noscript` fallback content. No CSS visibility analysis
   or script execution occurs. Image dimensions follow HTML pixel/percentage rules.
   Entire SVG/MathML subtrees are excluded from text/image evidence and mark source
@@ -61,9 +62,10 @@ Candidate helpers accept optional raw `message.html` alongside independent
 `message.text` (plain text and subject) and independently inspected `message.images`.
 Both extraction and normalization derive HTML coverage through the same adapter;
 `incomplete: false` cannot override unsupported HTML content. Do not premerge an
-HTML projection into `message.text`. The string-only `htmlText_` and URL-discovery
-helpers cannot establish source completeness. Future image processing must retain
-these coverage signals rather than treat omitted vector content as processed.
+HTML projection into `message.text`, and keep evidence matches within one source
+representation. The string-only `htmlText_` and URL-discovery helpers cannot
+establish source completeness. Future image processing must retain these coverage
+signals rather than treat omitted vector content as processed.
 
 Source identity recovery accepts hexadecimal Gmail links under `mail.google.com`
 using `#all/`, `#inbox/`, `#search/<query>/`, or the `th` query parameter.

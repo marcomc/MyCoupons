@@ -294,10 +294,12 @@ test('notes require text or image provenance even when other fields are grounded
       evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, notes: evidence}},
     {text, images, incomplete: false});
   }
-  for (const evidence of [undefined, {quote: 'Works forever'}, {quote: 'Shop SAVE20'},
-    {image: -1}, {image: 0}]) {
+  for (const evidence of [undefined, {quote: 'Works forever'}, {quote: 'Shop SAVE20'}]) {
     const result = normalize('Works forever', evidence);
     assert.equal(result.notes, ''); assert.equal(result.review, true);
+  }
+  for (const evidence of [{image: -1}, {image: 0}]) {
+    assert.throws(() => normalize('Works forever', evidence), /AI/);
   }
   const grounded = normalize('Valid on outlet', {quote: 'Valid on outlet'});
   assert.equal(grounded.notes, 'Valid on outlet'); assert.equal(grounded.review, false);
@@ -686,7 +688,7 @@ test('canonical candidate sources preserve raw HTML coverage and inspected image
   }
   const imageRaw = {...raw, evidence: {...raw.evidence, code: {image: 0}}};
   const message = {text: 'Shop', html: '<img src="https://shop.com/real.jpg">', incomplete: false};
-  assert.equal(ctx.normalizeCandidate_(imageRaw, message).code, '');
+  assert.throws(() => ctx.normalizeCandidate_(imageRaw, message), /AI/);
   assert.equal(ctx.normalizeCandidate_(imageRaw, {...message, images: [{}]}).code, 'REAL20');
   for (const change of [{html: null}, {html: 4}, {html: {}}, {html: []}, {text: 4}, {images: {}}, {images: null}]) {
     for (const consumer of [ctx.normalizeCandidate_.bind(null, raw), ctx.deterministicCandidates_]) {
@@ -694,8 +696,64 @@ test('canonical candidate sources preserve raw HTML coverage and inspected image
     }
   }
   const source = ctx.candidateSource_({text: 'Coupon code SAVE', html: '<span>20</span>', incomplete: false});
-  assert.equal(source.text, 'Coupon code SAVE\n20');
-  assert.equal(ctx.deterministicCandidates_({text: 'Coupon code SAVE', html: '<span>20</span>'})[0].code, 'SAVE');
+  assert.deepEqual(Array.from(source.spans), ['Coupon code SAVE', '20']);
+  const candidates = ctx.deterministicCandidates_({text: 'Coupon code SAVE', html: '<span>20</span>'});
+  assert.equal(candidates.length, 1); assert.equal(candidates[0].code, 'SAVE');
+  assert.equal(candidates[0].review, true);
+});
+
+test('source evidence never crosses message representations', () => {
+  const {ctx} = harness();
+  const raw = {merchant: 'Shop Outlet', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop\nOutlet'}, code: {quote: 'SAVE20'}}};
+  const split = {text: 'Shop', html: '<p>Outlet SAVE20</p>', images: [], incomplete: false};
+  const actual = ctx.normalizeCandidate_(raw, split);
+  assert.equal(actual.merchant, ''); assert.equal(actual.review, true);
+  for (const message of [{text: 'Shop Outlet SAVE20', images: [], incomplete: false},
+    {html: '<p>Shop Outlet SAVE20</p>', images: [], incomplete: false}]) {
+    assert.equal(ctx.normalizeCandidate_({...raw, evidence: {merchant: {quote: 'Shop Outlet'}, code: {quote: 'SAVE20'}}}, message).review, false);
+  }
+});
+
+test('closed dialogs do not contribute text or images to evidence', () => {
+  const {ctx} = harness();
+  const image = '<img src="https://shop.com/hidden.jpg">';
+  const closed = '<dialog>Shop Coupon code HIDDEN' + image + '</dialog><p>Shop REAL20</p>';
+  const open = '<dialog open>Shop Coupon code OPEN20' + image + '</dialog>';
+  assert.equal(ctx.htmlText_(closed), 'Shop REAL20\n');
+  assert.deepEqual(Array.from(ctx.remoteImageUrls_(closed)), []);
+  assert.equal(ctx.htmlContent_(closed).incomplete, false);
+  assert.ok(ctx.htmlText_(open).includes('OPEN20'));
+  assert.deepEqual(Array.from(ctx.remoteImageUrls_(open)), ['https://shop.com/hidden.jpg']);
+  const raw = {merchant: 'Shop', code: 'HIDDEN', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'HIDDEN'}}};
+  const candidate = ctx.normalizeCandidate_(raw, {html: closed, images: [], incomplete: false});
+  assert.equal(candidate.code, ''); assert.equal(candidate.review, true);
+});
+
+test('supplied image evidence indexes must denote inspected images', () => {
+  const {ctx} = harness();
+  const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20', image: -1}}};
+  const message = {text: 'Shop SAVE20', images: [], incomplete: false};
+  for (const image of [-1, 0, 4]) {
+    assert.throws(() => ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {quote: 'SAVE20', image}}}, message), /AI/);
+  }
+  assert.equal(ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {image: 0}}},
+    {text: 'Shop', images: [{}], incomplete: false}).review, true);
+});
+
+test('field boundary checks do not rebuild growing Unicode prefixes', () => {
+  const {ctx} = harness();
+  const original = ctx.Array.from;
+  let calls = 0;
+  ctx.Array.from = function () { calls++; return original.apply(this, arguments); };
+  try {
+    assert.equal(ctx.fieldInQuote_('merchant', 'a', 'a'.repeat(20000) + ' a'), true);
+    assert.equal(calls, 0);
+  } finally {
+    ctx.Array.from = original;
+  }
 });
 
 test('internal quote and angle characters remain part of complete code identities', () => {
@@ -767,7 +825,7 @@ test('candidate schema rejects unknown facts and malformed controls before proje
     assert.equal(ctx.normalizeCandidate_(partial, message).review, true);
   }
   for (const image of [-1, 0, 4]) {
-    assert.equal(ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {image}}}, message).code, '');
+    assert.throws(() => ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {image}}}, message), /AI/);
   }
 });
 
