@@ -68,6 +68,10 @@ npm run check
 npm test
 ```
 
+HTML character references use a pinned local decoder. See
+[third-party provenance and update checks](THIRD-PARTY.md); no dependency download
+is needed to run these checks.
+
 ## Public information pages
 
 `docs/` contains the application homepage and privacy policy for OAuth

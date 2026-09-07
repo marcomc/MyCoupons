@@ -3,7 +3,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
 
-function harness() {
+function harness({vendorLast = false} = {}) {
   const properties = {};
   const owner = 'owner@example.com';
   const ctx = {Date, JSON, Math, Object, Array, String, Number, Boolean, RegExp, Set, Error,
@@ -27,7 +27,10 @@ function harness() {
     Gmail: {Users: {getProfile: () => ({emailAddress: owner})}}
   };
   vm.createContext(ctx);
-  for (const name of ['locales/en', 'Config', 'Core']) {
+  const names = ['locales/en', 'Config', 'Core'];
+  if (vendorLast) names.push('vendor/He');
+  else names.unshift('vendor/He');
+  for (const name of names) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../src', name + '.gs'), 'utf8'), ctx, {filename: name});
   }
   const config = ctx.validateConfig_({ownerEmail: owner, spreadsheetId: 'sheet-id', initialDate: '2026-05-22'});

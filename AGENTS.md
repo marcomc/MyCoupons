@@ -32,5 +32,8 @@
 - HTML image discovery distinguishes exact attributes from `data-*` attributes
   and text inside other attribute values. Text and image extraction share an
   atomic traversal that excludes comments and script/style bodies.
+- Decode references once per original text span or attribute context. Never
+  decode concatenated fragments across removed markup or reparse decoded tags.
+  Preserve vendored decoder bytes and license; verify their pinned checksums.
 - URL evidence may recognize unambiguous prose around an authority, but must
   preserve punctuation within paths, queries and fragments.

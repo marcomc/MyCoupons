@@ -456,3 +456,72 @@ test('image discovery shares rawtext and comment exclusion with text extraction'
     assert.deepEqual([...ctx.remoteImageUrls_(html)], ['https://shop.com/real.jpg'], html);
   }
 });
+
+test('standard named references feed rendered Unicode codes into extraction and evidence', () => {
+  const {ctx} = harness();
+  for (const [encoded, code] of [['CAF&Eacute;20', 'CAFÉ20'], ['SAVE&Omega;20', 'SAVEΩ20'],
+    ['SAVE&Afr;20', 'SAVE𝔄20'], ['SAVE&fjlig;20', 'SAVEfj20']]) {
+    const text = ctx.htmlText_('<p>Shop Coupon code ' + encoded + '</p>');
+    assert.equal(ctx.deterministicCandidates_({text})[0].code, code);
+    const actual = ctx.normalizeCandidate_({merchant: 'Shop', code, confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote: code}}}, {text, images: [], incomplete: false});
+    assert.equal(actual.code, code); assert.equal(actual.review, false);
+  }
+  for (const [encoded, expected] of [['&NotEqualTilde;', '\u2242\u0338'], ['&notin;', '∉'],
+    ['&notit;', '¬it;'], ['&Eacute;&eacute;', 'Éé'], ['&EACUTE;&unknown;', '&EACUTE;&unknown;'],
+    ['&nbsp;', '\u00a0']]) assert.equal(ctx.htmlText_(encoded), expected);
+});
+
+test('numeric and nested references decode once using HTML scalar rules', () => {
+  const {ctx} = harness();
+  for (const [encoded, expected] of [['&#65;&#x41;&#65', 'AAA'], ['&#128;', '€'],
+    ['&#0;&#xD800;&#1114112;', '\ufffd\ufffd\ufffd'], ['&#x1D504;', '𝔄'],
+    ['&amp;Eacute;', '&Eacute;'], ['&#38;Eacute;', '&Eacute;'], ['&#x26;amp;', '&amp;'],
+    ['&amp;#65;', '&#65;'], ['&#38;#65;', '&#65;'],
+    ['&lt;script&gt;Visible&lt;/script&gt;', '<script>Visible</script>']]) {
+    assert.equal(ctx.htmlText_(encoded), expected, encoded);
+  }
+});
+
+test('attribute reference context preserves query identity and decoded URL controls', () => {
+  const {ctx} = harness();
+  for (const [attribute, expected] of [
+    ['https&colon;&sol;&sol;shop.com&sol;promo.jpg', 'https://shop.com/promo.jpg'],
+    ['https://shop.com/promo?x=1&amp;y=2', 'https://shop.com/promo?x=1&y=2'],
+    ['https://shop.com/promo?x=1&copy=2&notit=3', 'https://shop.com/promo?x=1&copy=2&notit=3'],
+    ['https://shop.com/promo?x=1&copyx', 'https://shop.com/promo?x=1&copyx'],
+    ['https://shop.com/promo?x=1&#38;y=2', 'https://shop.com/promo?x=1&y=2'],
+    ['https://shop.com/promo?x=1&amp;amp;y=2', 'https://shop.com/promo?x=1&amp;y=2']
+  ]) assert.deepEqual([...ctx.remoteImageUrls_('<img src="' + attribute + '">')], [expected]);
+  assert.equal(ctx.htmlText_('&copy=2 &copyx'), '©=2 ©x');
+  for (const attribute of ['https://shop.com/&Tab;promo', 'https://shop.com&sol;pixel.gif']) {
+    assert.deepEqual([...ctx.remoteImageUrls_('<img src="' + attribute + '">')], []);
+  }
+});
+
+test('references separated by lexical markup are never manufactured after concatenation', () => {
+  const {ctx} = harness();
+  for (const separator of ['<!-- hidden -->', '<script>hidden</script>', '<style>hidden</style>']) {
+    for (const [start, end, displayed] of [['CAF&Eac', 'ute;20', 'CAF&Eacute;20'],
+      ['CAF&#20', '1;20', 'CAF\u00141;20']]) {
+      const text = ctx.htmlText_('Shop Coupon code ' + start + separator + end);
+      assert.equal(text, 'Shop Coupon code ' + displayed);
+      assert.ok(!ctx.deterministicCandidates_({text}).some(c => c.code === 'CAFÉ20'));
+      const actual = ctx.normalizeCandidate_({merchant: 'Shop', code: 'CAFÉ20', confidence: 'high', review: false,
+        evidence: {merchant: {quote: 'Shop'}, code: {quote: 'CAFÉ20'}}}, {text, images: [], incomplete: false});
+      assert.equal(actual.code, ''); assert.equal(actual.review, true);
+    }
+  }
+  assert.equal(ctx.htmlText_('CAF&Eacute;20'), 'CAFÉ20');
+});
+
+test('the actual vendored decoder loads before or after Core without Node or DOM globals', () => {
+  for (const vendorLast of [false, true]) {
+    const {ctx} = harness({vendorLast});
+    for (const name of ['require', 'module', 'exports', 'window', 'document', 'fetch']) assert.equal(ctx[name], undefined);
+    assert.equal(ctx.he.version, '1.2.0');
+    assert.equal(ctx.htmlText_('CAF&Eacute;20'), 'CAFÉ20');
+    assert.deepEqual([...ctx.remoteImageUrls_('<img src="https://shop.com/promo?x=1&copy=2">')],
+      ['https://shop.com/promo?x=1&copy=2']);
+  }
+});

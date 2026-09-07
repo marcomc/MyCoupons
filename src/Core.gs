@@ -16,27 +16,31 @@ function textCell_(s) {
   return /^[\s]*[=+@-]/.test(value) ? "'" + value : value;
 }
 function normalized_(s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); }
-function decodeHtml_(s) {
-  return String(s).replace(/&#(x[0-9a-f]+|\d+);/gi, function (_, n) {
-    const code = n[0].toLowerCase() === 'x' ? parseInt(n.slice(1), 16) : Number(n);
-    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '';
-  }).replace(/&(amp|lt|gt|quot|apos|nbsp);/gi, function (_, n) {
-    return {amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' '}[n.toLowerCase()];
-  });
+function decodeHtml_(s, attribute) {
+  return he.decode(String(s), {isAttributeValue: attribute === true, strict: false});
 }
-function mapHtmlTags_(html, visit) {
+function mapHtmlTags_(html, visit, visitText) {
   // Consume comments and raw text atomically, so their embedded markup is not visited.
   const attributes = `(?:[^>"']|"[^"]*"|'[^']*')*`;
   const token = new RegExp('<!--[\\s\\S]*?(?:-->|$)|<(script|style)(?=[\\s/>])' + attributes +
     '>[\\s\\S]*?(?:<\\/\\1(?=[\\s/>])' + attributes + '>|$)|<(?=/?[a-z]|[!?])' + attributes + '>', 'gi');
-  return String(html).replace(token, function (tag, rawText) {
-    return rawText || tag.startsWith('<!--') ? '' : visit(tag);
-  });
+  const source = String(html);
+  const text = visitText || function (span) { return span; };
+  const pieces = [];
+  let cursor = 0;
+  let match;
+  while ((match = token.exec(source))) {
+    pieces.push(text(source.slice(cursor, match.index)));
+    if (!match[1] && !match[0].startsWith('<!--')) pieces.push(visit(match[0]));
+    cursor = token.lastIndex;
+  }
+  pieces.push(text(source.slice(cursor)));
+  return pieces.join('');
 }
 function htmlText_(html) {
-  return decodeHtml_(mapHtmlTags_(html, function (tag) {
+  return mapHtmlTags_(html, function (tag) {
     return /^<(?:br|\/p|\/div|\/tr)(?=[\s/>])/i.test(tag) ? '\n' : ' ';
-  }));
+  }, decodeHtml_);
 }
 function safeUrl_(s) {
   if (typeof s !== 'string' || s.length > 2048 || /[\s\\\x00-\x1f]/.test(s)) return '';
@@ -55,7 +59,7 @@ function remoteImageUrls_(html) {
     let match;
     while ((match = re.exec(tag))) {
       const name = match[1].toLowerCase();
-      if (!(name in attrs)) attrs[name] = decodeHtml_(match[2] || match[3] || match[4] || '');
+      if (!(name in attrs)) attrs[name] = decodeHtml_(match[2] || match[3] || match[4] || '', true);
     }
     if (!attrs.src || ['width', 'height'].some(function (key) { return /^[012](?:px)?$/i.test((attrs[key] || '').trim()); }) ||
       /(?:pixel|tracking|tracker|beacon|\/open[/.?]|transparent|spacer)/i.test(attrs.src)) return tag;

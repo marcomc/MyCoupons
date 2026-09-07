@@ -11,6 +11,8 @@
   boundaries, Unicode-aware bounds and evidence for notes; oversized structured
   values are cleared and unknown completeness cannot authorize confirmation.
 - Shared HTML text/image traversal excluding comments and script/style content.
+- Complete HTML character-reference decoding with separate text/attribute rules
+  and pinned local third-party source.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.
