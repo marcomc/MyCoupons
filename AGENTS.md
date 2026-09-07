@@ -4,14 +4,21 @@
 
 - Implement one independently testable increment at a time. The user owns
   commits, pushes, PR creation and merges; stop at those boundaries.
+  Exception: during `codex-pr-review-remediation-loop`, the agent may commit
+  and push reviewed corrections and continue the review loop.
 - Run `npm test` and `npm run check` for runtime changes. Tests must not depend
   on ignored drafts, credentials, or live Google resources.
 - Follow the supplied user-wide Markdown and shell validation requirements.
 
 ## Source and mutation contracts
 
-- Coupon codes preserve case and full Unicode token identity. Evidence checks
-  must validate both the quoted fragment and its occurrence in the source.
+- Coupon codes preserve case and full Unicode token identity, including
+  punctuation. Extraction and evidence checks share whole-token boundaries;
+  never accept a fragment in either the quoted evidence or original source.
+- Every proposed factual field, including notes, requires source evidence.
+  Direct source copies remain distinct from model-authored text.
+- Reserve internal sheet titles using case-insensitive comparison, including
+  when loading persisted configuration.
 - Parse Gmail URL components before extracting identity. Reject unsupported UI
   tokens; never truncate them or infer an undocumented API-ID conversion.
 - Information lost through truncation requires review. Unknown or malformed

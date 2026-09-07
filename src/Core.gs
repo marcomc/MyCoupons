@@ -53,32 +53,38 @@ function remoteImageUrls_(html) {
 function couponSignal_(text) {
   return /\b(coupon|voucher|promo(?:tion|code)?|discount|sconto|codice|offert[ae]|redeem|cashback|sale|save|risparmi|buono|buoni|deal)\b|\d\s*%/i.test(text);
 }
+function codeLexemes_(text) {
+  // Other punctuation belongs to the code, never to a silently discarded suffix.
+  return text.match(/[^\s"'<>]+/gu) || [];
+}
 function deterministicCandidates_(message) {
   // Only explicit code syntax is deterministic. Preserve the full bounded terms
   // and require review: a regex cannot establish the completeness of an offer.
   const codes = [];
-  const re = /\b(?:coupon\s+code|promo(?:tional)?\s+code|discount\s+code|use\s+(?:the\s+)?code|codice(?:\s+sconto)?)\s*[:=]?\s*["']?([\p{L}\p{N}][\p{L}\p{N}\p{M}_-]*)/giu;
+  const re = /\b(?:coupon\s+code|promo(?:tional)?\s+code|discount\s+code|use\s+(?:the\s+)?code|codice(?:\s+sconto)?)\s*[:=]?\s*(\S+)/giu;
   let match;
   while ((match = re.exec(message.text))) {
-    if (match[1].length >= 3 && match[1].length <= 40 && codes.indexOf(match[1]) < 0) codes.push(match[1]);
+    const code = codeLexemes_(match[1])[0];
+    if (code && code.length >= 3 && code.length <= 40 && /^[\p{L}\p{N}][\p{L}\p{N}\p{M}_-]*$/u.test(code) &&
+      codes.indexOf(code) < 0) codes.push(code);
   }
   return codes.slice(0, MC.maxCandidates).map(function (code) {
     return {code: code, notes: message.text.slice(0, 3500), confidence: 'low', review: true};
   });
 }
 function fieldInQuote_(field, value, quote) {
+  if (field === 'code') return codeLexemes_(quote).indexOf(value) >= 0;
   if (field === 'website') {
     const urls = quote.match(/https:\/\/[^\s<>"']+/gi) || [];
     return urls.indexOf(value) >= 0;
   }
-  const sensitive = field === 'code';
-  const source = sensitive ? quote : normalized_(quote);
-  const needle = sensitive ? value : normalized_(value);
+  const source = normalized_(quote);
+  const needle = normalized_(value);
   let start = source.indexOf(needle);
   while (start >= 0) {
     const before = source.slice(0, start);
     const after = source.slice(start + needle.length);
-    const boundary = sensitive ? /[\p{L}\p{N}\p{M}_-]/u : /[\p{L}\p{N}\p{M}_]/u;
+    const boundary = /[\p{L}\p{N}\p{M}_]/u;
     if ((!before || !boundary.test(Array.from(before).slice(-1)[0])) && (!after || !boundary.test(Array.from(after)[0])) &&
       !( /\d$/.test(needle) && /^[.,]\d/.test(after)) &&
       !( /^\d/.test(needle) && /\d[.,]$/.test(before))) return true;
@@ -105,7 +111,7 @@ function normalizeCandidate_(raw, message) {
     Boolean(raw.website && !c.website || raw.expiry && !c.expiry);
   // Every asserted field must be anchored to supplied text or an inspected image.
   const evidence = raw.evidence || {};
-  MC.fields.filter(function (k) { return k !== 'notes' && c[k]; }).forEach(function (k) {
+  MC.fields.filter(function (k) { return c[k]; }).forEach(function (k) {
     const ev = evidence[k];
     const groundedText = ev && typeof ev.quote === 'string' && ev.quote.trim().length > 1 &&
       (k === 'code' || k === 'website' ? message.text.includes(ev.quote) : normalized_(message.text).includes(normalized_(ev.quote))) &&

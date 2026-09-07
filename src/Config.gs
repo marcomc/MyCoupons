@@ -40,7 +40,7 @@ function validateConfig_(input) {
   ['spreadsheetName', 'sheetName', 'labelName'].forEach(function (k) {
     if (typeof c[k] !== 'string' || !c[k].trim() || c[k].length > 200 || /[\x00-\x1f]/.test(c[k])) fail_('CONFIG');
   });
-  if (/[\[\]*?:/\\]/.test(c.sheetName) || c.sheetName === MC.journalName ||
+  if (/[\[\]*?:/\\]/.test(c.sheetName) || c.sheetName.toLowerCase() === MC.journalName.toLowerCase() ||
     c.labelName.split('/').some(function (p) { return !p.trim(); })) fail_('CONFIG');
   ['developerProject', 'vertexProject'].forEach(function (k) {
     if (c[k] && !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(c[k])) fail_('CONFIG');

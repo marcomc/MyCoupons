@@ -237,3 +237,81 @@ test('invalid persisted configuration and inherited error names retain stable er
     assert.equal(ctx.errorCode_({code}), 'INTERNAL');
   }
 });
+
+test('deterministic codes consume the complete lexeme before rejecting punctuation', () => {
+  const {ctx} = harness();
+  for (const code of ['SAVE+20', 'SAVE.20', 'SAVE/20', 'SAVE:20', 'SAVE@20', 'SAVE&20',
+    '+SAVE20', '(SAVE20)', 'SAVE20.', 'SAVE20,']) {
+    assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + code}).length, 0, code);
+  }
+  for (const code of ['SAVE_20', 'SAVE-20', 'MiXeD20', 'SAVE20é', 'SAVE20\u0301', 'SAVE20𐐀']) {
+    for (const wrapped of [code, '"' + code + '"', "'" + code + "'", '<' + code + '>']) {
+      const text = 'Coupon code ' + wrapped;
+      const candidates = ctx.deterministicCandidates_({text});
+      assert.equal(candidates[0].code, code);
+      assert.equal(candidates[0].notes, text);
+      assert.equal(candidates[0].review, true);
+    }
+  }
+  assert.equal(ctx.deterministicCandidates_({text: 'Coupon code MiXeD20; Coupon code MiXeD20'}).length, 1);
+  assert.equal(ctx.deterministicCandidates_({text: 'Coupon code MiXeD20 Coupon code MiXeD20'}).length, 1);
+  assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + 'X'.repeat(41)}).length, 0);
+});
+
+test('code evidence cannot use a prefix, suffix or interior of punctuation-bearing lexemes', () => {
+  const {ctx} = harness();
+  function normalize(code, quote, source) {
+    return ctx.normalizeCandidate_({merchant: 'Shop', code, confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote}}},
+    {text: 'Shop ' + source, images: [], incomplete: false});
+  }
+  for (const token of ['SAVE+20', 'SAVE.20', 'SAVE/20', 'SAVE:20', 'SAVE@20', 'SAVE&20', '+SAVE20']) {
+    for (const part of [token.slice(0, 4), token.slice(-2), token.slice(1, 4)]) {
+      for (const [quote, source] of [[token, token], [part, token], [token, part]]) {
+        const actual = normalize(part, quote, source);
+        assert.equal(actual.code, '', token + ': ' + part);
+        assert.equal(actual.review, true);
+      }
+    }
+    const whole = normalize(token, token, token);
+    assert.equal(whole.code, token);
+    assert.equal(whole.review, false);
+  }
+  for (const wrapped of ['"SAVE+20"', "'SAVE+20'", '<SAVE+20>']) {
+    assert.equal(normalize('SAVE+20', 'SAVE+20', wrapped).review, false);
+  }
+  assert.equal(normalize('SAVE20', 'SAVE20', '(SAVE20)').code, '');
+  assert.equal(normalize('SAVE20', 'SAVE20', 'SAVE20.').code, '');
+});
+
+test('notes require text or image provenance even when other fields are grounded', () => {
+  const {ctx} = harness();
+  function normalize(notes, evidence, text = 'Shop SAVE20 Valid on outlet', images = []) {
+    return ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', notes,
+      confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, notes: evidence}},
+    {text, images, incomplete: false});
+  }
+  for (const evidence of [undefined, {quote: 'Works forever'}, {quote: 'Shop SAVE20'},
+    {image: -1}, {image: 0}, {image: 0.5}, {image: '0'}]) {
+    const result = normalize('Works forever', evidence);
+    assert.equal(result.notes, ''); assert.equal(result.review, true);
+  }
+  const grounded = normalize('Valid on outlet', {quote: 'Valid on outlet'});
+  assert.equal(grounded.notes, 'Valid on outlet'); assert.equal(grounded.review, false);
+  const empty = normalize('', undefined);
+  assert.equal(empty.notes, ''); assert.equal(empty.review, false);
+  const image = normalize('Image conditions', {image: 0}, 'Shop SAVE20', [{}]);
+  assert.equal(image.notes, 'Image conditions'); assert.equal(image.review, true);
+  const terms = 'terms '.repeat(590).trim();
+  for (const [evidence, text, images] of [[{quote: terms}, 'Shop SAVE20 ' + terms, []],
+    [{image: 0}, 'Shop SAVE20', [{}]], [undefined, 'Shop SAVE20', []]]) {
+    const result = normalize(terms, evidence, text, images);
+    assert.equal(result.review, true);
+    assert.ok(result.notes.length <= 3500);
+    if (!evidence) assert.equal(result.notes, '');
+  }
+  const text = 'Coupon code SAVE20 ' + terms;
+  const copied = ctx.deterministicCandidates_({text})[0];
+  assert.equal(copied.notes, text.slice(0, 3500)); assert.equal(copied.review, true);
+});

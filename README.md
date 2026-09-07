@@ -27,11 +27,15 @@ The example configuration contains product defaults only.
 - Recover from the latest real coupon email date, including that entire day in
   `Europe/Rome`; exclude technical scan rows. An empty sheet needs `initialDate`.
 - Detect explicitly introduced coupon codes and retain source text as notes.
-  Deterministic candidates currently require review.
-- Normalize proposed fields against quoted source text. Unsubstantiated fields
-  become empty; code evidence preserves exact spelling and complete tokens.
-  Image-based proposals and truncated conditions require review. This increment makes no
-  AI requests and does not establish completeness of extracted offers.
+  Deterministic candidates currently require review. Tokens end at whitespace,
+  ASCII quotes or angle brackets; punctuation inside a token is never silently removed.
+  The deterministic parser skips complete tokens outside its supported Unicode
+  letter/number/mark, underscore and hyphen syntax.
+- Normalize proposed fields, including notes, against quoted source text.
+  Unsubstantiated fields become empty; code evidence preserves exact spelling
+  and complete tokens, including punctuation. Image-based proposals and truncated
+  conditions require review. This increment makes no AI requests and does not
+  establish completeness of extracted offers.
 - Quote formula-like spreadsheet text. Discover HTTPS image URLs while excluding
   recognizable trackers, IP literals, and local hostnames. This is a lexical
   filter; it does not resolve DNS or download images.
@@ -45,7 +49,8 @@ Unsupported opaque Gmail UI links such as `permmsgid=msg-f:...` return no identi
 they must be resolved before a future importer can use them for deduplication.
 
 `config/example.json` documents product defaults. Copy it to a `*.local.json`
-file for private settings. The manifest declares the intended owner-only Apps
+file for private settings. The coupon tab cannot use the reserved internal title
+`_MyCoupons Messages`, regardless of case. The manifest declares the intended owner-only Apps
 Script runtime; no permissions are granted merely by checking out these files.
 
 ## Local validation
