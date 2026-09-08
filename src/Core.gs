@@ -263,10 +263,11 @@ function candidateSource_(message) {
     message.images !== undefined && !Array.isArray(message.images)) fail_('AI');
   const html = message.html === undefined ? {text: '', evidenceSpans: [], activeImageCount: 0, incomplete: false} : htmlContent_(message.html);
   const images = message.images === undefined ? [] : message.images;
+  const incomplete = ownEnumerableDataValue_(message, 'incomplete');
   return {spans: [message.text || ''].concat(html.evidenceSpans).filter(Boolean),
     evidenceSpans: [message.text || ''].concat(html.evidenceSpans).filter(Boolean),
     images: images,
-    incomplete: message.incomplete !== false || html.incomplete ||
+    incomplete: incomplete !== false || html.incomplete ||
       !activeHtmlImagesInspected_(html.activeImageCount, images)};
 }
 function codeLexemes_(text) {
@@ -332,6 +333,10 @@ function inspectedImage_(value) {
     Object.prototype.hasOwnProperty.call(value, Symbol.toStringTag)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === null || prototype === Object.prototype;
+}
+function ownEnumerableDataValue_(value, key) {
+  const descriptor = value != null ? Object.getOwnPropertyDescriptor(value, key) : null;
+  return descriptor && descriptor.enumerable && Object.prototype.hasOwnProperty.call(descriptor, 'value') ? descriptor.value : undefined;
 }
 function ownValue_(value, key) {
   return value != null && Object.prototype.hasOwnProperty.call(value, key) ? value[key] : undefined;
@@ -565,7 +570,7 @@ function emailDate_(value, zone) {
     if (value.length === 10 && validDate_(value)) return Utilities.parseDate(value, zone, 'yyyy-MM-dd');
     // Only explicitly zoned timestamps are portable. Locale-specific strings
     // require correction in Sheets instead of guessing day/month order.
-    if (/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:(?:0\d|1[0-3]):[0-5]\d|14:00))$/.test(value) && validDate_(value.slice(0, 10))) {
+    if (/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:(?:0\d|1[0-3]):[0-5]\d|14:00))$/.test(value) && validDate_(value.slice(0, 10))) {
       const d = new Date(value); if (isFinite(d.getTime())) return d;
     }
   }
@@ -581,9 +586,13 @@ function recoveryStart_(rows, c) {
   if (!day) fail_('INITIAL_DATE');
   return Utilities.parseDate(day, c.timeZone, 'yyyy-MM-dd').getTime();
 }
+function validOutcome_(item) {
+  return plainObjectWithKeys_(item, ['status']) &&
+    ['confirmed', 'review', 'ignored'].indexOf(ownValue_(item, 'status')) >= 0;
+}
 function messageOutcome_(items) {
-  if (!Array.isArray(items) || Array.from(items).some(function (x) { return !x || ['confirmed', 'review', 'ignored'].indexOf(x.status) < 0; })) fail_('STATE');
-  if (items.some(function (x) { return x.status === 'review'; })) return 'review';
-  if (items.some(function (x) { return x.status === 'ignored'; })) return 'unchanged';
+  if (!Array.isArray(items) || Array.from(items).some(function (item) { return !validOutcome_(item); })) fail_('STATE');
+  if (items.some(function (item) { return ownValue_(item, 'status') === 'review'; })) return 'review';
+  if (items.some(function (item) { return ownValue_(item, 'status') === 'ignored'; })) return 'unchanged';
   return items.length ? 'archive' : 'empty';
 }

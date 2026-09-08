@@ -88,13 +88,13 @@ The example configuration contains product defaults only.
   Their presence requires review; there is no automatic logo exemption.
 - Use stable review action identifiers with English labels: `Confirm`, `Ignore`,
   and `Retry with AI`. Any ignored candidate keeps its source message unchanged;
-  archiving requires all candidates to be confirmed.
+  archiving requires all candidates to be confirmed through plain records with an own `status`.
 
 Candidate helpers accept optional raw `message.html` alongside independent
 `message.text` (plain text and subject) and independently inspected `message.images`.
 Both extraction and normalization derive HTML coverage through the same adapter;
-`incomplete: false` cannot override unsupported HTML content. Do not premerge an
-HTML projection into `message.text`, and keep evidence matches within one source
+an own enumerable data `incomplete: false` cannot override unsupported HTML
+content. Do not premerge an HTML projection into `message.text`, and keep evidence matches within one source
 representation, across a rendered block boundary, or from a quote occurrence
 that does not contain the asserted field. Suppressed markup also splits source
 spans before deterministic extraction and evidence checks. The string-only `htmlText_` and URL-discovery helpers cannot

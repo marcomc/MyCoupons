@@ -76,6 +76,9 @@
 - Numeric alternatives with `or` cannot ground scalar factual values; encoded
   tracker paths are rejected without rewriting their URLs; and inherited
   candidate or evidence properties cannot authorize an import.
+- Automatic confirmation requires an own enumerable data completeness flag;
+  archive outcomes require a plain own status; and valid zoned timestamps accept
+  fractional seconds beyond millisecond precision.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

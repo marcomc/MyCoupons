@@ -176,6 +176,20 @@ test('archive eligibility rejects unknown and malformed candidate states', () =>
   }
 });
 
+test('archive eligibility requires plain own outcome statuses', () => {
+  const {ctx} = harness();
+  const inherited = Object.create({status: 'confirmed'});
+  const nonEnumerable = {}; Object.defineProperty(nonEnumerable, 'status', {value: 'confirmed'});
+  const accessor = {}; Object.defineProperty(accessor, 'status', {enumerable: true, get() { throw new Error('read'); }});
+  const symbol = {status: 'confirmed', [Symbol('extra')]: true};
+  class Outcome { constructor() { this.status = 'confirmed'; } }
+  for (const item of [inherited, nonEnumerable, accessor, symbol, {status: 'confirmed', extra: true}, new Outcome()]) {
+    assert.throws(() => ctx.messageOutcome_([item]), /STATE/);
+  }
+  const nullPrototype = Object.create(null); nullPrototype.status = 'confirmed';
+  assert.equal(ctx.messageOutcome_([nullPrototype]), 'archive');
+});
+
 test('evidence must preserve full code tokens, case, numeric magnitude and URL identity', () => {
   const {ctx} = harness();
   for (const [field, value, quote, source] of [
@@ -296,12 +310,15 @@ test('numeric-leading DNS names are distinct from numeric and hexadecimal IP for
 test('recovery rejects impossible zoned dates and clock values', () => {
   const {ctx} = harness();
   for (const date of ['2026-02-30T00:00:00Z', '2026-02-29T00:00:00Z', '2026-09-07T24:00:00Z',
-    '2026-09-07T10:60:00Z', '2026-09-07T10:00:00+25:00', '2026-09-07T10:00:00+14:01',
+    '2026-09-07T10:60:00Z', '2026-09-07T10:00:00.Z', '2026-09-07T10:00:00.+02:00',
+    '2026-09-07T10:00:00+25:00', '2026-09-07T10:00:00+14:01',
     '2026-09-07T10:00:00-14:01', '2026-09-07T10:00:00-23:59', '2026-09-07T10:00:00']) {
     assert.throws(() => ctx.emailDate_(date, 'Europe/Rome'), /DATE/);
   }
-  const value = '2026-09-07T10:30:00.123+02:00';
-  assert.equal(ctx.emailDate_(value, 'Europe/Rome').getTime(), Date.parse(value));
+  for (const value of ['2026-09-07T10:30:00.123+02:00', '2026-09-07T10:30:00.123456Z',
+    '2026-09-07T10:30:00.123456789+02:00']) {
+    assert.equal(ctx.emailDate_(value, 'Europe/Rome').getTime(), Date.parse(value));
+  }
   for (const offset of ['+14:00', '-14:00']) {
     const timestamp = '2026-09-07T10:30:00' + offset;
     assert.equal(ctx.emailDate_(timestamp, 'Europe/Rome').getTime(), Date.parse(timestamp));
@@ -508,6 +525,17 @@ test('only explicit boolean completeness can allow automatic confirmation', () =
     if (state !== undefined) message.incomplete = state;
     assert.equal(ctx.normalizeCandidate_(raw, message).review, state !== false);
   }
+  const inherited = Object.assign(Object.create({incomplete: false}), {text: 'Shop SAVE20', images: []});
+  const nonEnumerable = {text: 'Shop SAVE20', images: []};
+  Object.defineProperty(nonEnumerable, 'incomplete', {value: false});
+  const accessor = {text: 'Shop SAVE20', images: []};
+  Object.defineProperty(accessor, 'incomplete', {enumerable: true, get() { throw new Error('read'); }});
+  const nullPrototype = Object.create(null);
+  Object.assign(nullPrototype, {text: 'Shop SAVE20', images: [], incomplete: false});
+  for (const message of [inherited, nonEnumerable, accessor]) {
+    assert.equal(ctx.normalizeCandidate_(raw, message).review, true);
+  }
+  assert.equal(ctx.normalizeCandidate_(raw, nullPrototype).review, false);
 });
 
 test('website prose delimiters cannot shorten path or query identities', () => {
