@@ -33,6 +33,9 @@ function utf16Boundary_(value, index) {
 function scalarNumericValue_(value) {
   return /^\p{Nd}+(?:[.,٫．]\p{Nd}+)?$/u.test(value);
 }
+const DATE_MONTH_PATTERN = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|gen(?:naio)?|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)';
+const DATE_MONTH_END = '(?=$|[^\\p{L}\\p{N}\\p{M}_])';
+const NUMERIC_RANGE_SEPARATOR = '(?:[-‐‑−–—/⁄:]|…|‥|\\.{2,})';
 function numericRangeEndpoint_(before, after) {
   const space = '\\s*';
   const gap = '\\s+';
@@ -46,13 +49,13 @@ function numericRangeEndpoint_(before, after) {
   const up = '[uU][pP]';
   const digit = '\\p{Nd}';
   const decimal = '[.,٫．]';
-  const month = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|gen(?:naio)?|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)';
+  const month = DATE_MONTH_PATTERN;
   const currency = '(?:[€$£]\\s*)?';
   const amount = currency + digit + '+(?:' + decimal + digit + '+)?' + unit;
-  const separator = '[-‐‑−–—/⁄:]';
+  const separator = NUMERIC_RANGE_SEPARATOR;
   const nextAmount = currency + digit;
   const datedRange = new RegExp('^' + unit + qualifier + gap + '(?:' + through + '|' + up + gap + to + ')' + gap +
-    currency + digit + '+(?:' + decimal + digit + '+)?' + gap + month + '\\b', 'iu');
+    currency + digit + '+(?:' + decimal + digit + '+)?' + gap + month + DATE_MONTH_END, 'iu');
   return new RegExp('^' + unit + space + separator + space + nextAmount, 'u').test(after) ||
     new RegExp(amount + space + separator + space + currency + '$', 'u').test(before) ||
     new RegExp('^' + unit + qualifier + gap + to + gap + nextAmount, 'u').test(after) ||
@@ -72,7 +75,10 @@ function numericRangeEndpoint_(before, after) {
       !dateMonthFollows_(after);
 }
 function dateMonthFollows_(source) {
-  return /^\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|gen(?:naio)?|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/iu.test(source);
+  return new RegExp('^\\s+' + DATE_MONTH_PATTERN + DATE_MONTH_END, 'iu').test(source);
+}
+function dateMonthPrecedes_(source) {
+  return new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])' + DATE_MONTH_PATTERN + '\\s+$', 'iu').test(source);
 }
 function htmlContent_(html) {
   const root = MC_HTML.parse(String(html), {scriptingEnabled: false});
@@ -344,10 +350,10 @@ function fieldOccurrences_(field, value, source) {
     const truncatedBefore = beforeStart > 0;
     const truncatedAfter = afterEnd < source.length;
     const truncatedBetween = truncatedBefore && new RegExp('(?:[€$£]\\s*)?[\\p{Nd}](?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?)?(?:\\s+[oO][fF][fF])?\\s+[aA][nN][dD]\\s+(?:[€$£]\\s*)?$', 'u').test(beforeText);
-    const truncatedDelimiter = truncatedBefore && /\s*(?:[-‐‑−–—/⁄:]\s*|[tT][oO]\s+|[aA][nN][dD]\s+|[tT][hH][rR][oO][uU][gG][hH]\s+|[uU][pP]\s+[tT][oO]\s+)(?:[€$£]\s*)?$/.test(beforeText);
+    const truncatedDelimiter = truncatedBefore && new RegExp('\\s*(?:' + NUMERIC_RANGE_SEPARATOR + '\\s*|[tT][oO]\\s+|[aA][nN][dD]\\s+|[tT][hH][rR][oO][uU][gG][hH]\\s+|[uU][pP]\\s+[tT][oO]\\s+)(?:[€$£]\\s*)?$', 'u').test(beforeText);
     const truncatedWhitespace = truncatedBefore && /^\s*(?:[€$£]\s*)?$/.test(beforeText);
-    const truncatedFollowing = truncatedAfter && new RegExp('^(?:\\s|(?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?)(?:\\s+[oO][fF][fF])?(?:\\s+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?)*(?:[€$£]\\s*)?$', 'u').test(afterText);
-    const dateComponent = numericField && dateMonthFollows_(source.slice(occurrence.end));
+    const truncatedFollowing = truncatedAfter && new RegExp('^(?:\\s|(?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?)(?:\\s+[oO][fF][fF])?(?:\\s+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?)*(?:' + NUMERIC_RANGE_SEPARATOR + '\\s*)?(?:[€$£]\\s*)?$', 'u').test(afterText);
+    const dateComponent = numericField && (dateMonthFollows_(source.slice(occurrence.end)) || dateMonthPrecedes_(beforeText));
     return utf16Boundary_(source, occurrence.start) && utf16Boundary_(source, occurrence.end) &&
       (!before || !boundary.test(before)) && (!after || !boundary.test(after)) &&
       !(numericField && (dateComponent || numericRangeEndpoint_(beforeText, afterText) || truncatedBetween || truncatedDelimiter || truncatedWhitespace || truncatedFollowing)) &&

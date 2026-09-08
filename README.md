@@ -39,11 +39,13 @@ The example configuration contains product defaults only.
   normalizing proposed fields, including notes, against quoted source text.
   Unsubstantiated fields become empty; code evidence preserves exact spelling
   and complete tokens, including punctuation, and numeric values cannot be range,
-  ratio, Unicode hyphen/minus/dash or fraction-slash endpoints, or supported
+  ratio, Unicode hyphen/minus/dash, fraction-slash, ellipsis or range-dot endpoints, or supported
   word-delimited interval endpoints, including
   Unicode decimal digits, units, currency, the range qualifier `off`, and
   Unicode-space-separated symbols. Discount and minimum-spend fields store a
   scalar Unicode decimal literal; units and currency remain source context.
+  Calendar date components with supported English or Italian month labels cannot
+  ground numeric fields.
   Oversized
   structured values become empty; bounded notes
   retain complete Unicode characters and require review. A supplied image-evidence
