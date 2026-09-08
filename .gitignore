@@ -1,0 +1,8 @@
+.installer/
+.clasp.json
+node_modules/
+__pycache__/
+*.pyc
+*.local.json
+*.local.md
+.DS_Store
