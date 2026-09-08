@@ -34,6 +34,8 @@ function scalarNumericValue_(value) {
   return /^\p{Nd}+(?:[.,٫．]\p{Nd}+)?$/u.test(value);
 }
 const DATE_MONTH_PATTERN = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|gen(?:naio)?|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)';
+const DATE_MONTH_DOTTED_ABBREVIATION = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|gen|mag|giu|lug|ago|set|ott|dic)\\.';
+const DATE_MONTH_TOKEN_PATTERN = '(?:' + DATE_MONTH_PATTERN + '|' + DATE_MONTH_DOTTED_ABBREVIATION + ')';
 const DATE_MONTH_END = '(?=$|[^\\p{L}\\p{N}\\p{M}_])';
 const NUMERIC_RANGE_SEPARATOR = '(?:[-‐‑−–—/⁄:]|…|‥|\\.{2,})';
 function numericRangeEndpoint_(before, after) {
@@ -79,10 +81,10 @@ function dateMonthFollows_(source) {
   return new RegExp('^\\s+' + DATE_MONTH_PATTERN + DATE_MONTH_END, 'iu').test(source);
 }
 function dateMonthPrecedes_(source) {
-  return new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])' + DATE_MONTH_PATTERN + '\\s+$', 'iu').test(source);
+  return new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])' + DATE_MONTH_TOKEN_PATTERN + '\\s+$', 'iu').test(source);
 }
 function dateMonthDayPrecedes_(source) {
-  return new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])' + DATE_MONTH_PATTERN + '\\s+\\p{Nd}{1,2}\\s*,?\\s*$', 'iu').test(source);
+  return new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])' + DATE_MONTH_TOKEN_PATTERN + '\\s+\\p{Nd}{1,2}(?:st|nd|rd|th)?\\s*,?\\s*$', 'iu').test(source);
 }
 function htmlContent_(html) {
   const root = MC_HTML.parse(String(html), {scriptingEnabled: false});
@@ -338,8 +340,7 @@ function fieldOccurrences_(field, value, source) {
     return rawOccurrences_(value, source, false).filter(function (occurrence) {
       const before = adjacentNonSpaceCodePoint_(source, occurrence.start, true);
       const after = adjacentNonSpaceCodePoint_(source, occurrence.end, false);
-      return value === '%' ? /\p{Nd}/u.test(before) :
-        source === value || /\p{Nd}/u.test(before) || /\p{Nd}/u.test(after);
+      return value === '%' ? /\p{Nd}/u.test(before) : /\p{Nd}/u.test(before) || /\p{Nd}/u.test(after);
     });
   }
   const boundary = /[\p{L}\p{N}\p{M}_]/u;
@@ -408,6 +409,11 @@ function discountPairTextEvidence_(type, value, typeQuote, valueQuote, span) {
   }
   return false;
 }
+function discountPairImageEvidence_(typeEvidence, valueEvidence, source) {
+  return typeEvidence && valueEvidence && Number.isInteger(typeEvidence.image) &&
+    typeEvidence.image === valueEvidence.image && typeEvidence.image >= 0 &&
+    typeEvidence.image < source.images.length && inspectedImage_(source.images[typeEvidence.image]);
+}
 function normalizeCandidate_(raw, message) {
   function objectWithKeys(value, keys) {
     return value && typeof value === 'object' && !Array.isArray(value) &&
@@ -457,12 +463,16 @@ function normalizeCandidate_(raw, message) {
     // OCR-only evidence is a proposal, not independently verified import authority.
     if (groundedImage && !groundedText) c.review = true;
   });
-  if (c.discountType && c.discountValue && !source.evidenceSpans.some(function (span) {
-    const typeEvidence = evidence.discountType;
-    const valueEvidence = evidence.discountValue;
+  const typeEvidence = evidence.discountType;
+  const valueEvidence = evidence.discountValue;
+  const pairedText = source.evidenceSpans.some(function (span) {
     return typeEvidence && valueEvidence && typeof typeEvidence.quote === 'string' && typeof valueEvidence.quote === 'string' &&
       discountPairTextEvidence_(c.discountType, c.discountValue, typeEvidence.quote, valueEvidence.quote, span);
-  })) { c.discountType = ''; c.discountValue = ''; c.review = true; }
+  });
+  const pairedImage = discountPairImageEvidence_(typeEvidence, valueEvidence, source);
+  if (c.discountType && c.discountValue && !pairedText && !pairedImage) {
+    c.discountType = ''; c.discountValue = ''; c.review = true;
+  } else if (c.discountType && c.discountValue && pairedImage) c.review = true;
   if (!c.merchant || !(c.code || (c.discountType && c.discountValue) || c.website)) c.review = true;
   return c;
 }

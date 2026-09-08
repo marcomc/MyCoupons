@@ -1259,14 +1259,15 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
   {text: 'Shop SAVE20 10% off. Expires May 20', images: [], incomplete: false});
   assert.equal(dateWithOffer.discountValue, ''); assert.equal(dateWithOffer.review, true);
   for (const source of ['September 30, 2026', 'September\u00a030,\u202f2026', 'settembre 30, 2026', 'September\u00a0٣٠,\u202f٢٠٢٦',
-    'September 30 2026', 'September\u00a030\u202f2026', 'settembre 30 2026', 'September\u00a0٣٠\u202f٢٠٢٦']) {
+    'September 30 2026', 'September\u00a030\u202f2026', 'settembre 30 2026', 'September\u00a0٣٠\u202f٢٠٢٦',
+    'September 30th, 2026', 'Sep. 30, 2026', 'Sep.\u00a030th,\u202f2026', 'May. 30, 2026', 'mag.\u00a030,\u202f2026']) {
     for (const value of source.includes('٣٠') ? ['٣٠', '٢٠٢٦'] : ['30', '2026']) assert.equal(numericCandidate('discountValue', value, source), '', source + ': ' + value);
   }
   assert.equal(numericCandidate('discountValue', '2026', 'Save 2026 points'), '2026');
   assert.equal(ctx.fieldInQuote_('discountType', '%', '20\u00a0%'), true);
   assert.equal(ctx.fieldInQuote_('discountType', '%', '20\u202f%'), true);
   assert.equal(ctx.fieldInQuote_('discountType', '%', '%'), false);
-  for (const currency of ['€', '$', '£']) assert.equal(ctx.fieldInQuote_('discountType', currency, currency), true);
+  for (const currency of ['€', '$', '£']) assert.equal(ctx.fieldInQuote_('discountType', currency, currency), false);
   for (const source of ['20€', '20 €', '٢٠\u202f€']) assert.equal(ctx.fieldInQuote_('discountType', '€', source), true, source);
   for (const [value, text] of [['20', 'Shop SAVE20 20€ off'], ['20', 'Shop SAVE20 20 € off'], ['٢٠', 'Shop SAVE20 ٢٠\u202f€ off']]) {
     const postfix = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', discountType: '€', discountValue: value, confidence: 'high', review: false,
@@ -1274,6 +1275,10 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     {text, images: [], incomplete: false});
     assert.equal(postfix.discountType, '€', text); assert.equal(postfix.discountValue, value, text); assert.equal(postfix.review, false, text);
   }
+  const isolatedCurrency = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', discountType: '$', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountType: {quote: '$'}}},
+  {html: '<p>Shop SAVE20</p><p>$</p>', images: [], incomplete: false});
+  assert.equal(isolatedCurrency.discountType, ''); assert.equal(isolatedCurrency.review, true);
   const isolatedPercent = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', discountType: '%', discountValue: '20', confidence: 'high', review: false,
     evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountType: {quote: '%'}, discountValue: {quote: '20'}}},
   {html: '<p>Shop SAVE20 $20</p><p>%</p>', images: [], incomplete: false});
@@ -1288,6 +1293,14 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     {text: 'Shop SAVE20 ' + source, images: [], incomplete: false});
     assert.equal(mismatched.discountType, '', source); assert.equal(mismatched.discountValue, '', source); assert.equal(mismatched.minimumSpend, '20', source); assert.equal(mismatched.review, true, source);
   }
+  const imagePair = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', discountType: '%', discountValue: '20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountType: {image: 0}, discountValue: {image: 0}}},
+  {text: 'Shop SAVE20', images: [{}], incomplete: false});
+  assert.equal(imagePair.discountType, '%'); assert.equal(imagePair.discountValue, '20'); assert.equal(imagePair.review, true);
+  const splitImagePair = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', discountType: '%', discountValue: '20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountType: {image: 0}, discountValue: {image: 1}}},
+  {text: 'Shop SAVE20', images: [{}, {}], incomplete: false});
+  assert.equal(splitImagePair.discountType, ''); assert.equal(splitImagePair.discountValue, ''); assert.equal(splitImagePair.review, true);
   for (const source of ['20' + ' '.repeat(97) + '-30%', '20' + ' '.repeat(97) + '‑30%', '20' + ' '.repeat(97) + '⁄30%',
     '20…' + ' '.repeat(97) + '30%', '20‥' + ' '.repeat(97) + '30%', '20..' + ' '.repeat(97) + '30%', '20...' + ' '.repeat(97) + '30%',
     '20' + ' '.repeat(97) + '…30%', '20' + ' '.repeat(97) + '‥30%', '20' + ' '.repeat(97) + '..30%', '20' + ' '.repeat(97) + '...30%', '20%' + ' '.repeat(97) + 'to 30%',

@@ -47,7 +47,8 @@ The example configuration contains product defaults only.
   A discount symbol and its amount must be adjacent in the same source span;
   currencies may precede or follow their amount. Calendar date components with
   supported English or Italian month labels cannot
-  ground numeric fields.
+  ground numeric fields. The same inspected image may evidence a discount pair,
+  but it always requires review.
   Oversized
   structured values become empty; bounded notes
   retain complete Unicode characters and require review. A supplied image-evidence
