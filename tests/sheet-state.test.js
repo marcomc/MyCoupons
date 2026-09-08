@@ -87,6 +87,32 @@ test('missing spreadsheet is created only when exact-name discovery returns no m
   assert.equal(result.label.id, 'label-1');
 });
 
+test('empty missing resources require initialDate before spreadsheet creation', () => {
+  const {ctx, config} = harness();
+  let creations = 0;
+  const spreadsheet = spreadsheetMock(config.spreadsheetName, []);
+  ctx.DriveApp = {getFilesByName: () => ({hasNext: () => false})};
+  ctx.SpreadsheetApp = {create: () => { creations++; return spreadsheet; }};
+  ctx.Gmail.Users.Labels = {list: () => ({labels: []})};
+  assert.throws(() => ctx.ensureSheetState_({...config, spreadsheetId: '', initialDate: ''}), /INITIAL_DATE/);
+  assert.equal(creations, 0);
+  assert.deepEqual(spreadsheet.insertedNames, []);
+});
+
+test('label discovery follows pagination before deciding to create a label', () => {
+  const {ctx, config} = harness();
+  let calls = 0;
+  ctx.Gmail.Users.Labels = {list: (userId, options) => {
+    calls++;
+    if (!options) return {labels: [{id: 'first', name: 'Other'}], nextPageToken: 'page-2'};
+    assert.equal(options.pageToken, 'page-2');
+    return {labels: [{id: 'target', name: config.labelName}]};
+  }};
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.resolveGmailLabel_(config))),
+    {id: 'target', name: config.labelName});
+  assert.equal(calls, 2);
+});
+
 test('ambiguous spreadsheet names fail closed without creating resources', () => {
   const {ctx, config} = harness();
   const spreadsheet = spreadsheetMock(config.spreadsheetName, []);
@@ -122,6 +148,8 @@ test('journal states preserve retry and dedupe metadata and reject duplicates', 
   assert.equal(ctx.findMessageStateByDedupeKey_(journal, 'merchant|code').messageId, 'opaque-message-id');
   const updated = ctx.updateMessageState_(journal, 'opaque-message-id', {status: 'processing', attempts: 3});
   assert.equal(updated.status, 'processing');
+  assert.throws(() => ctx.updateMessageState_(journal, 'opaque-message-id', {messageId: 'other'}), /STATE/);
+  assert.throws(() => ctx.updateMessageState_(journal, 'opaque-message-id', {version: 2}), /STATE/);
   journal._values.push(['opaque-message-id', JSON.stringify(state)]);
   assert.throws(() => ctx.readMessageJournal_(journal), /STATE/);
 });

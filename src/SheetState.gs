@@ -12,9 +12,12 @@ function ensureSheetState_(input) {
   return withLock_(function () {
     assertOwner_(c);
     const spreadsheet = resolveSpreadsheet_(c);
-    const couponSheet = ensureCouponSheet_(spreadsheet, c.sheetName);
+    let couponSheet = spreadsheet.getSheetByName(c.sheetName);
+    if (couponSheet) validateExistingCouponSheet_(couponSheet);
+    const recoveryStart = couponSheet ? recoveryStartForSheet_(couponSheet, c) :
+      recoveryStart_([], c);
+    if (!couponSheet) couponSheet = ensureCouponSheet_(spreadsheet, c.sheetName);
     const journalSheet = ensureJournalSheet_(spreadsheet);
-    const recoveryStart = recoveryStartForSheet_(couponSheet, c);
     const label = resolveGmailLabel_(c);
     const resolvedConfig = persistResourceIdentity_(c, spreadsheet.getId(), label.id);
     return {
@@ -35,8 +38,8 @@ function resolveSpreadsheet_(c) {
   } else {
     const matches = findSpreadsheetsByName_(c.spreadsheetName);
     if (matches.length > 1) fail_('RESOURCE');
-    spreadsheet = matches.length ? openSpreadsheetById_(matches[0]) :
-      createSpreadsheet_(c.spreadsheetName);
+    if (!matches.length && !c.initialDate) fail_('INITIAL_DATE');
+    spreadsheet = matches.length ? openSpreadsheetById_(matches[0]) : createSpreadsheet_(c.spreadsheetName);
   }
   assertSpreadsheetIdentity_(spreadsheet, c);
   return spreadsheet;
@@ -111,6 +114,13 @@ function ensureCouponSheet_(spreadsheet, name) {
   return sheet;
 }
 
+function validateExistingCouponSheet_(sheet) {
+  const values = sheet.getDataRange().getDisplayValues();
+  if (values.some(function (row) { return row.some(function (value) { return String(value).trim(); }); })) {
+    assertHeaderRow_(sheet, MC.headers, false);
+  }
+}
+
 function ensureJournalSheet_(spreadsheet) {
   let sheet = spreadsheet.getSheetByName(MC.journalName);
   if (!sheet) {
@@ -146,18 +156,32 @@ function recoveryStartForSheet_(sheet, c) {
 }
 
 function listGmailLabels_() {
-  let result;
-  try {
-    result = Gmail.Users.Labels.list('me');
-  } catch (e) {
-    fail_('RESOURCE');
-  }
-  if (!result || !Array.isArray(result.labels)) fail_('RESOURCE');
-  return result.labels.map(function (label) {
-    if (!label || typeof label.id !== 'string' || !label.id ||
-      typeof label.name !== 'string' || !label.name) fail_('RESOURCE');
-    return {id: label.id, name: label.name};
-  });
+  const labels = [];
+  const seenTokens = Object.create(null);
+  let pageToken = '';
+  do {
+    let result;
+    try {
+      result = pageToken ? Gmail.Users.Labels.list('me', {pageToken: pageToken}) :
+        Gmail.Users.Labels.list('me');
+    } catch (e) {
+      fail_('RESOURCE');
+    }
+    if (!result || !Array.isArray(result.labels)) fail_('RESOURCE');
+    result.labels.forEach(function (label) {
+      if (!label || typeof label.id !== 'string' || !label.id ||
+        typeof label.name !== 'string' || !label.name) fail_('RESOURCE');
+      const existing = labels.filter(function (item) { return item.id === label.id; });
+      if (existing.length && existing[0].name !== label.name) fail_('RESOURCE');
+      if (!existing.length) labels.push({id: label.id, name: label.name});
+    });
+    const nextToken = result.nextPageToken;
+    if (nextToken != null && typeof nextToken !== 'string') fail_('RESOURCE');
+    if (!nextToken) pageToken = '';
+    else if (seenTokens[nextToken]) fail_('RESOURCE');
+    else { seenTokens[nextToken] = true; pageToken = nextToken; }
+  } while (pageToken);
+  return labels;
 }
 
 function resolveGmailLabel_(c) {
@@ -264,14 +288,18 @@ function getMessageState_(sheet, messageId) {
 
 function saveMessageState_(sheet, state) {
   if (!validMessageState_(state)) fail_('STATE');
-  return withLock_(function () {
-    readMessageJournal_(sheet);
-    const row = findJournalRow_(sheet, state.messageId);
-    const values = [[state.messageId, JSON.stringify(state)]];
-    if (row) sheet.getRange(row, 1, 1, 2).setValues(values);
-    else sheet.getRange(Math.max(2, sheet.getLastRow() + 1), 1, 1, 2).setValues(values);
-    return state;
-  });
+  return withLock_(function () { return saveMessageStateUnlocked_(sheet, state); });
+}
+
+function saveMessageStateUnlocked_(sheet, state) {
+  readMessageJournal_(sheet);
+  const row = findJournalRow_(sheet, state.messageId);
+  const values = [[state.messageId, JSON.stringify(state)]];
+  if (row) sheet.getRange(row, 1, 1, 2).setValues(values);
+  else sheet.getRange(Math.max(2, sheet.getLastRow() + 1), 1, 1, 2).setValues(values);
+  const persisted = getMessageState_(sheet, state.messageId);
+  if (!persisted || JSON.stringify(persisted) !== JSON.stringify(state)) fail_('STATE');
+  return persisted;
 }
 
 function findJournalRow_(sheet, messageId) {
@@ -287,10 +315,13 @@ function findJournalRow_(sheet, messageId) {
 }
 
 function updateMessageState_(sheet, messageId, patch) {
-  const current = getMessageState_(sheet, messageId) || newMessageState_(messageId);
-  if (!plainObjectWithKeys_(patch, MC_MESSAGE_STATE_KEYS)) fail_('STATE');
-  const next = Object.assign({}, current, patch);
-  return saveMessageState_(sheet, next);
+  if (!plainObjectWithKeys_(patch, MC_MESSAGE_STATE_KEYS) ||
+    ownValue_(patch, 'version') !== undefined || ownValue_(patch, 'messageId') !== undefined) fail_('STATE');
+  return withLock_(function () {
+    const current = getMessageState_(sheet, messageId) || newMessageState_(messageId);
+    const next = Object.assign({}, current, patch);
+    return saveMessageStateUnlocked_(sheet, next);
+  });
 }
 
 function findMessageStateByDedupeKey_(sheet, dedupeKey) {
