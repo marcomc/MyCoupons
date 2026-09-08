@@ -1255,6 +1255,10 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountType: {quote: '%'}, discountValue: {quote: '20'}}},
   {text: 'Shop SAVE20 10% off. Expires May 20', images: [], incomplete: false});
   assert.equal(dateWithOffer.discountValue, ''); assert.equal(dateWithOffer.review, true);
+  for (const source of ['September 30, 2026', 'September\u00a030,\u202f2026', 'settembre 30, 2026', 'September\u00a0٣٠,\u202f٢٠٢٦']) {
+    for (const value of source.includes('٣٠') ? ['٣٠', '٢٠٢٦'] : ['30', '2026']) assert.equal(numericCandidate('discountValue', value, source), '', source + ': ' + value);
+  }
+  assert.equal(numericCandidate('discountValue', '2026', 'Save 2026 points'), '2026');
   assert.equal(ctx.fieldInQuote_('discountType', '%', '20\u00a0%'), true);
   assert.equal(ctx.fieldInQuote_('discountType', '%', '20\u202f%'), true);
   assert.equal(ctx.fieldInQuote_('discountType', '%', '%'), false);
@@ -1263,6 +1267,16 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountType: {quote: '%'}, discountValue: {quote: '20'}}},
   {html: '<p>Shop SAVE20 $20</p><p>%</p>', images: [], incomplete: false});
   assert.equal(isolatedPercent.discountType, ''); assert.equal(isolatedPercent.discountValue, '20'); assert.equal(isolatedPercent.review, true);
+  const splitPair = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', discountType: '%', discountValue: '20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountType: {quote: '10%'}, discountValue: {quote: '$20'}}},
+  {html: '<p>Shop SAVE20 10%</p><p>$20 minimum</p>', images: [], incomplete: false});
+  assert.equal(splitPair.discountType, ''); assert.equal(splitPair.discountValue, ''); assert.equal(splitPair.review, true);
+  for (const source of ['save 10% when you spend $20 minimum', 'save 10\u00a0% when you spend $\u202f20 minimum', 'save €10 when you spend $20 minimum']) {
+    const mismatched = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', discountType: source.includes('€') ? '€' : '%', discountValue: '20', minimumSpend: '20', confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountType: {quote: source.includes('€') ? '€' : '%'}, discountValue: {quote: '20'}, minimumSpend: {quote: '20'}}},
+    {text: 'Shop SAVE20 ' + source, images: [], incomplete: false});
+    assert.equal(mismatched.discountType, '', source); assert.equal(mismatched.discountValue, '', source); assert.equal(mismatched.minimumSpend, '20', source); assert.equal(mismatched.review, true, source);
+  }
   for (const source of ['20' + ' '.repeat(97) + '-30%', '20' + ' '.repeat(97) + '‑30%', '20' + ' '.repeat(97) + '⁄30%',
     '20…' + ' '.repeat(97) + '30%', '20‥' + ' '.repeat(97) + '30%', '20..' + ' '.repeat(97) + '30%', '20...' + ' '.repeat(97) + '30%',
     '20' + ' '.repeat(97) + '…30%', '20' + ' '.repeat(97) + '‥30%', '20' + ' '.repeat(97) + '..30%', '20' + ' '.repeat(97) + '...30%', '20%' + ' '.repeat(97) + 'to 30%',

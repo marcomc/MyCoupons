@@ -49,6 +49,7 @@
   English or Italian month labels cannot ground numeric facts.
 - Discount and minimum-spend fields accept only scalar Unicode decimal values;
   non-scalar proposals are cleared and require review.
+- Discount symbols must bind to the same numeric amount in one source span.
 - Active fallback surfaces and unmodeled text controls preserve incomplete HTML
   coverage; image evidence requires an inspected record; and discount symbols
   support ASCII-separated numeric amounts without admitting range endpoints.

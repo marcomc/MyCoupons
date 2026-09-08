@@ -44,6 +44,7 @@ The example configuration contains product defaults only.
   Unicode decimal digits, units, currency, the range qualifier `off`, and
   Unicode-space-separated symbols. Discount and minimum-spend fields store a
   scalar Unicode decimal literal; units and currency remain source context.
+  A discount symbol and its amount must be adjacent in the same source span.
   Calendar date components with supported English or Italian month labels cannot
   ground numeric fields.
   Oversized

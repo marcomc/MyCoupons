@@ -80,6 +80,9 @@ function dateMonthFollows_(source) {
 function dateMonthPrecedes_(source) {
   return new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])' + DATE_MONTH_PATTERN + '\\s+$', 'iu').test(source);
 }
+function dateMonthDayPrecedes_(source) {
+  return new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])' + DATE_MONTH_PATTERN + '\\s+\\p{Nd}{1,2}\\s*,\\s*$', 'iu').test(source);
+}
 function htmlContent_(html) {
   const root = MC_HTML.parse(String(html), {scriptingEnabled: false});
   const stack = [{node: root}];
@@ -353,7 +356,7 @@ function fieldOccurrences_(field, value, source) {
     const truncatedDelimiter = truncatedBefore && new RegExp('\\s*(?:' + NUMERIC_RANGE_SEPARATOR + '\\s*|[tT][oO]\\s+|[aA][nN][dD]\\s+|[tT][hH][rR][oO][uU][gG][hH]\\s+|[uU][pP]\\s+[tT][oO]\\s+)(?:[€$£]\\s*)?$', 'u').test(beforeText);
     const truncatedWhitespace = truncatedBefore && /^\s*(?:[€$£]\s*)?$/.test(beforeText);
     const truncatedFollowing = truncatedAfter && new RegExp('^(?:\\s|(?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?)(?:\\s+[oO][fF][fF])?(?:\\s+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?)*(?:' + NUMERIC_RANGE_SEPARATOR + '\\s*)?(?:[€$£]\\s*)?$', 'u').test(afterText);
-    const dateComponent = numericField && (dateMonthFollows_(source.slice(occurrence.end)) || dateMonthPrecedes_(beforeText));
+    const dateComponent = numericField && (dateMonthFollows_(source.slice(occurrence.end)) || dateMonthPrecedes_(beforeText) || dateMonthDayPrecedes_(beforeText));
     return utf16Boundary_(source, occurrence.start) && utf16Boundary_(source, occurrence.end) &&
       (!before || !boundary.test(before)) && (!after || !boundary.test(after)) &&
       !(numericField && (dateComponent || numericRangeEndpoint_(beforeText, afterText) || truncatedBetween || truncatedDelimiter || truncatedWhitespace || truncatedFollowing)) &&
@@ -364,16 +367,36 @@ function fieldOccurrences_(field, value, source) {
 function fieldInQuote_(field, value, quote) {
   return fieldOccurrences_(field, value, quote).length > 0;
 }
-function textEvidenceGrounded_(field, value, quote, span) {
-  if (!wellFormedUtf16_(quote) || !wellFormedUtf16_(span)) return false;
+function groundedFieldOccurrences_(field, value, quote, span) {
+  if (!wellFormedUtf16_(quote) || !wellFormedUtf16_(span)) return [];
   const quoteOccurrences = rawOccurrences_(quote, span, field !== 'code' && field !== 'website');
   const fieldOccurrences = fieldOccurrences_(field, value, span);
-  let fieldIndex = 0;
-  for (let quoteIndex = 0; quoteIndex < quoteOccurrences.length; quoteIndex++) {
+  const grounded = [];
+  for (let quoteIndex = 0, fieldIndex = 0; quoteIndex < quoteOccurrences.length; quoteIndex++) {
     const quoteOccurrence = quoteOccurrences[quoteIndex];
     while (fieldIndex < fieldOccurrences.length && fieldOccurrences[fieldIndex].end <= quoteOccurrence.start) fieldIndex++;
-    while (fieldIndex < fieldOccurrences.length && fieldOccurrences[fieldIndex].start < quoteOccurrence.start) fieldIndex++;
-    if (fieldIndex < fieldOccurrences.length && fieldOccurrences[fieldIndex].end <= quoteOccurrence.end) return true;
+    for (let index = fieldIndex; index < fieldOccurrences.length && fieldOccurrences[index].start < quoteOccurrence.end; index++) {
+      if (fieldOccurrences[index].start >= quoteOccurrence.start && fieldOccurrences[index].end <= quoteOccurrence.end) grounded.push(fieldOccurrences[index]);
+    }
+  }
+  return grounded;
+}
+function textEvidenceGrounded_(field, value, quote, span) {
+  return groundedFieldOccurrences_(field, value, quote, span).length > 0;
+}
+function discountPairTextEvidence_(type, value, typeQuote, valueQuote, span) {
+  const values = groundedFieldOccurrences_('discountValue', value, valueQuote, span);
+  const types = groundedFieldOccurrences_('discountType', type, typeQuote, span);
+  for (let valueIndex = 0, typeIndex = 0; valueIndex < values.length && typeIndex < types.length;) {
+    const amount = values[valueIndex]; const symbol = types[typeIndex];
+    if (type === '%') {
+      if (symbol.start < amount.end) { typeIndex++; continue; }
+      if (/^\s*$/u.test(span.slice(amount.end, symbol.start))) return true;
+      valueIndex++; continue;
+    }
+    if (amount.start < symbol.end) { valueIndex++; continue; }
+    if (/^\s*$/u.test(span.slice(symbol.end, amount.start))) return true;
+    typeIndex++;
   }
   return false;
 }
@@ -426,6 +449,12 @@ function normalizeCandidate_(raw, message) {
     // OCR-only evidence is a proposal, not independently verified import authority.
     if (groundedImage && !groundedText) c.review = true;
   });
+  if (c.discountType && c.discountValue && !source.evidenceSpans.some(function (span) {
+    const typeEvidence = evidence.discountType;
+    const valueEvidence = evidence.discountValue;
+    return typeEvidence && valueEvidence && typeof typeEvidence.quote === 'string' && typeof valueEvidence.quote === 'string' &&
+      discountPairTextEvidence_(c.discountType, c.discountValue, typeEvidence.quote, valueEvidence.quote, span);
+  })) { c.discountType = ''; c.discountValue = ''; c.review = true; }
   if (!c.merchant || !(c.code || (c.discountType && c.discountValue) || c.website)) c.review = true;
   return c;
 }
