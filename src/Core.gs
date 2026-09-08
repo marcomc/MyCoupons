@@ -148,7 +148,7 @@ function htmlContent_(html) {
     const visibleInput = isHtml && tag === 'input' && !contextSuppressed && !hiddenInput;
     const activeIframe = isHtml && tag === 'iframe' && !entry.suppressed && !closedPopover &&
       !nodeAttrs.some(function (attr) { return attr.name === 'hidden'; }) && nodeAttrs.some(function (attr) {
-        return attr.name === 'src' && /[^\t\n\f\r ]/.test(String(attr.value));
+        return (attr.name === 'src' || attr.name === 'srcdoc') && /[^\t\n\f\r ]/.test(String(attr.value));
       });
     if (!contextSuppressed && isHtml && (tag === 'picture' || (tag === 'img' || tag === 'source') &&
       nodeAttrs.some(function (attr) { return attr.name === 'srcset'; }))) incomplete = true;
@@ -220,7 +220,7 @@ function remoteImageUrls_(html) {
   htmlContent_(html).images.forEach(function (attrs) {
     const src = typeof attrs.src === 'string' ? attrs.src.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '') : '';
     if (!src || ['width', 'height'].some(function (key) { return smallImageDimension_(attrs[key]); }) ||
-      /(?:pixel|tracking|tracker|beacon|\/open(?:[/.?#]|$)|transparent|spacer)/i.test(src)) return;
+      /(?:pixel|tracking|tracker|beacon|\/open(?:[/.?#;]|$)|transparent|spacer)/i.test(src)) return;
     const url = safeUrl_(src);
     if (url && urls.indexOf(url) < 0) urls.push(url);
   });
@@ -331,7 +331,7 @@ function websiteOccurrences_(value, source) {
       occurrences.push({start: start, end: start + url.length}); continue;
     }
     if (/^https:\/\/[a-z0-9.-]+(?::443)?$/i.test(value) && safeUrl_(value) &&
-      url.startsWith(value) && /^[.,;!?)\]}]+$/.test(url.slice(value.length)) && !safeUrl_(url)) {
+      url.startsWith(value) && /^[.,;:!?)\]}]+$/.test(url.slice(value.length)) && !safeUrl_(url)) {
       occurrences.push({start: start, end: start + value.length});
     }
   }

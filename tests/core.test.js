@@ -72,7 +72,7 @@ test('remote image discovery excludes trackers, private literals and unsafe sche
     assert.deepEqual([...ctx.remoteImageUrls_('<img src="' + url + '">')], []);
   }
   for (const url of ['https://shop.com/open', 'https://shop.com/open#receipt', 'https://shop.com/open/',
-    'https://shop.com/open?receipt=1', 'https://shop.com/open.gif']) {
+    'https://shop.com/open?receipt=1', 'https://shop.com/open;id=abc', 'https://shop.com/open.gif']) {
     assert.deepEqual([...ctx.remoteImageUrls_('<img src="' + url + '">')], [], url);
   }
   assert.deepEqual([...ctx.remoteImageUrls_('<img src="https://shop.com/opener">')], ['https://shop.com/opener']);
@@ -887,6 +887,7 @@ test('remaining rendered blocks and non-rendered controls preserve evidence boun
   assert.equal(ctx.htmlContent_(select).incomplete, true); assert.ok(!ctx.htmlText_(select).includes('SELECT20'));
   const iframe = '<p>Shop Coupon code REAL20</p><iframe src="https://shop.com/coupon"></iframe>';
   assert.equal(ctx.htmlContent_(iframe).incomplete, true);
+  assert.equal(ctx.htmlContent_('<iframe srcdoc="<p>Offer</p>"></iframe>').incomplete, true);
   assert.equal(ctx.normalizeCandidate_({merchant: 'Shop', code: 'REAL20', confidence: 'high', review: false,
     evidence: {merchant: {quote: 'Shop'}, code: {quote: 'REAL20'}}}, {html: iframe, images: [], incomplete: false}).review, true);
   const iframeTextCandidate = ctx.normalizeCandidate_({merchant: 'Shop', code: 'REAL20', confidence: 'high', review: false,
@@ -894,7 +895,7 @@ test('remaining rendered blocks and non-rendered controls preserve evidence boun
   {text: 'Shop REAL20', html: '<iframe src="https://shop.com/coupon"></iframe>', images: [], incomplete: false});
   assert.equal(iframeTextCandidate.review, true);
   assert.equal(ctx.messageOutcome_([{status: iframeTextCandidate.review ? 'review' : 'confirmed'}]), 'review');
-  for (const html of ['<iframe></iframe>', '<iframe src=""></iframe>', '<iframe data-src="https://shop.com/coupon"></iframe>']) {
+  for (const html of ['<iframe></iframe>', '<iframe src=""></iframe>', '<iframe srcdoc=""></iframe>', '<iframe srcdoc=" \t"></iframe>', '<iframe data-src="https://shop.com/coupon"></iframe>']) {
     assert.equal(ctx.htmlContent_(html).incomplete, false, html);
   }
   for (const type of ['button', '', 'submit', 'reset', 'image']) {
@@ -1489,5 +1490,10 @@ test('website evidence requires a leading boundary in both quote and complete so
   }
   const exact = 'https://shop.com/path?next=https://other.com';
   assert.equal(normalize(exact, exact, exact).review, false);
+  assert.equal(normalize(url, url + ': SAVE20').review, false);
+  for (const structured of ['https://shop.com:443', 'https://shop.com/path:offer', 'https://shop.com/?next=a:b', 'https://shop.com/#offer:today']) {
+    assert.equal(normalize(structured, structured, structured).review, false, structured);
+    assert.equal(normalize(url, structured).website, '', structured);
+  }
   assert.equal(normalize(url, url + '/path').website, '');
 });
