@@ -14,10 +14,11 @@ Private Gmail-to-Google-Sheets coupon importer built with Google Apps Script.
 
 The current increment provides configuration validation, coupon candidate
 parsing and normalization, historical recovery dates, safe spreadsheet and
-Gmail-label resource setup, a private per-message journal, and bounded
-read-only Gmail message ingestion. AI requests, coupon-row writes, review
-triggers, Gmail mutations, and installation automation are subsequent
-increments. There is no active importer or deployment.
+Gmail-label resource setup, a private per-message journal, bounded read-only
+Gmail message ingestion, and local deterministic import-row persistence.
+Deterministic candidates are persisted as review rows; AI requests, review
+triggers, Gmail mutations, and installation automation remain subsequent
+increments. There is no deployment.
 
 Private installation identifiers and credentials belong outside version control.
 The example configuration contains product defaults only.
@@ -43,6 +44,11 @@ The example configuration contains product defaults only.
   sender, subject, plain text, raw HTML, and canonical Gmail link. MIME
   alternatives remain independent; unsupported content marks the payload
   incomplete and malformed message data produces a retryable error.
+- `runImportWorkflow_` consumes canonical reader output, derives deterministic
+  candidates, persists bounded 26-column rows, and records candidate row
+  references in the journal. Dedupe keys make reruns idempotent while retaining
+  user-entered columns. Failed extraction or writes remain retryable; no Gmail
+  mutation is performed.
 
 ## Core behavior
 

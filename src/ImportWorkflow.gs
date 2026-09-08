@@ -1,0 +1,105 @@
+/* Deterministic, read-only import orchestration. Gmail mutations are deliberately absent. */
+function runImportWorkflow_(input) {
+  const state = input || ensureSheetState_();
+  if (!state.couponSheet || !state.journalSheet || !Array.isArray(state.messages)) {
+    const read = readCouponMessages_(state);
+    state.messages = read.messages;
+    state.errors = read.errors;
+    state.truncated = read.truncated;
+  }
+  const result = {imported: 0, review: 0, errors: state.errors || [], messages: []};
+  state.messages.forEach(function (message) {
+    const outcome = processCouponMessage_(state, message);
+    result.messages.push(outcome);
+    if (outcome.status === 'confirmed') result.imported += outcome.rows.length;
+    if (outcome.status === 'review') result.review += outcome.rows.length;
+  });
+  return result;
+}
+
+function processCouponMessage_(state, message) {
+  if (!message || typeof message.id !== 'string' || !validGmailApiId_(message.id)) fail_('MAIL');
+  const existing = getMessageState_(state.journalSheet, message.id);
+  if (existing && MC_FINAL_MESSAGE_STATES.indexOf(existing.status) >= 0) {
+    return {messageId: message.id, status: existing.status, rows: existing.rowNumbers.slice()};
+  }
+  let journal = existing || newMessageState_(message.id);
+  journal.attempts++;
+  journal.status = 'processing'; journal.failureStage = 'extract'; journal.lastError = '';
+  saveMessageState_(state.journalSheet, journal);
+  try {
+    const candidates = deterministicCandidates_(message).map(function (candidate) {
+      const normalized = {}; MC.fields.forEach(function (field) { normalized[field] = ''; });
+      normalized.code = candidate.code; normalized.notes = candidate.notes;
+      normalized.confidence = candidate.confidence; normalized.review = true;
+      return normalized;
+    });
+    const rows = [];
+    const statuses = [];
+    candidates.forEach(function (candidate, index) {
+      const key = candidateDedupeKey_(message, candidate, index);
+      const known = journal.candidateKeys.indexOf(key);
+      let rowNumber;
+      if (known >= 0) {
+        rowNumber = journal.rowNumbers[known];
+        if (!rowNumber) fail_('STATE');
+      } else {
+        journal.dedupeKeys.push(key);
+        journal.candidateKeys.push(key);
+        const row = couponRow_(message, candidate, key);
+        const prior = findCouponRowByDedupeKey_(state.couponSheet, key);
+        rowNumber = prior || appendCouponRow_(state.couponSheet, row);
+        journal.rowNumbers.push(rowNumber);
+      }
+      const status = Object.create(null); status.status = candidate.review ? 'review' : 'confirmed';
+      statuses.push(status);
+      rows.push(rowNumber);
+    });
+    journal.outcome = messageOutcome_(statuses);
+    journal.status = journal.outcome === 'archive' ? 'confirmed' : 'review';
+    if (journal.outcome === 'empty') journal.status = 'failed';
+    journal.failureStage = ''; journal.updatedAt = new Date().toISOString();
+    saveMessageState_(state.journalSheet, journal);
+    return {messageId: message.id, status: journal.status, rows: rows};
+  } catch (e) {
+    journal.status = 'failed'; journal.retryCount++; journal.failureStage = journal.failureStage || 'write';
+    journal.lastError = errorCode_(e); journal.updatedAt = new Date().toISOString();
+    saveMessageState_(state.journalSheet, journal);
+    return {messageId: message.id, status: 'failed', rows: journal.rowNumbers.slice(), error: journal.lastError};
+  }
+}
+
+function candidateDedupeKey_(message, candidate, index) {
+  return digest_(message.id + '|' + index + '|' + normalized_(candidate.merchant) + '|' +
+    candidate.code + '|' + candidate.website + '|' + candidate.discountType + '|' + candidate.discountValue);
+}
+
+function findCouponRowByDedupeKey_(sheet, key) {
+  const rows = sheet.getDataRange().getDisplayValues();
+  for (let index = 1; index < rows.length; index++) if (rows[index][16] === key) return index + 1;
+  return 0;
+}
+
+function couponRow_(message, candidate, key) {
+  const row = Array(26).fill('');
+  row[0] = new Date(message.receivedAtMs); row[1] = textCell_(candidate.merchant);
+  row[2] = textCell_(candidate.website); row[3] = textCell_(candidate.code);
+  row[4] = textCell_(candidate.discountType); row[5] = textCell_(candidate.discountValue);
+  row[6] = textCell_(candidate.minimumSpend); row[7] = textCell_(candidate.validOn);
+  row[8] = textCell_(candidate.exclusions); row[9] = candidate.expiry || '';
+  row[10] = textCell_(candidate.usageLimits); row[11] = textCell_(message.subject);
+  row[12] = textCell_(message.sender); row[13] = message.link;
+  row[14] = candidate.confidence; row[15] = candidate.review ? EN.yes : '';
+  row[16] = key; row[17] = candidate.review ? EN.statuses.review : EN.statuses.confirmed;
+  row[24] = candidate.review ? EN.actions.confirm : '';
+  return row;
+}
+
+function appendCouponRow_(sheet, row) {
+  if (!Array.isArray(row) || row.length !== MC.headers.length) fail_('WRITE');
+  const rowNumber = Math.max(2, sheet.getLastRow() + 1);
+  sheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+  const stored = sheet.getRange(rowNumber, 1, 1, row.length).getValues()[0];
+  if (stored.length !== row.length || String(stored[16]) !== String(row[16])) fail_('WRITE');
+  return rowNumber;
+}
