@@ -38,15 +38,15 @@ const DATE_MONTH_DOTTED_ABBREVIATION = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|s
 const DATE_MONTH_TOKEN_PATTERN = '(?:' + DATE_MONTH_PATTERN + '|' + DATE_MONTH_DOTTED_ABBREVIATION + ')';
 const DATE_MONTH_END = '(?=$|[^\\p{L}\\p{N}\\p{M}_])';
 const NUMERIC_RANGE_SEPARATOR = '(?:[-‐‑‒−–—－/⁄:]|…|‥|\\.{2,})';
+const NUMERIC_RANGE_UNIT_TOKEN = '(?:\\s*[%€$£]|\\s+(?:[eE][uU][rR][oO][sS]?|[dD][oO][lL][lL][aA][rR][sS]?|[pP][oO][uU][nN][dD][sS]?|[pP][eE][rR][cC][eE][nN][tT][sS]?))';
 function numericRangeEndpoint_(before, after) {
   const space = '\\s*';
   const gap = '\\s+';
-  const unit = '(?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?|\\s+[pP][eE][rR][cC][eE][nN][tT][sS]?)?';
+  const unit = '(?:' + NUMERIC_RANGE_UNIT_TOKEN + ')?';
   const qualifier = '(?:\\s+[oO][fF][fF])?';
   const to = '[tT][oO]';
   const and = '[aA][nN][dD]';
   const between = '[bB][eE][tT][wW][eE][eE][nN]';
-  const from = '[fF][rR][oO][mM]';
   const through = '[tT][hH][rR][oO][uU][gG][hH]';
   const up = '[uU][pP]';
   const digit = '\\p{Nd}';
@@ -66,14 +66,12 @@ function numericRangeEndpoint_(before, after) {
       new RegExp('\\b' + between + space + currency + '$', 'u').test(before) ||
     new RegExp('\\b' + between + gap + amount + qualifier + gap + and + gap + currency + '$', 'u').test(before) ||
     new RegExp('^' + unit + qualifier + gap + through + gap + nextAmount, 'u').test(after) &&
-      !datedRange.test(after) &&
-      new RegExp('\\b' + from + space + currency + '$', 'u').test(before) ||
-    new RegExp('\\b' + from + gap + amount + qualifier + gap + through + gap + currency + '$', 'u').test(before) &&
+      !datedRange.test(after) ||
+    new RegExp(amount + qualifier + gap + through + gap + currency + '$', 'u').test(before) &&
       !dateMonthFollows_(after) ||
     new RegExp('^' + unit + qualifier + gap + up + gap + to + gap + nextAmount, 'u').test(after) &&
-      !datedRange.test(after) &&
-      new RegExp('\\b' + from + space + currency + '$', 'u').test(before) ||
-    new RegExp('\\b' + from + gap + amount + qualifier + gap + up + gap + to + gap + currency + '$', 'u').test(before) &&
+      !datedRange.test(after) ||
+    new RegExp(amount + qualifier + gap + up + gap + to + gap + currency + '$', 'u').test(before) &&
       !dateMonthFollows_(after) ||
     new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])' + up + gap + to + gap + currency + '$', 'u').test(before);
 }
@@ -254,7 +252,7 @@ function deterministicCandidates_(message) {
   const source = candidateSource_(message);
   const codes = [];
   source.spans.forEach(function (text) {
-    const re = /(?:^|[^\p{L}\p{N}\p{M}_])(?:coupon\s+code|promo(?:tional)?\s+code|discount\s+code|use\s+(?:the\s+)?code|codice\s+sconto|codice(?!\s+sconto(?:\s|[:=]|$)))(?:\s*[:=]\s*|\s+)(\S+)/giu;
+    const re = /(?:^|[^\p{L}\p{N}\p{M}_])(?:coupon\s+code|promo(?:tional)?\s+code|discount\s+code|use\s+(?:the\s+)?code|codice\s+sconto|codice(?!\s+sconto(?:\s|[:=]|$)))(?:\s*[:=]\s*|\s+(?:is\b\s+)?)(\S+)/giu;
     let match;
     while ((match = re.exec(text))) {
       const code = codeLexemes_(match[1])[0];
@@ -352,6 +350,7 @@ function fieldOccurrences_(field, value, source) {
   const boundary = /[\p{L}\p{N}\p{M}_]/u;
   const numericField = ['discountValue', 'minimumSpend'].indexOf(field) >= 0 && /\p{Nd}/u.test(value);
   const rangeContext = 96;
+  const rangeUnit = '(?:' + NUMERIC_RANGE_UNIT_TOKEN + ')?';
   return rawOccurrences_(value, source, true).filter(function (occurrence) {
     const before = adjacentCodePoint_(source, occurrence.start, true);
     const after = adjacentCodePoint_(source, occurrence.end, false);
@@ -361,10 +360,13 @@ function fieldOccurrences_(field, value, source) {
     const afterText = source.slice(occurrence.end, afterEnd);
     const truncatedBefore = beforeStart > 0;
     const truncatedAfter = afterEnd < source.length;
-    const truncatedBetween = truncatedBefore && new RegExp('(?:[€$£]\\s*)?[\\p{Nd}](?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?)?(?:\\s+[oO][fF][fF])?\\s+[aA][nN][dD]\\s+(?:[€$£]\\s*)?$', 'u').test(beforeText);
+    const truncatedBetween = truncatedBefore && new RegExp('(?:[€$£]\\s*)?[\\p{Nd}]' + rangeUnit +
+      '(?:\\s+[oO][fF][fF])?\\s+[aA][nN][dD]\\s+(?:[€$£]\\s*)?$', 'u').test(beforeText);
     const truncatedDelimiter = truncatedBefore && new RegExp('\\s*(?:' + NUMERIC_RANGE_SEPARATOR + '\\s*|[tT][oO]\\s+|[aA][nN][dD]\\s+|[tT][hH][rR][oO][uU][gG][hH]\\s+|[uU][pP]\\s+[tT][oO]\\s+)(?:[€$£]\\s*)?$', 'u').test(beforeText);
     const truncatedWhitespace = truncatedBefore && /^\s*(?:[€$£]\s*)?$/.test(beforeText);
-    const truncatedFollowing = truncatedAfter && new RegExp('^(?:\\s|(?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?)(?:\\s+[oO][fF][fF])?(?:\\s+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?)*(?:' + NUMERIC_RANGE_SEPARATOR + '\\s*)?(?:[€$£]\\s*)?$', 'u').test(afterText);
+    const truncatedFollowing = truncatedAfter && new RegExp('^(?:\\s|(?:' + NUMERIC_RANGE_UNIT_TOKEN +
+      ')(?:\\s+[oO][fF][fF])?(?:\\s+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?)*(?:' +
+      NUMERIC_RANGE_SEPARATOR + '\\s*)?(?:[€$£]\\s*)?$', 'u').test(afterText);
     const dateComponent = numericField && (dateMonthFollows_(source.slice(occurrence.end)) || dateMonthPrecedes_(beforeText) || dateMonthDayPrecedes_(beforeText));
     return utf16Boundary_(source, occurrence.start) && utf16Boundary_(source, occurrence.end) &&
       (!before || !boundary.test(before)) && (!after || !boundary.test(after)) &&

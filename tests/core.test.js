@@ -263,6 +263,13 @@ test('coupon introducers are case-insensitive and never truncate the code token'
   for (const prefix of ['Coupon code', 'COUPON CODE', 'Use the code', 'Codice sconto']) {
     assert.equal(ctx.deterministicCandidates_({text: prefix + ': MiXeD20'})[0].code, 'MiXeD20');
   }
+  for (const source of ['Coupon code is MiXeD20', 'COUPON CODE IS MiXeD20', 'Use the code is <SAVE20>']) {
+    assert.equal(ctx.deterministicCandidates_({text: source})[0].code, source.includes('SAVE20') ? 'SAVE20' : 'MiXeD20', source);
+  }
+  assert.equal(ctx.deterministicCandidates_({text: 'Coupon code isomorphic'})[0].code, 'isomorphic');
+  for (const source of ['Coupon codeis SAVE20', 'coupon code-SAVE20', 'Coupon code is SAVE+20']) {
+    assert.equal(ctx.deterministicCandidates_({text: source}).length, 0, source);
+  }
   assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + 'X'.repeat(41)}).length, 0);
   assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + 'X'.repeat(39) + '-LONG'}).length, 0);
   assert.equal(ctx.deterministicCandidates_({text: 'Coupon code SAVE20é'})[0].code, 'SAVE20é');
@@ -1217,7 +1224,14 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
   const wordRange = ctx.normalizeCandidate_({...raw, discountType: 'percent', evidence: {...raw.evidence, discountType: {quote: 'percent'}}},
     {text: 'Shop SAVE20 discounts between 20 percent and 30 percent', images: [], incomplete: false});
   assert.equal(wordRange.discountValue, ''); assert.equal(wordRange.review, true);
-  for (const source of ['Shop SAVE20 20%', 'Shop SAVE20 20 euros']) {
+  for (const [discountType, source] of [['dollars', 'Shop SAVE20 discounts 20 dollars to 30 dollars'], ['pounds', 'Shop SAVE20 discounts 20 pounds to 30 pounds']]) {
+    const currencyWordRange = ctx.normalizeCandidate_({...raw, discountType,
+      evidence: {...raw.evidence, discountType: {quote: discountType}}}, {text: source, images: [], incomplete: false});
+    assert.equal(currencyWordRange.discountType, discountType, source);
+    assert.equal(currencyWordRange.discountValue, '', source);
+    assert.equal(currencyWordRange.review, true, source);
+  }
+  for (const source of ['Shop SAVE20 20%', 'Shop SAVE20 20 euros', 'Shop SAVE20 20 dollars', 'Shop SAVE20 20 pounds']) {
     assert.equal(ctx.normalizeCandidate_(raw, {text: source, images: [], incomplete: false}).discountValue, '20', source);
   }
   const spend = {merchant: 'Shop', code: 'SAVE20', minimumSpend: '20', confidence: 'high', review: false,
@@ -1230,7 +1244,9 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     data[field] = value; data.evidence[field] = {quote: value};
     return ctx.normalizeCandidate_(data, {text: 'Shop SAVE20 ' + source, images: [], incomplete: false})[field];
   }
-  for (const source of ['20‐30%', '20‑30%', '20‒30%', '20−30%', '20⁄30%', '20…30%', '20‥30%', '20..30%', '20...30%', '20 to 30%', '20 To 30%', '20 TO 30%', 'between 20 and 30%', 'BETWEEN 20 AND 30%', 'between 20 percent and 30 percent', 'BETWEEN 20 PERCENTS AND 30 PERCENTS',
+  for (const source of ['20‐30%', '20‑30%', '20‒30%', '20−30%', '20⁄30%', '20…30%', '20‥30%', '20..30%', '20...30%', '20 to 30%', '20 To 30%', '20 TO 30%', 'between 20 and 30%', 'BETWEEN 20 AND 30%', 'between 20 percent and 30 percent', 'BETWEEN 20 PERCENTS AND 30 PERCENTS', '20 dollars to 30 dollars', '20 pounds to 30 pounds',
+    'between 20 dollars and 30 dollars', '20 dollars through 30 dollars', '20 pounds up to 30 pounds',
+    'from 20 dollars through 30 dollars', 'from 20 pounds up to 30 pounds',
     '20% to 30%', '20% off to 30% off', '20% OFF TO 30% OFF', 'between 20% oFf and 30% oFf', '€20 to €30',
     '€20 off to €30 off', '20 euros TO 30 euros', '€ 20 to € 30', '€ 20-€ 30', 'between € 20 and € 30',
     '20 % to € 30', 'from 20% through 30%', 'FROM 20% OFF THROUGH 30% OFF', 'from € 20 through € 30',
@@ -1332,7 +1348,8 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
   for (const source of ['20' + ' '.repeat(97) + '-30%', '20' + ' '.repeat(97) + '‑30%', '20' + ' '.repeat(97) + '⁄30%',
     '20…' + ' '.repeat(97) + '30%', '20‥' + ' '.repeat(97) + '30%', '20..' + ' '.repeat(97) + '30%', '20...' + ' '.repeat(97) + '30%',
     '20' + ' '.repeat(97) + '…30%', '20' + ' '.repeat(97) + '‥30%', '20' + ' '.repeat(97) + '..30%', '20' + ' '.repeat(97) + '...30%', '20%' + ' '.repeat(97) + 'to 30%',
-    '20% OFF TO' + ' '.repeat(97) + '30% OFF', 'BETWEEN' + ' '.repeat(97) + '20% OFF AND 30% OFF',
+    '20% OFF TO' + ' '.repeat(97) + '30% OFF', '20 dollars off to' + ' '.repeat(97) + '30 dollars off',
+    '20 pounds off to' + ' '.repeat(97) + '30 pounds off', 'BETWEEN' + ' '.repeat(97) + '20% OFF AND 30% OFF',
     'between 20%' + ' '.repeat(97) + 'and 30%', 'from 20% through' + ' '.repeat(97) + '30%',
     'from 20% through' + ' '.repeat(97) + '€30', 'from 20\u00a0% up\u202fto' + '\u00a0'.repeat(97) + '30\u00a0%']) {
     for (const field of ['discountValue', 'minimumSpend']) {
