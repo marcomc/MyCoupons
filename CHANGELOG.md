@@ -84,4 +84,6 @@
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.
+- Safe spreadsheet and nested Gmail-label resource setup, preserved coupon
+  headers, and a private per-message journal for retry and deduplication state.
 - Local unit tests and Apps Script syntax and owner-only manifest checks.
