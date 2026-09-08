@@ -64,7 +64,7 @@ test('reads bounded Gmail pages and preserves independent canonical MIME represe
   const calls = installGmail(ctx, options => {
     assert.equal(JSON.stringify(options.labelIds), JSON.stringify([label.id]));
     assert.equal(options.maxResults, 50);
-    assert.equal(options.q, 'after:2026/05/22');
+    assert.equal(options.q, 'after:2026/05/21');
     assert.equal(options.pageToken, undefined);
     return {messages: [{id: 'abc123'}, {id: 'deadbeef'}]};
   }, id => id === 'abc123' ? alternativeMessage(id) : {

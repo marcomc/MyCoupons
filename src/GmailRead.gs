@@ -17,7 +17,9 @@ function readGmailMessages_(label, recoveryStart, journalSheet) {
   const result = {messages: [], errors: [], truncated: false};
   const seen = Object.create(null);
   const seenPageTokens = Object.create(null);
-  const query = 'after:' + Utilities.formatDate(new Date(recoveryStart), MC.defaults.timeZone, 'yyyy/MM/dd');
+  // Gmail's date search boundary is provider-defined; include the prior local
+  // day and apply the exact recovery timestamp below before returning a message.
+  const query = 'after:' + Utilities.formatDate(new Date(recoveryStart - 86400000), MC.defaults.timeZone, 'yyyy/MM/dd');
   let pageToken = '';
   let pages = 0;
   do {
