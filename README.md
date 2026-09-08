@@ -39,7 +39,8 @@ The example configuration contains product defaults only.
   normalizing proposed fields, including notes, against quoted source text.
   Unsubstantiated fields become empty; code evidence preserves exact spelling
   and complete tokens, including punctuation, and numeric values cannot be range,
-  ratio, Unicode-minus, or supported word-delimited interval endpoints, including
+  ratio, Unicode hyphen/minus/dash or fraction-slash endpoints, or supported
+  word-delimited interval endpoints, including
   Unicode decimal digits, units, currency, the range qualifier `off`, and
   Unicode-space-separated symbols. Oversized
   structured values become empty; bounded notes

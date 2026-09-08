@@ -46,7 +46,7 @@ function numericRangeEndpoint_(before, after) {
   const month = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|gen(?:naio)?|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)';
   const currency = '(?:[€$£]\\s*)?';
   const amount = currency + digit + '+(?:' + decimal + digit + '+)?' + unit;
-  const separator = '[-−–—/:]';
+  const separator = '[-‐‑−–—/⁄:]';
   const nextAmount = currency + digit;
   const datedRange = new RegExp('^' + unit + qualifier + gap + '(?:' + through + '|' + up + gap + to + ')' + gap +
     currency + digit + '+(?:' + decimal + digit + '+)?' + gap + month + '\\b', 'iu');
@@ -318,7 +318,7 @@ function fieldOccurrences_(field, value, source) {
     return rawOccurrences_(value, source, false).filter(function (occurrence) {
       const before = adjacentNonSpaceCodePoint_(source, occurrence.start, true);
       const after = adjacentNonSpaceCodePoint_(source, occurrence.end, false);
-      return source === value || value === '%' && /\p{Nd}/u.test(before) || value !== '%' && /\p{Nd}/u.test(after);
+      return value === '%' ? /\p{Nd}/u.test(before) : source === value || /\p{Nd}/u.test(after);
     });
   }
   const boundary = /[\p{L}\p{N}\p{M}_]/u;
@@ -334,7 +334,7 @@ function fieldOccurrences_(field, value, source) {
     const truncatedBefore = beforeStart > 0;
     const truncatedAfter = afterEnd < source.length;
     const truncatedBetween = truncatedBefore && new RegExp('(?:[€$£]\\s*)?[\\p{Nd}](?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?)?(?:\\s+[oO][fF][fF])?\\s+[aA][nN][dD]\\s+(?:[€$£]\\s*)?$', 'u').test(beforeText);
-    const truncatedDelimiter = truncatedBefore && /\s*(?:[-−–—/:]\s*|[tT][oO]\s+|[aA][nN][dD]\s+|[tT][hH][rR][oO][uU][gG][hH]\s+|[uU][pP]\s+[tT][oO]\s+)(?:[€$£]\s*)?$/.test(beforeText);
+    const truncatedDelimiter = truncatedBefore && /\s*(?:[-‐‑−–—/⁄:]\s*|[tT][oO]\s+|[aA][nN][dD]\s+|[tT][hH][rR][oO][uU][gG][hH]\s+|[uU][pP]\s+[tT][oO]\s+)(?:[€$£]\s*)?$/.test(beforeText);
     const truncatedWhitespace = truncatedBefore && /^\s*(?:[€$£]\s*)?$/.test(beforeText);
     const truncatedFollowing = truncatedAfter && new RegExp('^(?:\\s|(?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?)(?:\\s+[oO][fF][fF])?(?:\\s+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?)*(?:[€$£]\\s*)?$', 'u').test(afterText);
     const dateComponent = numericField && dateMonthFollows_(source.slice(occurrence.end));
@@ -418,7 +418,7 @@ function sourceId_(value) {
   const authority = /^mail\.google\.com(?::(\d+))?$/i.exec(link[1]);
   if (!authority || authority[1] !== undefined && Number(authority[1]) !== 443 ||
     !/^\/mail\/(?:u\/\d+\/)?$/.test(link[2] || '')) return '';
-  if (link[4] !== undefined) {
+  if (link[4]) {
     const fragment = /^(?:all|inbox|search\/[^/#]+)\/([a-f0-9]+)$/.exec(link[4]);
     return fragment ? fragment[1] : '';
   }

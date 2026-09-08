@@ -38,11 +38,11 @@
 - Qualified numeric ranges recognize only the supported `off` marker; rendered
   image elements split text/evidence spans, and unmodeled visible inputs force
   review without projecting their attributes as text.
-- Hidden HTML inputs split source/evidence spans while remaining supported
-  rendered-state coverage.
-- Unicode decimal range endpoints cannot ground numeric facts; unmodeled canvas
-  fallback forces review; sourceless-image alternative text is extracted; and each
-  factual field must occur inside its located source quote.
+- Hidden HTML inputs split source/evidence spans without forcing incomplete
+  coverage.
+- Unicode decimal range and ratio endpoints cannot ground numeric facts; unmodeled
+  canvas fallback forces review; sourceless-image alternative text is extracted;
+  and each factual field must occur inside its located source quote.
 - Active fallback surfaces and unmodeled text controls preserve incomplete HTML
   coverage; image evidence requires an inspected record; and discount symbols
   support ASCII-separated numeric amounts without admitting range endpoints.
