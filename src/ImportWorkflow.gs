@@ -44,11 +44,11 @@ function processCouponMessage_(state, message) {
         rowNumber = journal.rowNumbers[known];
         if (!rowNumber) fail_('STATE');
       } else {
-        journal.dedupeKeys.push(key);
-        journal.candidateKeys.push(key);
         const row = couponRow_(message, candidate, key);
         const prior = findCouponRowByDedupeKey_(state.couponSheet, key);
         rowNumber = prior || appendCouponRow_(state.couponSheet, row);
+        journal.dedupeKeys.push(key);
+        journal.candidateKeys.push(key);
         journal.rowNumbers.push(rowNumber);
       }
       const status = Object.create(null); status.status = candidate.review ? 'review' : 'confirmed';
