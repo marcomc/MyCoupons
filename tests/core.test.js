@@ -685,6 +685,71 @@ test('rendered images split text and factual evidence spans', () => {
   assert.deepEqual(Array.from(ctx.remoteImageUrls_(compatible)), ['https://shop.com/offer.jpg']);
 });
 
+test('canvas and sourceless image alternatives preserve rendered-source coverage', () => {
+  const {ctx} = harness();
+  const canvas = '<canvas>Shop Coupon code HIDDEN20<img src="https://shop.com/hidden.jpg"></canvas><p>Shop Coupon code REAL20</p>';
+  const canvasContent = ctx.htmlContent_(canvas);
+  assert.equal(canvasContent.incomplete, true); assert.ok(!canvasContent.text.includes('HIDDEN20'));
+  assert.deepEqual(Array.from(ctx.remoteImageUrls_(canvas)), []);
+  const hidden = ctx.normalizeCandidate_({merchant: 'Shop', code: 'HIDDEN20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'HIDDEN20'}}}, {html: canvas, images: [], incomplete: false});
+  assert.equal(hidden.code, ''); assert.equal(hidden.review, true);
+  const visible = ctx.normalizeCandidate_({merchant: 'Shop', code: 'REAL20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'REAL20'}}}, {html: canvas, images: [], incomplete: false});
+  assert.equal(visible.code, 'REAL20'); assert.equal(visible.review, true);
+  for (const html of ['<template><canvas>HIDDEN</canvas></template><p>Shop REAL20</p>',
+    '<div hidden><canvas>HIDDEN</canvas></div><p>Shop REAL20</p>', '<dialog><canvas>HIDDEN</canvas></dialog><p>Shop REAL20</p>',
+    '<div popover><canvas>HIDDEN</canvas></div><p>Shop REAL20</p>',
+    '<details><summary>Shop</summary><canvas>HIDDEN</canvas></details><p>REAL20</p>']) {
+    assert.equal(ctx.htmlContent_(html).incomplete, false, html);
+  }
+  for (const image of ['<img alt="Coupon code ALT20">', '<img src="" alt="Coupon code ALT20">',
+    '<img src=" \t" alt="Coupon code ALT20">', '<img data-src="https://shop.com/offer.jpg" alt="Coupon code ALT20">']) {
+    const html = '<p>Shop</p>' + image;
+    const content = ctx.htmlContent_(html);
+    assert.ok(content.text.includes('ALT20'), image); assert.ok(content.evidenceSpans.some(function (span) { return span.includes('ALT20'); }), image);
+    assert.deepEqual(Array.from(ctx.remoteImageUrls_(html)), [], image);
+    assert.equal(ctx.normalizeCandidate_({merchant: 'Shop', code: 'ALT20', confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote: 'ALT20'}}}, {html, images: [], incomplete: false}).review, false, image);
+  }
+  const realImage = '<p>Shop</p><img src="https://shop.com/offer.jpg" alt="Coupon code ALT20">';
+  assert.ok(!ctx.htmlText_(realImage).includes('ALT20'));
+  assert.deepEqual(Array.from(ctx.remoteImageUrls_(realImage)), ['https://shop.com/offer.jpg']);
+  assert.ok(!ctx.deterministicCandidates_({html: 'Coupon code SAVE<img alt="20">'}).some(function (item) { return item.code === 'SAVE20'; }));
+  assert.ok(!ctx.deterministicCandidates_({html: 'Coupon code SAVE<img alt="X">20'}).some(function (item) { return item.code === 'SAVE20'; }));
+});
+
+test('factual fields bind to the same source occurrence as their quote', () => {
+  const {ctx} = harness();
+  const raw = {merchant: 'Art', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Art Shop'}, code: {quote: 'SAVE20'}}};
+  const split = 'Cart Shop code SAVE20 today. Visit Art exhibition.';
+  const rejected = ctx.normalizeCandidate_(raw, {text: split, images: [], incomplete: false});
+  assert.equal(rejected.merchant, ''); assert.equal(rejected.code, 'SAVE20'); assert.equal(rejected.review, true);
+  const accepted = ctx.normalizeCandidate_(raw, {text: split + ' Art Shop announces a sale.', images: [], incomplete: false});
+  assert.equal(accepted.merchant, 'Art'); assert.equal(accepted.review, false);
+  const whitespace = ctx.normalizeCandidate_({merchant: 'Shop Outlet', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'SHOP   OUTLET'}, code: {quote: 'SAVE20'}}},
+  {text: 'Shop Outlet coupon code SAVE20', images: [], incomplete: false});
+  assert.equal(whitespace.review, false);
+});
+
+test('quote occurrence binding scans disjoint evidence intervals linearly', () => {
+  const {ctx} = harness();
+  const source = 'a b '.repeat(20000);
+  const started = Date.now();
+  assert.equal(ctx.textEvidenceGrounded_('merchant', 'b', 'a', source), false);
+  assert.ok(Date.now() - started < 1000);
+});
+
+test('numeric quote occurrence binding bounds range context linearly', () => {
+  const {ctx} = harness();
+  const source = '20% off x '.repeat(20000);
+  const started = Date.now();
+  assert.equal(ctx.textEvidenceGrounded_('discountValue', '20', '20%', source), true);
+  assert.ok(Date.now() - started < 1000);
+});
+
 test('remaining rendered blocks and non-rendered controls preserve evidence boundaries', () => {
   const {ctx} = harness();
   const blocks = [
@@ -1021,8 +1086,9 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     data[field] = value; data.evidence[field] = {quote: value};
     return ctx.normalizeCandidate_(data, {text: 'Shop SAVE20 ' + source, images: [], incomplete: false})[field];
   }
-  for (const source of ['20−30%', '20 to 30%', 'between 20 and 30%', '20% to 30%', '20% off to 30% off',
-    '20% OFF to 30% OFF', 'between 20% oFf and 30% oFf', '€20 to €30', '€20 off to €30 off', '20 euros to 30 euros',
+  for (const source of ['20−30%', '20 to 30%', '20 To 30%', '20 TO 30%', 'between 20 and 30%', 'BETWEEN 20 AND 30%',
+    '20% to 30%', '20% off to 30% off', '20% OFF TO 30% OFF', 'between 20% oFf and 30% oFf', '€20 to €30',
+    '€20 off to €30 off', '20 euros TO 30 euros',
     '20 euros off to 30 euros off', '20%-30%', '€20-€30', 'between €20 and €30']) {
     for (const field of ['discountValue', 'minimumSpend']) {
       for (const endpoint of ['20', '30']) {
@@ -1042,6 +1108,34 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
   assert.equal(standaloneCandidate.minimumSpend, '20'); assert.equal(standaloneCandidate.review, false);
   for (const source of ['20 coffee to 30 tea', '20 offer to 30 people', '20 percentage to 30 percentage']) {
     for (const field of ['discountValue', 'minimumSpend']) assert.equal(numericCandidate(field, '20', source), '20', source);
+  }
+  for (const source of ['20' + ' '.repeat(97) + '-30%', '20%' + ' '.repeat(97) + 'to 30%',
+    '20% OFF TO' + ' '.repeat(97) + '30% OFF', 'BETWEEN' + ' '.repeat(97) + '20% OFF AND 30% OFF',
+    'between 20%' + ' '.repeat(97) + 'and 30%']) {
+    for (const field of ['discountValue', 'minimumSpend']) {
+      for (const endpoint of ['20', '30']) assert.equal(numericCandidate(field, endpoint, source), '', source);
+    }
+  }
+  for (const [low, high, fraction] of [['٢٠', '٣٠', '٥'], ['２０', '３０', '５'], ['𝟚𝟘', '𝟛𝟘', '𝟝']]) {
+    for (const source of [low + '-' + high + '%', low + '−' + high + '%', low + '/' + high, low + ':' + high,
+      low + '% off to ' + high + '% off', 'between ' + low + '% off and ' + high + '% off',
+      '€' + low + ' to €' + high, low + ' euros to ' + high + ' euros']) {
+      for (const field of ['discountValue', 'minimumSpend']) {
+        for (const endpoint of [low, high]) {
+          assert.equal(ctx.fieldInQuote_(field, endpoint, source), false, source);
+          assert.equal(numericCandidate(field, endpoint, source), '', source);
+        }
+      }
+    }
+    for (const source of [low + '% off today', '€' + low, low + ' euros', low + ' coffee to ' + high + ' tea']) {
+      for (const field of ['discountValue', 'minimumSpend']) assert.equal(numericCandidate(field, low, source), low, source);
+    }
+    for (const separator of ['.', ',', '٫', '．']) {
+      for (const value of [low, fraction]) {
+        const source = low + separator + fraction + '-' + high + '%';
+        assert.equal(ctx.fieldInQuote_('discountValue', value, source), false, source + ': ' + value);
+      }
+    }
   }
 });
 

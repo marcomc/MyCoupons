@@ -38,6 +38,9 @@
 - Qualified numeric ranges recognize only the supported `off` marker; rendered
   image elements split text/evidence spans, and unmodeled visible inputs force
   review without projecting their attributes as text.
+- Unicode decimal range endpoints cannot ground numeric facts; unmodeled canvas
+  fallback forces review; sourceless-image alternative text is extracted; and each
+  factual field must occur inside its located source quote.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

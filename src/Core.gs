@@ -34,16 +34,21 @@ function numericRangeEndpoint_(before, after) {
   const space = '[\\t\\n\\f\\r ]*';
   const unit = '(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)?';
   const qualifier = '(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?';
-  const amount = '[€$£]?\\d+(?:[.,]\\d+)?' + unit;
+  const to = '[tT][oO]';
+  const and = '[aA][nN][dD]';
+  const between = '[bB][eE][tT][wW][eE][eE][nN]';
+  const digit = '\\p{Nd}';
+  const decimal = '[.,٫．]';
+  const amount = '[€$£]?' + digit + '+(?:' + decimal + digit + '+)?' + unit;
   const separator = '[-−–—/:]';
-  const nextAmount = '[€$£]?\\d';
+  const nextAmount = '[€$£]?' + digit;
   return new RegExp('^' + unit + space + separator + space + nextAmount, 'u').test(after) ||
     new RegExp(amount + space + separator + space + '[€$£]?$', 'u').test(before) ||
-    new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+to[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) ||
-    new RegExp(amount + qualifier + '[\\t\\n\\f\\r ]+to[\\t\\n\\f\\r ]+[€$£]?$', 'u').test(before) ||
-    new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+and[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) &&
-      new RegExp('\\bbetween[\\t\\n\\f\\r ]*[€$£]?$', 'u').test(before) ||
-    new RegExp('\\bbetween[\\t\\n\\f\\r ]+' + amount + qualifier + '[\\t\\n\\f\\r ]+and[\\t\\n\\f\\r ]+[€$£]?$', 'u').test(before);
+    new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+' + to + '[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) ||
+    new RegExp(amount + qualifier + '[\\t\\n\\f\\r ]+' + to + '[\\t\\n\\f\\r ]+[€$£]?$', 'u').test(before) ||
+    new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+' + and + '[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) &&
+      new RegExp('\\b' + between + '[\\t\\n\\f\\r ]*[€$£]?$', 'u').test(before) ||
+    new RegExp('\\b' + between + '[\\t\\n\\f\\r ]+' + amount + qualifier + '[\\t\\n\\f\\r ]+' + and + '[\\t\\n\\f\\r ]+[€$£]?$', 'u').test(before);
 }
 function htmlContent_(html) {
   const root = MC_HTML.parse(String(html), {scriptingEnabled: false});
@@ -65,15 +70,20 @@ function htmlContent_(html) {
       flushEvidence();
     } else if (evidence && !evidence.endsWith('\n')) evidence += '\n';
   }
+  function replacementBoundary() {
+    flushEvidence();
+    pendingImageBoundary = pendingImageBoundary || pieces.length && !pieces[pieces.length - 1].endsWith('\n');
+  }
+  function appendProjectedText(value) {
+    if (pendingImageBoundary) { pieces.push('\n'); pendingImageBoundary = false; }
+    pieces.push(value); evidence += value;
+  }
   while (stack.length) {
     const entry = stack.pop();
     if (entry.exit) { newline(true); continue; }
     const node = entry.node;
     if (node.nodeName === '#text') {
-      if (!entry.suppressed && node.value) {
-        if (pendingImageBoundary) { pieces.push('\n'); pendingImageBoundary = false; }
-        pieces.push(node.value); evidence += node.value;
-      }
+      if (!entry.suppressed && node.value) appendProjectedText(node.value);
       continue;
     }
     const tag = node.tagName || '';
@@ -93,16 +103,27 @@ function htmlContent_(html) {
     if (isHtml && tag === 'input' && !contextSuppressed && !nodeAttrs.some(function (attr) {
       return attr.name === 'type' && String(attr.value).toLowerCase() === 'hidden';
     })) incomplete = true;
-    const suppressed = contextSuppressed || isHtml && /^(?:select|optgroup|option)$/.test(tag);
+    const activeCanvas = isHtml && tag === 'canvas' && !contextSuppressed;
+    if (activeCanvas) incomplete = true;
+    const suppressed = contextSuppressed || activeCanvas || isHtml && /^(?:select|optgroup|option)$/.test(tag);
     const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|caption|center|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|hr|legend|li|listing|main|menu|nav|ol|p|plaintext|pre|search|section|summary|table|tbody|td|tfoot|th|thead|tr|ul|xmp)$/.test(tag);
     if (block || !suppressed && isHtml && tag === 'br') newline(block);
     if (block) stack.push({exit: true});
+    if (activeCanvas) replacementBoundary();
     if (!suppressed && isHtml && tag === 'img') {
-      flushEvidence();
-      pendingImageBoundary = pendingImageBoundary || pieces.length && !pieces[pieces.length - 1].endsWith('\n');
+      replacementBoundary();
       const imageAttrs = Object.create(null);
       nodeAttrs.forEach(function (attr) { imageAttrs[attr.name] = attr.value; });
       images.push(imageAttrs);
+      const hasSrc = nodeAttrs.some(function (attr) {
+        return attr.name === 'src' && /[^\t\n\f\r ]/.test(String(attr.value));
+      });
+      const alt = nodeAttrs.find(function (attr) { return attr.name === 'alt'; });
+      if (!hasSrc && alt && /\S/u.test(String(alt.value))) {
+        appendProjectedText(alt.value);
+        flushEvidence();
+        pendingImageBoundary = pieces.length && !pieces[pieces.length - 1].endsWith('\n');
+      }
     }
     // Suppressed and inert subtrees still contribute unsupported-namespace coverage.
     const children = node.content ? node.content.childNodes : node.childNodes || [];
@@ -187,49 +208,108 @@ function deterministicCandidates_(message) {
   });
   return codes.slice(0, MC.maxCandidates);
 }
-function fieldInQuote_(field, value, quote) {
-  if (!wellFormedUtf16_(value) || !wellFormedUtf16_(quote)) return false;
-  if (field === 'code') return codeLexemes_(quote).indexOf(value) >= 0;
-  if (field === 'discountType' && /^[%€$£]$/.test(value)) {
-    let symbol = quote.indexOf(value);
-    while (symbol >= 0) {
-      const before = symbol > 0 ? quote.charAt(symbol - 1) : '';
-      const after = symbol + 1 < quote.length ? quote.charAt(symbol + 1) : '';
-      if (quote === value || (value === '%' && /\d/.test(before)) || (value !== '%' && /\d/.test(after))) return true;
-      symbol = quote.indexOf(value, symbol + 1);
-    }
-    return false;
+function rawOccurrences_(value, source, normalized) {
+  if (!wellFormedUtf16_(value) || !wellFormedUtf16_(source)) return [];
+  const query = normalized ? String(value).trim() : String(value);
+  if (!query) return [];
+  const pattern = normalized ? query.split(/\s+/).map(function (part) {
+    return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }).join('\\s+') : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(pattern, normalized ? 'giu' : 'gu');
+  const occurrences = [];
+  let match;
+  while ((match = re.exec(source))) {
+    occurrences.push({start: match.index, end: match.index + match[0].length});
+    if (!match[0]) re.lastIndex++;
   }
-  if (field === 'website') {
-    const urls = [];
-    const re = /(?:^|[\s"'([{<])(https:\/\/[^\s<>"']+)/gi;
-    let match;
-    while ((match = re.exec(quote))) urls.push(match[1]);
-    if (urls.indexOf(value) >= 0) return true;
-    // Only invalid authority suffixes are prose. Path/query punctuation can be identity.
-    if (!/^https:\/\/[a-z0-9.-]+(?::443)?$/i.test(value) || !safeUrl_(value)) return false;
-    return urls.some(function (url) {
-      return url.startsWith(value) && /^[.,;!?)\]}]+$/.test(url.slice(value.length)) && !safeUrl_(url);
+  return occurrences;
+}
+function adjacentCodePoint_(source, index, before) {
+  if (before) {
+    if (!index) return '';
+    const start = /[\udc00-\udfff]/.test(source.charAt(index - 1)) ? index - 2 : index - 1;
+    return String.fromCodePoint(source.codePointAt(start));
+  }
+  return index < source.length ? String.fromCodePoint(source.codePointAt(index)) : '';
+}
+function codeOccurrences_(value, source) {
+  const occurrences = [];
+  const re = /\S+/gu;
+  let match;
+  while ((match = re.exec(source))) {
+    let token = match[0];
+    let start = match.index;
+    if (/^(?:"[\s\S]*"|'[\s\S]*'|<[\s\S]*>)$/.test(token)) {
+      token = token.slice(1, -1); start++;
+    }
+    if (token === value) occurrences.push({start: start, end: start + token.length});
+  }
+  return occurrences;
+}
+function websiteOccurrences_(value, source) {
+  const occurrences = [];
+  const re = /(?:^|[\s"'([{<])(https:\/\/[^\s<>"']+)/gi;
+  let match;
+  while ((match = re.exec(source))) {
+    const url = match[1];
+    const start = match.index + match[0].length - url.length;
+    if (url === value) {
+      occurrences.push({start: start, end: start + url.length}); continue;
+    }
+    if (/^https:\/\/[a-z0-9.-]+(?::443)?$/i.test(value) && safeUrl_(value) &&
+      url.startsWith(value) && /^[.,;!?)\]}]+$/.test(url.slice(value.length)) && !safeUrl_(url)) {
+      occurrences.push({start: start, end: start + value.length});
+    }
+  }
+  return occurrences;
+}
+function fieldOccurrences_(field, value, source) {
+  if (!wellFormedUtf16_(value) || !wellFormedUtf16_(source)) return [];
+  if (field === 'code') return codeOccurrences_(value, source);
+  if (field === 'website') return websiteOccurrences_(value, source);
+  if (field === 'discountType' && /^[%€$£]$/.test(value)) {
+    return rawOccurrences_(value, source, false).filter(function (occurrence) {
+      const before = adjacentCodePoint_(source, occurrence.start, true);
+      const after = adjacentCodePoint_(source, occurrence.end, false);
+      return source === value || value === '%' && /\p{Nd}/u.test(before) || value !== '%' && /\p{Nd}/u.test(after);
     });
   }
-  const source = normalized_(quote);
-  const needle = normalized_(value);
-  let start = source.indexOf(needle);
-  while (start >= 0) {
-    const beforeStart = start > 0 && /[\udc00-\udfff]/.test(source.charAt(start - 1)) ? start - 2 : start - 1;
-    const before = beforeStart >= 0 ? String.fromCodePoint(source.codePointAt(beforeStart)) : '';
-    const afterStart = start + needle.length;
-    const after = afterStart < source.length ? String.fromCodePoint(source.codePointAt(afterStart)) : '';
-    const boundary = /[\p{L}\p{N}\p{M}_]/u;
-    const numericField = ['discountValue', 'minimumSpend'].indexOf(field) >= 0 && /\d/.test(needle);
-    const beforeText = source.slice(0, start);
-    const afterText = source.slice(afterStart);
-    const numericRange = numericField && numericRangeEndpoint_(beforeText, afterText);
-    if (utf16Boundary_(source, start) && utf16Boundary_(source, afterStart) &&
-      (!before || !boundary.test(before)) && (!after || !boundary.test(after)) && !numericRange &&
-      !( /\d$/.test(needle) && /^[.,]\d/.test(source.slice(afterStart, afterStart + 2))) &&
-      !( /^\d/.test(needle) && /\d[.,]$/.test(source.slice(Math.max(0, start - 2), start)))) return true;
-    start = source.indexOf(needle, start + 1);
+  const boundary = /[\p{L}\p{N}\p{M}_]/u;
+  const numericField = ['discountValue', 'minimumSpend'].indexOf(field) >= 0 && /\p{Nd}/u.test(value);
+  const rangeContext = 96;
+  return rawOccurrences_(value, source, true).filter(function (occurrence) {
+    const before = adjacentCodePoint_(source, occurrence.start, true);
+    const after = adjacentCodePoint_(source, occurrence.end, false);
+    const beforeStart = Math.max(0, occurrence.start - rangeContext);
+    const afterEnd = Math.min(source.length, occurrence.end + rangeContext);
+    const beforeText = source.slice(beforeStart, occurrence.start);
+    const afterText = source.slice(occurrence.end, afterEnd);
+    const truncatedBefore = beforeStart > 0;
+    const truncatedAfter = afterEnd < source.length;
+    const truncatedBetween = truncatedBefore && new RegExp('[\\p{Nd}](?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)?(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?[\\t\\n\\f\\r ]+[aA][nN][dD][\\t\\n\\f\\r ]+[€$£]?$', 'u').test(beforeText);
+    const truncatedDelimiter = truncatedBefore && /[\t\n\f\r ]*(?:[-−–—/:][\t\n\f\r ]*|[tT][oO][\t\n\f\r ]+|[aA][nN][dD][\t\n\f\r ]+)[€$£]?$/.test(beforeText);
+    const truncatedWhitespace = truncatedBefore && /^[\t\n\f\r ]*$/.test(beforeText);
+    const truncatedFollowing = truncatedAfter && new RegExp('^(?:[\\t\\n\\f\\r ]|(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?(?:[\\t\\n\\f\\r ]+(?:[tT][oO]|[aA][nN][dD]))?)*$', 'u').test(afterText);
+    return utf16Boundary_(source, occurrence.start) && utf16Boundary_(source, occurrence.end) &&
+      (!before || !boundary.test(before)) && (!after || !boundary.test(after)) &&
+      !(numericField && (numericRangeEndpoint_(beforeText, afterText) || truncatedBetween || truncatedDelimiter || truncatedWhitespace || truncatedFollowing)) &&
+      !(/\p{Nd}$/u.test(value) && /^[.,٫．]\p{Nd}/u.test(source.slice(occurrence.end, occurrence.end + 3))) &&
+      !(/^\p{Nd}/u.test(value) && /\p{Nd}[.,٫．]$/u.test(source.slice(Math.max(0, occurrence.start - 3), occurrence.start)));
+  });
+}
+function fieldInQuote_(field, value, quote) {
+  return fieldOccurrences_(field, value, quote).length > 0;
+}
+function textEvidenceGrounded_(field, value, quote, span) {
+  if (!wellFormedUtf16_(quote) || !wellFormedUtf16_(span)) return false;
+  const quoteOccurrences = rawOccurrences_(quote, span, field !== 'code' && field !== 'website');
+  const fieldOccurrences = fieldOccurrences_(field, value, span);
+  let fieldIndex = 0;
+  for (let quoteIndex = 0; quoteIndex < quoteOccurrences.length; quoteIndex++) {
+    const quoteOccurrence = quoteOccurrences[quoteIndex];
+    while (fieldIndex < fieldOccurrences.length && fieldOccurrences[fieldIndex].end <= quoteOccurrence.start) fieldIndex++;
+    while (fieldIndex < fieldOccurrences.length && fieldOccurrences[fieldIndex].start < quoteOccurrence.start) fieldIndex++;
+    if (fieldIndex < fieldOccurrences.length && fieldOccurrences[fieldIndex].end <= quoteOccurrence.end) return true;
   }
   return false;
 }
@@ -271,11 +351,7 @@ function normalizeCandidate_(raw, message) {
   MC.fields.filter(function (k) { return c[k]; }).forEach(function (k) {
     const ev = evidence[k];
     const groundedText = ev && typeof ev.quote === 'string' && ev.quote.trim().length > 0 &&
-      fieldInQuote_(k, c[k], ev.quote) && source.evidenceSpans.some(function (span) {
-        const containsQuote = k === 'code' || k === 'website' ? span.includes(ev.quote) :
-          normalized_(span).includes(normalized_(ev.quote));
-        return containsQuote && fieldInQuote_(k, c[k], span);
-      });
+      source.evidenceSpans.some(function (span) { return textEvidenceGrounded_(k, c[k], ev.quote, span); });
     const groundedImage = ev && Number.isInteger(ev.image) && ev.image >= 0 && ev.image < source.images.length &&
       source.images[ev.image] != null;
     if (!groundedText && !groundedImage) { c[k] = ''; c.review = true; }
