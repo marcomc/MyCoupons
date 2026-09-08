@@ -892,6 +892,13 @@ test('remaining rendered blocks and non-rendered controls preserve evidence boun
     assert.equal(ctx.normalizeCandidate_({merchant: 'Shop', code: 'REAL20', confidence: 'high', review: false,
       evidence: {merchant: {quote: 'Shop'}, code: {quote: 'REAL20'}}}, {html: input, images: [], incomplete: false}).review, true);
   }
+  const splitInput = '<p>Shop Coupon code SAVE<input value="x">20</p>';
+  const splitInputContent = ctx.htmlContent_(splitInput);
+  assert.ok(!splitInputContent.text.includes('SAVE20')); assert.ok(!splitInputContent.evidenceSpans.some(function (span) { return span.includes('SAVE20'); }));
+  assert.ok(!ctx.deterministicCandidates_({text: splitInputContent.text, images: [], incomplete: true}).some(function (candidate) { return candidate.code === 'SAVE20'; }));
+  const splitInputCandidate = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}}, {html: splitInput, images: [], incomplete: false});
+  assert.equal(splitInputCandidate.code, ''); assert.equal(splitInputCandidate.review, true);
   for (const html of [
     '<input type="hidden" value="SAVE30"><p>Shop REAL20</p>',
     '<input type="HIDDEN" value="SAVE30"><p>Shop REAL20</p>',
@@ -1202,7 +1209,7 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     data[field] = value; data.evidence[field] = {quote: value};
     return ctx.normalizeCandidate_(data, {text: 'Shop SAVE20 ' + source, images: [], incomplete: false})[field];
   }
-  for (const source of ['20‐30%', '20‑30%', '20−30%', '20⁄30%', '20…30%', '20‥30%', '20..30%', '20...30%', '20 to 30%', '20 To 30%', '20 TO 30%', 'between 20 and 30%', 'BETWEEN 20 AND 30%',
+  for (const source of ['20‐30%', '20‑30%', '20‒30%', '20−30%', '20⁄30%', '20…30%', '20‥30%', '20..30%', '20...30%', '20 to 30%', '20 To 30%', '20 TO 30%', 'between 20 and 30%', 'BETWEEN 20 AND 30%',
     '20% to 30%', '20% off to 30% off', '20% OFF TO 30% OFF', 'between 20% oFf and 30% oFf', '€20 to €30',
     '€20 off to €30 off', '20 euros TO 30 euros', '€ 20 to € 30', '€ 20-€ 30', 'between € 20 and € 30',
     '20 % to € 30', 'from 20% through 30%', 'FROM 20% OFF THROUGH 30% OFF', 'from € 20 through € 30',
@@ -1312,7 +1319,7 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     }
   }
   for (const [low, high, fraction] of [['٢٠', '٣٠', '٥'], ['２０', '３０', '５'], ['𝟚𝟘', '𝟛𝟘', '𝟝']]) {
-    for (const source of [low + '-' + high + '%', low + '‐' + high + '%', low + '‑' + high + '%', low + '−' + high + '%', low + '/' + high, low + '⁄' + high, low + ':' + high,
+    for (const source of [low + '-' + high + '%', low + '‐' + high + '%', low + '‑' + high + '%', low + '‒' + high + '%', low + '−' + high + '%', low + '－' + high + '％', low + '/' + high, low + '⁄' + high, low + ':' + high,
       low + '…' + high + '%', low + '‥' + high + '%', low + '..' + high + '%', low + '...' + high + '%',
       low + '% off to ' + high + '% off', 'between ' + low + '% off and ' + high + '% off',
       '€' + low + ' to €' + high, '€\t' + low + ' to €\n' + high, low + ' % off to ' + high + ' % off',

@@ -55,6 +55,8 @@
 - Isolated currency symbols cannot ground a discount type; ordinal and dotted
   month-first dates cannot ground numeric facts; a shared inspected image can
   evidence a discount pair only with review.
+- Figure-dash and fullwidth-hyphen ranges cannot ground numeric facts; visible
+  inputs split projected text and source-evidence spans.
 - Active fallback surfaces and unmodeled text controls preserve incomplete HTML
   coverage; image evidence requires an inspected record; and discount symbols
   support ASCII-separated numeric amounts without admitting range endpoints.

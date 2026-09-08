@@ -37,7 +37,7 @@ const DATE_MONTH_PATTERN = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|
 const DATE_MONTH_DOTTED_ABBREVIATION = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|gen|mag|giu|lug|ago|set|ott|dic)\\.';
 const DATE_MONTH_TOKEN_PATTERN = '(?:' + DATE_MONTH_PATTERN + '|' + DATE_MONTH_DOTTED_ABBREVIATION + ')';
 const DATE_MONTH_END = '(?=$|[^\\p{L}\\p{N}\\p{M}_])';
-const NUMERIC_RANGE_SEPARATOR = '(?:[-‐‑−–—/⁄:]|…|‥|\\.{2,})';
+const NUMERIC_RANGE_SEPARATOR = '(?:[-‐‑‒−–—－/⁄:]|…|‥|\\.{2,})';
 function numericRangeEndpoint_(before, after) {
   const space = '\\s*';
   const gap = '\\s+';
@@ -145,10 +145,11 @@ function htmlContent_(html) {
     const hiddenInput = isHtml && tag === 'input' && nodeAttrs.some(function (attr) {
       return attr.name === 'type' && String(attr.value).toLowerCase() === 'hidden';
     });
+    const visibleInput = isHtml && tag === 'input' && !contextSuppressed && !hiddenInput;
     if (!contextSuppressed && isHtml && (tag === 'picture' || (tag === 'img' || tag === 'source') &&
       nodeAttrs.some(function (attr) { return attr.name === 'srcset'; }))) incomplete = true;
     if (isHtml && tag === 'select' && !contextSuppressed) incomplete = true;
-    if (isHtml && tag === 'input' && !contextSuppressed && !hiddenInput) incomplete = true;
+    if (visibleInput) incomplete = true;
     const activeUnmodeled = isHtml && !contextSuppressed && /^(?:audio|canvas|embed|meter|object|progress|textarea|video)$/.test(tag);
     if (activeUnmodeled) incomplete = true;
     const suppressed = contextSuppressed || hiddenInput || activeUnmodeled || isHtml && /^(?:select|optgroup|option)$/.test(tag);
@@ -157,7 +158,7 @@ function htmlContent_(html) {
     if (block || !suppressed && isHtml && tag === 'br') newline(block);
     if (block) stack.push({exit: 'block'});
     if (buttonBoundary) { flushEvidence(); stack.push({exit: 'button'}); }
-    if (activeUnmodeled) replacementBoundary();
+    if (activeUnmodeled || visibleInput) replacementBoundary();
     else if (suppressed && !entry.suppressed) flushEvidence();
     if (!suppressed && isHtml && tag === 'img') {
       replacementBoundary();
