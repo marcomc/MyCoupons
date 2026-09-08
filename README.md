@@ -7,6 +7,7 @@ Private Gmail-to-Google-Sheets coupon importer built with Google Apps Script.
 - [Status](#status)
 - [Sheet state](#sheet-state)
 - [Core behavior](#core-behavior)
+- [Gemini routing](#gemini-routing)
 - [Local validation](#local-validation)
 - [Public information pages](#public-information-pages)
 
@@ -54,6 +55,18 @@ The example configuration contains product defaults only.
   references in the journal. Dedupe keys make reruns idempotent while retaining
   user-entered columns. Failed extraction or writes remain retryable; no Gmail
   mutation is performed.
+
+## Gemini routing
+
+- `callGeminiModel_` provides a bounded generic text-plus-inline-image
+  transport; it does not infer coupon fields.
+- The configured `gemini-flash-latest` model uses the Gemini Developer API
+  first. Its API key is read only from the `GEMINI_API_KEY` Script Property.
+- With `autoVertexFallback` enabled and `vertexProject` configured, paid Vertex
+  routing activates only for an explicit daily-quota or prepayment-depletion
+  HTTP 429 response. The temporary route lasts one hour and then expires.
+- Network errors, HTTP 408, generic 429 responses, selected 5xx responses, and
+  malformed responses retry at most three times on the current backend.
 
 ## Core behavior
 

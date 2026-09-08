@@ -4,6 +4,10 @@
 
 ### Added
 
+- Bounded Gemini Developer API transport with generic text/image requests,
+  exact daily-quota and prepayment-gated one-hour Vertex fallback, cooldown
+  expiry, fail-closed response validation, and local retry/routing tests.
+
 - Bounded canonical image acquisition for Gmail attachments, inline CID parts,
   and safe HTTPS HTML images, with DOM-order identity, byte/count limits,
   MIME/status/redirect filtering, tracker and small-pixel rejection, and

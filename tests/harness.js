@@ -29,11 +29,12 @@ function harness({vendorLast = false} = {}) {
       }
     },
     LockService: {getScriptLock: () => ({tryLock: () => true, releaseLock() {}})},
+    ScriptApp: {getOAuthToken: () => 'oauth-token'},
     Session: {getEffectiveUser: () => ({getEmail: () => owner})},
     Gmail: {Users: {getProfile: () => ({emailAddress: owner})}}
   };
   vm.createContext(ctx);
-  const names = ['locales/en', 'Config', 'Core', 'NumericEvidence', 'HtmlEvidence', 'ImageAcquisition',
+  const names = ['locales/en', 'Config', 'GeminiRouting', 'Core', 'NumericEvidence', 'HtmlEvidence', 'ImageAcquisition',
     'CandidateEvidence', 'GmailIdentity', 'SheetSafety', 'SheetState', 'GmailRead', 'ImportWorkflow'];
   if (vendorLast) names.push('vendor/Html');
   else names.unshift('vendor/Html');
