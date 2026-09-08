@@ -8,6 +8,11 @@
   and push reviewed corrections and continue the review loop.
 - Run `npm test` and `npm run check` for runtime changes. Tests must not depend
   on ignored drafts, credentials, or live Google resources.
+- Before publishing an OAuth app, inspect the current Console prerequisites and
+  disabled-control guidance. Publish and unauthenticatedly verify the real
+  homepage and privacy-policy URLs before entering them in Branding; do not
+  infer a grandfathering exception from an older app or conflate website
+  publication with OAuth publication.
 - When changing the parser bundle or build inputs, run `npm run check:html-build`
   after installing locked dependencies with `npm ci --ignore-scripts`.
 - Follow the supplied user-wide Markdown and shell validation requirements.
