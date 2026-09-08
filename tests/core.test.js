@@ -531,6 +531,14 @@ test('bounded text never creates half a surrogate pair in notes or cells', () =>
     }
   }
   assert.equal(ctx.textCell_('X'.repeat(3998) + '𐐀tail'), 'X'.repeat(3998) + '𐐀');
+  const protectedCell = ctx.textCell_('=' + 'X'.repeat(3999));
+  assert.equal(protectedCell, "'=" + 'X'.repeat(3998)); assert.equal(protectedCell.length, 4000);
+  const protectedAstral = ctx.textCell_('=' + 'X'.repeat(3996) + '𐐀tail');
+  assert.equal(protectedAstral, "'=" + 'X'.repeat(3996) + '𐐀'); assert.equal(protectedAstral.length, 4000);
+  const crossingAstral = ctx.textCell_('=' + 'X'.repeat(3997) + '𐐀tail');
+  assert.equal(crossingAstral, "'=" + 'X'.repeat(3997)); assert.equal(crossingAstral.length, 3999);
+  assert.equal(ctx.wellFormedUtf16_(crossingAstral), true);
+  assert.equal(ctx.textCell_(' '.repeat(4000) + '=later'), ' '.repeat(4000));
   const notes = 'X'.repeat(3499) + ' end';
   const actual = ctx.normalizeCandidate_({notes, evidence: {notes: {quote: notes}}},
     {text: notes, images: [], incomplete: false});
@@ -1162,7 +1170,9 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     '20% to 30%', '20% off to 30% off', '20% OFF TO 30% OFF', 'between 20% oFf and 30% oFf', '€20 to €30',
     '€20 off to €30 off', '20 euros TO 30 euros', '€ 20 to € 30', '€ 20-€ 30', 'between € 20 and € 30',
     '20 % to € 30', 'from 20% through 30%', 'FROM 20% OFF THROUGH 30% OFF', 'from € 20 through € 30',
-    'from 20 euros through 30 euros', '20 euros off to 30 euros off', '20%-30%', '€20-€30', 'between €20 and €30']) {
+    'from 20 euros through 30 euros', 'from 20% up to 30%', 'FROM 20% UP TO 30%', 'from € 20 up to € 30',
+    'from 20\u00a0% to 30\u00a0%', 'from 20\u00a0% up\u202fto 30\u00a0%', '20 euros off to 30 euros off',
+    '20%-30%', '€20-€30', 'between €20 and €30']) {
     for (const field of ['discountValue', 'minimumSpend']) {
       for (const endpoint of ['20', '30']) {
         assert.equal(ctx.fieldInQuote_(field, endpoint, source), false, field + ': ' + source);
@@ -1185,10 +1195,13 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
   }
   assert.equal(numericCandidate('discountValue', '20', 'from €20 through 30 September'), '20');
   assert.equal(numericCandidate('discountValue', '30', 'from €20 through 30 September'), '');
+  assert.equal(numericCandidate('discountValue', '20', 'from €20\u00a0through\u202f30\u00a0September'), '20');
+  assert.equal(numericCandidate('discountValue', '30', 'from €20\u00a0through\u202f30\u00a0September'), '');
+  assert.equal(ctx.fieldInQuote_('discountType', '%', '20\u00a0%'), true);
   for (const source of ['20' + ' '.repeat(97) + '-30%', '20%' + ' '.repeat(97) + 'to 30%',
     '20% OFF TO' + ' '.repeat(97) + '30% OFF', 'BETWEEN' + ' '.repeat(97) + '20% OFF AND 30% OFF',
     'between 20%' + ' '.repeat(97) + 'and 30%', 'from 20% through' + ' '.repeat(97) + '30%',
-    'from 20% through' + ' '.repeat(97) + '€30']) {
+    'from 20% through' + ' '.repeat(97) + '€30', 'from 20\u00a0% up\u202fto' + '\u00a0'.repeat(97) + '30\u00a0%']) {
     for (const field of ['discountValue', 'minimumSpend']) {
       for (const endpoint of ['20', '30']) assert.equal(numericCandidate(field, endpoint, source), '', source);
     }
@@ -1197,7 +1210,8 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     for (const source of [low + '-' + high + '%', low + '−' + high + '%', low + '/' + high, low + ':' + high,
       low + '% off to ' + high + '% off', 'between ' + low + '% off and ' + high + '% off',
       '€' + low + ' to €' + high, '€\t' + low + ' to €\n' + high, low + ' % off to ' + high + ' % off',
-      'from ' + low + '% through ' + high + '%', 'from € ' + low + ' through € ' + high, low + ' euros to ' + high + ' euros']) {
+      'from ' + low + '% through ' + high + '%', 'from € ' + low + ' through € ' + high,
+      'from ' + low + '\u00a0% up\u202fto ' + high + '\u00a0%', low + ' euros to ' + high + ' euros']) {
       for (const field of ['discountValue', 'minimumSpend']) {
         for (const endpoint of [low, high]) {
           assert.equal(ctx.fieldInQuote_(field, endpoint, source), false, source);

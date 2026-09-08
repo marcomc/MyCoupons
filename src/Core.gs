@@ -13,7 +13,7 @@ function boundedText_(text, limit) {
 }
 function textCell_(s) {
   const value = boundedText_(String(s == null ? '' : s).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, ''), 4000);
-  return /^[\s]*[=+@-]/.test(value) ? "'" + value : value;
+  return /^[\s]*[=+@-]/.test(value) ? "'" + boundedText_(value, 3999) : value;
 }
 function normalized_(s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); }
 function wellFormedUtf16_(value) {
@@ -31,38 +31,45 @@ function utf16Boundary_(value, index) {
     value.charCodeAt(index - 1) <= 0xdbff && value.charCodeAt(index) >= 0xdc00 && value.charCodeAt(index) <= 0xdfff);
 }
 function numericRangeEndpoint_(before, after) {
-  const space = '[\\t\\n\\f\\r ]*';
-  const unit = '(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)?';
-  const qualifier = '(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?';
+  const space = '\\s*';
+  const gap = '\\s+';
+  const unit = '(?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?)?';
+  const qualifier = '(?:\\s+[oO][fF][fF])?';
   const to = '[tT][oO]';
   const and = '[aA][nN][dD]';
   const between = '[bB][eE][tT][wW][eE][eE][nN]';
   const from = '[fF][rR][oO][mM]';
   const through = '[tT][hH][rR][oO][uU][gG][hH]';
+  const up = '[uU][pP]';
   const digit = '\\p{Nd}';
   const decimal = '[.,٫．]';
   const month = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|gen(?:naio)?|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)';
-  const currency = '(?:[€$£][\\t\\n\\f\\r ]*)?';
+  const currency = '(?:[€$£]\\s*)?';
   const amount = currency + digit + '+(?:' + decimal + digit + '+)?' + unit;
   const separator = '[-−–—/:]';
   const nextAmount = currency + digit;
-  const datedThrough = new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+' + through + '[\\t\\n\\f\\r ]+' +
-    currency + digit + '+(?:' + decimal + digit + '+)?[\\t\\n\\f\\r ]+' + month + '\\b', 'iu');
+  const datedRange = new RegExp('^' + unit + qualifier + gap + '(?:' + through + '|' + up + gap + to + ')' + gap +
+    currency + digit + '+(?:' + decimal + digit + '+)?' + gap + month + '\\b', 'iu');
   return new RegExp('^' + unit + space + separator + space + nextAmount, 'u').test(after) ||
     new RegExp(amount + space + separator + space + currency + '$', 'u').test(before) ||
-    new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+' + to + '[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) ||
-    new RegExp(amount + qualifier + '[\\t\\n\\f\\r ]+' + to + '[\\t\\n\\f\\r ]+' + currency + '$', 'u').test(before) ||
-    new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+' + and + '[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) &&
-      new RegExp('\\b' + between + '[\\t\\n\\f\\r ]*' + currency + '$', 'u').test(before) ||
-    new RegExp('\\b' + between + '[\\t\\n\\f\\r ]+' + amount + qualifier + '[\\t\\n\\f\\r ]+' + and + '[\\t\\n\\f\\r ]+' + currency + '$', 'u').test(before) ||
-    new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+' + through + '[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) &&
-      !datedThrough.test(after) &&
-      new RegExp('\\b' + from + '[\\t\\n\\f\\r ]*' + currency + '$', 'u').test(before) ||
-    new RegExp('\\b' + from + '[\\t\\n\\f\\r ]+' + amount + qualifier + '[\\t\\n\\f\\r ]+' + through + '[\\t\\n\\f\\r ]+' + currency + '$', 'u').test(before) &&
-      !new RegExp('^[\\t\\n\\f\\r ]+' + month + '\\b', 'iu').test(after);
+    new RegExp('^' + unit + qualifier + gap + to + gap + nextAmount, 'u').test(after) ||
+    new RegExp(amount + qualifier + gap + to + gap + currency + '$', 'u').test(before) ||
+    new RegExp('^' + unit + qualifier + gap + and + gap + nextAmount, 'u').test(after) &&
+      new RegExp('\\b' + between + space + currency + '$', 'u').test(before) ||
+    new RegExp('\\b' + between + gap + amount + qualifier + gap + and + gap + currency + '$', 'u').test(before) ||
+    new RegExp('^' + unit + qualifier + gap + through + gap + nextAmount, 'u').test(after) &&
+      !datedRange.test(after) &&
+      new RegExp('\\b' + from + space + currency + '$', 'u').test(before) ||
+    new RegExp('\\b' + from + gap + amount + qualifier + gap + through + gap + currency + '$', 'u').test(before) &&
+      !dateMonthFollows_(after) ||
+    new RegExp('^' + unit + qualifier + gap + up + gap + to + gap + nextAmount, 'u').test(after) &&
+      !datedRange.test(after) &&
+      new RegExp('\\b' + from + space + currency + '$', 'u').test(before) ||
+    new RegExp('\\b' + from + gap + amount + qualifier + gap + up + gap + to + gap + currency + '$', 'u').test(before) &&
+      !dateMonthFollows_(after);
 }
 function dateMonthFollows_(source) {
-  return /^[\t\n\f\r ]+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|gen(?:naio)?|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/iu.test(source);
+  return /^\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|gen(?:naio)?|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/iu.test(source);
 }
 function htmlContent_(html) {
   const root = MC_HTML.parse(String(html), {scriptingEnabled: false});
@@ -260,7 +267,7 @@ function adjacentNonSpaceCodePoint_(source, index, before) {
   let cursor = index;
   while (before ? cursor > 0 : cursor < source.length) {
     const point = adjacentCodePoint_(source, cursor, before);
-    if (!/[\t\n\f\r ]/.test(point)) return point;
+    if (!/\s/u.test(point)) return point;
     cursor += before ? -point.length : point.length;
   }
   return '';
@@ -325,10 +332,10 @@ function fieldOccurrences_(field, value, source) {
     const afterText = source.slice(occurrence.end, afterEnd);
     const truncatedBefore = beforeStart > 0;
     const truncatedAfter = afterEnd < source.length;
-    const truncatedBetween = truncatedBefore && new RegExp('(?:[€$£][\\t\\n\\f\\r ]*)?[\\p{Nd}](?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)?(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?[\\t\\n\\f\\r ]+[aA][nN][dD][\\t\\n\\f\\r ]+(?:[€$£][\\t\\n\\f\\r ]*)?$', 'u').test(beforeText);
-    const truncatedDelimiter = truncatedBefore && /[\t\n\f\r ]*(?:[-−–—/:][\t\n\f\r ]*|[tT][oO][\t\n\f\r ]+|[aA][nN][dD][\t\n\f\r ]+|[tT][hH][rR][oO][uU][gG][hH][\t\n\f\r ]+)(?:[€$£][\t\n\f\r ]*)?$/.test(beforeText);
-    const truncatedWhitespace = truncatedBefore && /^[\t\n\f\r ]*(?:[€$£][\t\n\f\r ]*)?$/.test(beforeText);
-    const truncatedFollowing = truncatedAfter && new RegExp('^(?:[\\t\\n\\f\\r ]|(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?(?:[\\t\\n\\f\\r ]+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]))?)*(?:[€$£][\\t\\n\\f\\r ]*)?$', 'u').test(afterText);
+    const truncatedBetween = truncatedBefore && new RegExp('(?:[€$£]\\s*)?[\\p{Nd}](?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?)?(?:\\s+[oO][fF][fF])?\\s+[aA][nN][dD]\\s+(?:[€$£]\\s*)?$', 'u').test(beforeText);
+    const truncatedDelimiter = truncatedBefore && /\s*(?:[-−–—/:]\s*|[tT][oO]\s+|[aA][nN][dD]\s+|[tT][hH][rR][oO][uU][gG][hH]\s+|[uU][pP]\s+[tT][oO]\s+)(?:[€$£]\s*)?$/.test(beforeText);
+    const truncatedWhitespace = truncatedBefore && /^\s*(?:[€$£]\s*)?$/.test(beforeText);
+    const truncatedFollowing = truncatedAfter && new RegExp('^(?:\\s|(?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?)(?:\\s+[oO][fF][fF])?(?:\\s+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?)*(?:[€$£]\\s*)?$', 'u').test(afterText);
     const dateComponent = numericField && dateMonthFollows_(source.slice(occurrence.end));
     return utf16Boundary_(source, occurrence.start) && utf16Boundary_(source, occurrence.end) &&
       (!before || !boundary.test(before)) && (!after || !boundary.test(after)) &&

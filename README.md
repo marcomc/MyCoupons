@@ -41,7 +41,7 @@ The example configuration contains product defaults only.
   and complete tokens, including punctuation, and numeric values cannot be range,
   ratio, Unicode-minus, or supported word-delimited interval endpoints, including
   Unicode decimal digits, units, currency, the range qualifier `off`, and
-  ASCII-space-separated symbols. Oversized
+  Unicode-space-separated symbols. Oversized
   structured values become empty; bounded notes
   retain complete Unicode characters and require review. A supplied image-evidence
   index must identify an independently inspected image record.

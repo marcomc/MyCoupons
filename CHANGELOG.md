@@ -47,7 +47,8 @@
 - Suppressed inline HTML content now splits extraction and factual-evidence spans.
 - Comments split source spans; active embeds force review; every active image
   requires an independently inspected record for complete coverage; and
-  `from … through …` numeric intervals cannot ground endpoints.
+  `from … through …` and `from … up to …` numeric intervals cannot ground
+  endpoints, including with rendered Unicode spacing.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.
