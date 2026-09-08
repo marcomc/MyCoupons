@@ -37,19 +37,32 @@ function numericRangeEndpoint_(before, after) {
   const to = '[tT][oO]';
   const and = '[aA][nN][dD]';
   const between = '[bB][eE][tT][wW][eE][eE][nN]';
+  const from = '[fF][rR][oO][mM]';
+  const through = '[tT][hH][rR][oO][uU][gG][hH]';
   const digit = '\\p{Nd}';
   const decimal = '[.,٫．]';
+  const month = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|gen(?:naio)?|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)';
   const currency = '(?:[€$£][\\t\\n\\f\\r ]*)?';
   const amount = currency + digit + '+(?:' + decimal + digit + '+)?' + unit;
   const separator = '[-−–—/:]';
   const nextAmount = currency + digit;
+  const datedThrough = new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+' + through + '[\\t\\n\\f\\r ]+' +
+    currency + digit + '+(?:' + decimal + digit + '+)?[\\t\\n\\f\\r ]+' + month + '\\b', 'iu');
   return new RegExp('^' + unit + space + separator + space + nextAmount, 'u').test(after) ||
     new RegExp(amount + space + separator + space + currency + '$', 'u').test(before) ||
     new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+' + to + '[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) ||
     new RegExp(amount + qualifier + '[\\t\\n\\f\\r ]+' + to + '[\\t\\n\\f\\r ]+' + currency + '$', 'u').test(before) ||
     new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+' + and + '[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) &&
       new RegExp('\\b' + between + '[\\t\\n\\f\\r ]*' + currency + '$', 'u').test(before) ||
-    new RegExp('\\b' + between + '[\\t\\n\\f\\r ]+' + amount + qualifier + '[\\t\\n\\f\\r ]+' + and + '[\\t\\n\\f\\r ]+' + currency + '$', 'u').test(before);
+    new RegExp('\\b' + between + '[\\t\\n\\f\\r ]+' + amount + qualifier + '[\\t\\n\\f\\r ]+' + and + '[\\t\\n\\f\\r ]+' + currency + '$', 'u').test(before) ||
+    new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+' + through + '[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) &&
+      !datedThrough.test(after) &&
+      new RegExp('\\b' + from + '[\\t\\n\\f\\r ]*' + currency + '$', 'u').test(before) ||
+    new RegExp('\\b' + from + '[\\t\\n\\f\\r ]+' + amount + qualifier + '[\\t\\n\\f\\r ]+' + through + '[\\t\\n\\f\\r ]+' + currency + '$', 'u').test(before) &&
+      !new RegExp('^[\\t\\n\\f\\r ]+' + month + '\\b', 'iu').test(after);
+}
+function dateMonthFollows_(source) {
+  return /^[\t\n\f\r ]+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|gen(?:naio)?|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/iu.test(source);
 }
 function htmlContent_(html) {
   const root = MC_HTML.parse(String(html), {scriptingEnabled: false});
@@ -59,6 +72,7 @@ function htmlContent_(html) {
   let evidence = '';
   const images = [];
   let incomplete = false;
+  let activeImageCount = 0;
   let pendingImageBoundary = false;
   function flushEvidence() {
     if (evidence) evidenceSpans.push(evidence);
@@ -87,6 +101,10 @@ function htmlContent_(html) {
       if (!entry.suppressed && node.value) appendProjectedText(node.value);
       continue;
     }
+    if (node.nodeName === '#comment') {
+      if (!entry.suppressed) flushEvidence();
+      continue;
+    }
     const tag = node.tagName || '';
     const isHtml = node.namespaceURI === 'http://www.w3.org/1999/xhtml';
     const foreign = Boolean(tag && !isHtml);
@@ -104,7 +122,7 @@ function htmlContent_(html) {
     if (isHtml && tag === 'input' && !contextSuppressed && !nodeAttrs.some(function (attr) {
       return attr.name === 'type' && String(attr.value).toLowerCase() === 'hidden';
     })) incomplete = true;
-    const activeUnmodeled = isHtml && !contextSuppressed && /^(?:audio|canvas|meter|object|progress|textarea|video)$/.test(tag);
+    const activeUnmodeled = isHtml && !contextSuppressed && /^(?:audio|canvas|embed|meter|object|progress|textarea|video)$/.test(tag);
     if (activeUnmodeled) incomplete = true;
     const suppressed = contextSuppressed || activeUnmodeled || isHtml && /^(?:select|optgroup|option)$/.test(tag);
     const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|caption|center|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|hr|legend|li|listing|main|menu|nav|ol|p|plaintext|pre|search|section|summary|table|tbody|td|tfoot|th|thead|tr|ul|xmp)$/.test(tag);
@@ -120,6 +138,7 @@ function htmlContent_(html) {
       const hasSrc = nodeAttrs.some(function (attr) {
         return attr.name === 'src' && /[^\t\n\f\r ]/.test(String(attr.value));
       });
+      if (hasSrc) activeImageCount++;
       const alt = nodeAttrs.find(function (attr) { return attr.name === 'alt'; });
       if (!hasSrc && alt && /\S/u.test(String(alt.value))) {
         appendProjectedText(alt.value);
@@ -142,7 +161,8 @@ function htmlContent_(html) {
     }
   }
   flushEvidence();
-  return {text: pieces.join(''), evidenceSpans: evidenceSpans, images: images, incomplete: incomplete};
+  return {text: pieces.join(''), evidenceSpans: evidenceSpans, images: images,
+    activeImageCount: activeImageCount, incomplete: incomplete};
 }
 function htmlText_(html) {
   return htmlContent_(html).text;
@@ -179,11 +199,13 @@ function candidateSource_(message) {
     message.text !== undefined && typeof message.text !== 'string' ||
     Object.prototype.hasOwnProperty.call(message, 'html') && typeof message.html !== 'string' ||
     message.images !== undefined && !Array.isArray(message.images)) fail_('AI');
-  const html = message.html === undefined ? {text: '', evidenceSpans: [], incomplete: false} : htmlContent_(message.html);
+  const html = message.html === undefined ? {text: '', evidenceSpans: [], activeImageCount: 0, incomplete: false} : htmlContent_(message.html);
+  const images = message.images === undefined ? [] : message.images;
   return {spans: [message.text || ''].concat(html.evidenceSpans).filter(Boolean),
     evidenceSpans: [message.text || ''].concat(html.evidenceSpans).filter(Boolean),
-    images: message.images === undefined ? [] : message.images,
-    incomplete: message.incomplete !== false || html.incomplete};
+    images: images,
+    incomplete: message.incomplete !== false || html.incomplete ||
+      html.activeImageCount > images.filter(inspectedImage_).length};
 }
 function codeLexemes_(text) {
   // Peel one explicit outer wrapper; punctuation inside a token remains identity.
@@ -304,12 +326,13 @@ function fieldOccurrences_(field, value, source) {
     const truncatedBefore = beforeStart > 0;
     const truncatedAfter = afterEnd < source.length;
     const truncatedBetween = truncatedBefore && new RegExp('(?:[€$£][\\t\\n\\f\\r ]*)?[\\p{Nd}](?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)?(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?[\\t\\n\\f\\r ]+[aA][nN][dD][\\t\\n\\f\\r ]+(?:[€$£][\\t\\n\\f\\r ]*)?$', 'u').test(beforeText);
-    const truncatedDelimiter = truncatedBefore && /[\t\n\f\r ]*(?:[-−–—/:][\t\n\f\r ]*|[tT][oO][\t\n\f\r ]+|[aA][nN][dD][\t\n\f\r ]+)(?:[€$£][\t\n\f\r ]*)?$/.test(beforeText);
-    const truncatedWhitespace = truncatedBefore && /^[\t\n\f\r ]*$/.test(beforeText);
-    const truncatedFollowing = truncatedAfter && new RegExp('^(?:[\\t\\n\\f\\r ]|(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?(?:[\\t\\n\\f\\r ]+(?:[tT][oO]|[aA][nN][dD]))?)*(?:[€$£][\\t\\n\\f\\r ]*)?$', 'u').test(afterText);
+    const truncatedDelimiter = truncatedBefore && /[\t\n\f\r ]*(?:[-−–—/:][\t\n\f\r ]*|[tT][oO][\t\n\f\r ]+|[aA][nN][dD][\t\n\f\r ]+|[tT][hH][rR][oO][uU][gG][hH][\t\n\f\r ]+)(?:[€$£][\t\n\f\r ]*)?$/.test(beforeText);
+    const truncatedWhitespace = truncatedBefore && /^[\t\n\f\r ]*(?:[€$£][\t\n\f\r ]*)?$/.test(beforeText);
+    const truncatedFollowing = truncatedAfter && new RegExp('^(?:[\\t\\n\\f\\r ]|(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?(?:[\\t\\n\\f\\r ]+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]))?)*(?:[€$£][\\t\\n\\f\\r ]*)?$', 'u').test(afterText);
+    const dateComponent = numericField && dateMonthFollows_(source.slice(occurrence.end));
     return utf16Boundary_(source, occurrence.start) && utf16Boundary_(source, occurrence.end) &&
       (!before || !boundary.test(before)) && (!after || !boundary.test(after)) &&
-      !(numericField && (numericRangeEndpoint_(beforeText, afterText) || truncatedBetween || truncatedDelimiter || truncatedWhitespace || truncatedFollowing)) &&
+      !(numericField && (dateComponent || numericRangeEndpoint_(beforeText, afterText) || truncatedBetween || truncatedDelimiter || truncatedWhitespace || truncatedFollowing)) &&
       !(/\p{Nd}$/u.test(value) && /^[.,٫．]\p{Nd}/u.test(source.slice(occurrence.end, occurrence.end + 3))) &&
       !(/^\p{Nd}/u.test(value) && /\p{Nd}[.,٫．]$/u.test(source.slice(Math.max(0, occurrence.start - 3), occurrence.start)));
   });

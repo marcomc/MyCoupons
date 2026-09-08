@@ -713,6 +713,26 @@ test('suppressed inline markup splits text and factual evidence spans', () => {
   }
 });
 
+test('comments split deterministic and factual evidence source spans', () => {
+  const {ctx} = harness();
+  const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
+  const html = '<p>Shop Coupon code SAV&#69;<!-- hidden -->20</p>';
+  const content = ctx.htmlContent_(html);
+  assert.equal(content.text, 'Shop Coupon code SAVE20\n');
+  assert.deepEqual(Array.from(content.evidenceSpans), ['Shop Coupon code SAVE', '20']);
+  assert.ok(!ctx.deterministicCandidates_({html}).some(function (candidate) { return candidate.code === 'SAVE20'; }));
+  const candidate = ctx.normalizeCandidate_(raw, {html, images: [], incomplete: false});
+  assert.equal(candidate.code, ''); assert.equal(candidate.review, true);
+  for (const [markup, incomplete] of [['<template>Shop Coupon code SAVE<!-- hidden -->20</template>', false],
+    ['<svg><text>Shop Coupon code SAVE<!-- hidden -->20</text></svg>', true]]) {
+    const wrapped = markup + '<p>Shop Coupon code REAL20</p>';
+    const wrappedContent = ctx.htmlContent_(wrapped);
+    assert.equal(wrappedContent.incomplete, incomplete, markup);
+    assert.deepEqual(Array.from(wrappedContent.evidenceSpans), ['Shop Coupon code REAL20'], markup);
+  }
+});
+
 test('unmodeled rendered fallback and sourceless image alternatives preserve source coverage', () => {
   const {ctx} = harness();
   for (const tag of ['audio', 'canvas', 'meter', 'object', 'progress', 'textarea', 'video']) {
@@ -734,6 +754,16 @@ test('unmodeled rendered fallback and sourceless image alternatives preserve sou
       '<details><summary>Shop</summary><' + tag + '>HIDDEN</' + tag + '></details><p>REAL20</p>']) {
       assert.equal(ctx.htmlContent_(suppressed).incomplete, false, suppressed);
     }
+  }
+  const embed = 'Shop Coupon code SAVE<embed src="https://shop.com/offer.html">20';
+  const embedContent = ctx.htmlContent_(embed);
+  assert.equal(embedContent.incomplete, true); assert.equal(embedContent.text, 'Shop Coupon code SAVE\n20');
+  assert.deepEqual(Array.from(embedContent.evidenceSpans), ['Shop Coupon code SAVE', '20']);
+  assert.ok(!ctx.deterministicCandidates_({html: embed}).some(function (item) { return item.code === 'SAVE20'; }));
+  for (const html of ['<template><embed src="https://shop.com/offer.html"></template>',
+    '<div hidden><embed src="https://shop.com/offer.html"></div>', '<dialog><embed src="https://shop.com/offer.html"></dialog>',
+    '<div popover><embed src="https://shop.com/offer.html"></div>', '<details><summary>Shop</summary><embed src="https://shop.com/offer.html"></details>']) {
+    assert.equal(ctx.htmlContent_(html).incomplete, false, html);
   }
   for (const image of ['<img alt="Coupon code ALT20">', '<img src="" alt="Coupon code ALT20">',
     '<img src=" \t" alt="Coupon code ALT20">', '<img data-src="https://shop.com/offer.jpg" alt="Coupon code ALT20">']) {
@@ -958,6 +988,12 @@ test('canonical candidate sources preserve raw HTML coverage and inspected image
   const message = {text: 'Shop', html: '<img src="https://shop.com/real.jpg">', incomplete: false};
   assert.throws(() => ctx.normalizeCandidate_(imageRaw, message), /AI/);
   assert.equal(ctx.normalizeCandidate_(imageRaw, {...message, images: [{}]}).code, 'REAL20');
+  const activeImages = '<p>Shop REAL20</p><img src="https://shop.com/real.jpg">';
+  assert.equal(ctx.htmlContent_(activeImages).activeImageCount, 1);
+  assert.equal(ctx.normalizeCandidate_(raw, {html: activeImages, images: [], incomplete: false}).review, true);
+  assert.equal(ctx.normalizeCandidate_(raw, {html: activeImages, images: [{}], incomplete: false}).review, false);
+  assert.equal(ctx.normalizeCandidate_(raw, {html: activeImages + '<img src="https://shop.com/second.jpg">', images: [{}], incomplete: false}).review, true);
+  assert.equal(ctx.normalizeCandidate_(raw, {html: activeImages, images: [false], incomplete: false}).review, true);
   for (const change of [{html: null}, {html: 4}, {html: {}}, {html: []}, {text: 4}, {images: {}}, {images: null}]) {
     for (const consumer of [ctx.normalizeCandidate_.bind(null, raw), ctx.deterministicCandidates_]) {
       assert.throws(() => consumer({text: 'Shop REAL20', incomplete: false, ...change}), /AI/);
@@ -1125,7 +1161,8 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
   for (const source of ['20−30%', '20 to 30%', '20 To 30%', '20 TO 30%', 'between 20 and 30%', 'BETWEEN 20 AND 30%',
     '20% to 30%', '20% off to 30% off', '20% OFF TO 30% OFF', 'between 20% oFf and 30% oFf', '€20 to €30',
     '€20 off to €30 off', '20 euros TO 30 euros', '€ 20 to € 30', '€ 20-€ 30', 'between € 20 and € 30',
-    '20 % to € 30', '20 euros off to 30 euros off', '20%-30%', '€20-€30', 'between €20 and €30']) {
+    '20 % to € 30', 'from 20% through 30%', 'FROM 20% OFF THROUGH 30% OFF', 'from € 20 through € 30',
+    'from 20 euros through 30 euros', '20 euros off to 30 euros off', '20%-30%', '€20-€30', 'between €20 and €30']) {
     for (const field of ['discountValue', 'minimumSpend']) {
       for (const endpoint of ['20', '30']) {
         assert.equal(ctx.fieldInQuote_(field, endpoint, source), false, field + ': ' + source);
@@ -1142,12 +1179,16 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, minimumSpend: {quote: standalone}}},
   {text: 'Shop SAVE20 ' + standalone, images: [], incomplete: false});
   assert.equal(standaloneCandidate.minimumSpend, '20'); assert.equal(standaloneCandidate.review, false);
-  for (const source of ['20 coffee to 30 tea', '20 offer to 30 people', '20 percentage to 30 percentage']) {
+  for (const source of ['20 coffee to 30 tea', '20 offer to 30 people', '20 percentage to 30 percentage',
+    'from 20 coffee through 30 tea', 'Save €20 through 30 September']) {
     for (const field of ['discountValue', 'minimumSpend']) assert.equal(numericCandidate(field, '20', source), '20', source);
   }
+  assert.equal(numericCandidate('discountValue', '20', 'from €20 through 30 September'), '20');
+  assert.equal(numericCandidate('discountValue', '30', 'from €20 through 30 September'), '');
   for (const source of ['20' + ' '.repeat(97) + '-30%', '20%' + ' '.repeat(97) + 'to 30%',
     '20% OFF TO' + ' '.repeat(97) + '30% OFF', 'BETWEEN' + ' '.repeat(97) + '20% OFF AND 30% OFF',
-    'between 20%' + ' '.repeat(97) + 'and 30%']) {
+    'between 20%' + ' '.repeat(97) + 'and 30%', 'from 20% through' + ' '.repeat(97) + '30%',
+    'from 20% through' + ' '.repeat(97) + '€30']) {
     for (const field of ['discountValue', 'minimumSpend']) {
       for (const endpoint of ['20', '30']) assert.equal(numericCandidate(field, endpoint, source), '', source);
     }
@@ -1155,7 +1196,8 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
   for (const [low, high, fraction] of [['٢٠', '٣٠', '٥'], ['２０', '３０', '５'], ['𝟚𝟘', '𝟛𝟘', '𝟝']]) {
     for (const source of [low + '-' + high + '%', low + '−' + high + '%', low + '/' + high, low + ':' + high,
       low + '% off to ' + high + '% off', 'between ' + low + '% off and ' + high + '% off',
-      '€' + low + ' to €' + high, '€\t' + low + ' to €\n' + high, low + ' % off to ' + high + ' % off', low + ' euros to ' + high + ' euros']) {
+      '€' + low + ' to €' + high, '€\t' + low + ' to €\n' + high, low + ' % off to ' + high + ' % off',
+      'from ' + low + '% through ' + high + '%', 'from € ' + low + ' through € ' + high, low + ' euros to ' + high + ' euros']) {
       for (const field of ['discountValue', 'minimumSpend']) {
         for (const endpoint of [low, high]) {
           assert.equal(ctx.fieldInQuote_(field, endpoint, source), false, source);

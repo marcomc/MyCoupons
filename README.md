@@ -40,7 +40,8 @@ The example configuration contains product defaults only.
   Unsubstantiated fields become empty; code evidence preserves exact spelling
   and complete tokens, including punctuation, and numeric values cannot be range,
   ratio, Unicode-minus, or supported word-delimited interval endpoints, including
-  Unicode decimal digits, units, currency, and the range qualifier `off`. Oversized
+  Unicode decimal digits, units, currency, the range qualifier `off`, and
+  ASCII-space-separated symbols. Oversized
   structured values become empty; bounded notes
   retain complete Unicode characters and require review. A supplied image-evidence
   index must identify an independently inspected image record.
@@ -58,9 +59,11 @@ The example configuration contains product defaults only.
   direct `summary`, and `hidden` subtrees; include `noscript` fallback content.
   Rendered blocks and replaced elements retain text boundaries. Select controls,
   visible inputs, textareas, and active fallback surfaces (audio, canvas, meter,
-  object, progress, and video) are excluded because their rendered state is not
-  modeled and therefore force review. Sourceless image alternatives are projected
-  as visible text. Direct
+  object, progress, and video), plus active embeds, are excluded because their
+  rendered state is not modeled and therefore force review. Each active
+  `img[src]` requires a valid independently inspected image record for complete
+  coverage; parsed attributes never become image evidence. Sourceless image
+  alternatives are projected as visible text. Direct
   image URLs trim only surrounding ASCII attribute whitespace. Responsive
   `srcset`/`picture` resources in active rendered content are not selected and
   force review. No CSS visibility analysis or script execution occurs. Image dimensions follow HTML pixel/percentage

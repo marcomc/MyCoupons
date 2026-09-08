@@ -45,6 +45,9 @@
   coverage; image evidence requires an inspected record; and discount symbols
   support ASCII-separated numeric amounts without admitting range endpoints.
 - Suppressed inline HTML content now splits extraction and factual-evidence spans.
+- Comments split source spans; active embeds force review; every active image
+  requires an independently inspected record for complete coverage; and
+  `from … through …` numeric intervals cannot ground endpoints.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.
