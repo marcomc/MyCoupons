@@ -14,10 +14,10 @@ Private Gmail-to-Google-Sheets coupon importer built with Google Apps Script.
 
 The current increment provides configuration validation, coupon candidate
 parsing and normalization, historical recovery dates, safe spreadsheet and
-Gmail-label resource setup, and a private per-message journal. Gmail message
-ingestion, AI requests, coupon-row writes, review triggers, and installation
-automation are subsequent increments. There is no active importer or
-deployment.
+Gmail-label resource setup, a private per-message journal, and bounded
+read-only Gmail message ingestion. AI requests, coupon-row writes, review
+triggers, Gmail mutations, and installation automation are subsequent
+increments. There is no active importer or deployment.
 
 Private installation identifiers and credentials belong outside version control.
 The example configuration contains product defaults only.
@@ -36,6 +36,13 @@ The example configuration contains product defaults only.
   keys, candidate row references, and archive/label checkpoints.
 - Recovery starts on the latest real coupon day in `Europe/Rome`; an empty
   coupon tab requires the configured `initialDate`.
+- Read messages assigned to the configured label from the recovery date in
+  bounded pages, irrespective of read state. Final journal states are skipped
+  before fetching message contents, and Gmail is never mutated by this reader.
+- Canonical message payloads preserve the message ID, thread ID, received time,
+  sender, subject, plain text, raw HTML, and canonical Gmail link. MIME
+  alternatives remain independent; unsupported content marks the payload
+  incomplete and malformed message data produces a retryable error.
 
 ## Core behavior
 

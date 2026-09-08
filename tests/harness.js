@@ -12,7 +12,12 @@ function harness({vendorLast = false} = {}) {
     Utilities: {
       DigestAlgorithm: {SHA_256: 'sha256'}, Charset: {UTF_8: 'utf8'},
       computeDigest: (_, s) => [...crypto.createHash('sha256').update(s).digest()],
-      formatDate: (d, zone) => new Intl.DateTimeFormat('en-CA', {timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit'}).format(d),
+      base64DecodeWebSafe: value => [...Buffer.from(value.replace(/-/g, '+').replace(/_/g, '/'), 'base64')],
+      newBlob: bytes => ({getDataAsString: charset => Buffer.from(bytes).toString(charset.toLowerCase() === 'iso-8859-1' ? 'latin1' : 'utf8')}),
+      formatDate: (d, zone, format) => {
+        const value = new Intl.DateTimeFormat('en-CA', {timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit'}).format(d);
+        return format === 'yyyy/MM/dd' ? value.replace(/-/g, '/') : value;
+      },
       parseDate: (s, zone) => {
         // Derive the offset at midnight itself, including a DST transition day.
         const midnight = Date.parse(s + 'T00:00:00Z');
@@ -28,7 +33,7 @@ function harness({vendorLast = false} = {}) {
   };
   vm.createContext(ctx);
   const names = ['locales/en', 'Config', 'Core', 'NumericEvidence', 'HtmlEvidence',
-    'CandidateEvidence', 'GmailIdentity', 'SheetSafety', 'SheetState'];
+    'CandidateEvidence', 'GmailIdentity', 'SheetSafety', 'SheetState', 'GmailRead'];
   if (vendorLast) names.push('vendor/Html');
   else names.unshift('vendor/Html');
   for (const name of names) {
