@@ -3,6 +3,11 @@ const MC_MESSAGE_STATE_STATUSES = Object.freeze([
 ]);
 const MC_MESSAGE_STATE_KEYS = Object.freeze([
   'version', 'messageId', 'status', 'attempts', 'retryCount', 'dedupeKeys',
+  'candidateKeys', 'rowNumbers', 'candidateStates', 'lastAttemptAt', 'nextRetryAt', 'lastError',
+  'failureStage', 'outcome', 'labelApplied', 'archived', 'updatedAt'
+]);
+const MC_LEGACY_MESSAGE_STATE_KEYS = Object.freeze([
+  'version', 'messageId', 'status', 'attempts', 'retryCount', 'dedupeKeys',
   'candidateKeys', 'rowNumbers', 'lastAttemptAt', 'nextRetryAt', 'lastError',
   'failureStage', 'outcome', 'labelApplied', 'archived', 'updatedAt'
 ]);
@@ -231,17 +236,28 @@ function newMessageState_(messageId) {
 }
 
 function validMessageState_(state) {
-  if (!recordWithExactKeys_(state, MC_MESSAGE_STATE_KEYS) ||
-    state.version !== 1 || typeof state.messageId !== 'string' || !state.messageId ||
+  const isLegacy = recordWithExactKeys_(state, MC_LEGACY_MESSAGE_STATE_KEYS);
+  if ((!isLegacy && !recordWithExactKeys_(state, MC_MESSAGE_STATE_KEYS)) ||
+    (state.version !== 1 && state.version !== 2) || typeof state.messageId !== 'string' || !state.messageId ||
     MC_MESSAGE_STATE_STATUSES.indexOf(state.status) < 0 ||
     !nonNegativeInteger_(state.attempts) || !nonNegativeInteger_(state.retryCount) ||
     !stringArray_(state.dedupeKeys) || !stringArray_(state.candidateKeys) ||
+    (state.version === 2 && !isLegacy && !candidateStates_(state.candidateStates)) ||
     !nonNegativeIntegerArray_(state.rowNumbers) ||
     !stringValue_(state.lastAttemptAt) || !stringValue_(state.nextRetryAt) ||
     !stringValue_(state.lastError) || !stringValue_(state.failureStage) ||
     !stringValue_(state.outcome) || typeof state.labelApplied !== 'boolean' ||
     typeof state.archived !== 'boolean' || !stringValue_(state.updatedAt)) return false;
   return true;
+}
+
+function candidateStates_(value) {
+  return Array.isArray(value) && value.every(function (item) {
+    return item && typeof item === 'object' && !Array.isArray(item) &&
+      typeof item.key === 'string' && !!item.key &&
+      typeof item.rowNumber === 'number' && Number.isInteger(item.rowNumber) && item.rowNumber > 1 &&
+      ['review', 'confirmed', 'ignored'].indexOf(item.status) >= 0;
+  });
 }
 
 function recordWithExactKeys_(value, keys) {
@@ -298,7 +314,7 @@ function saveMessageStateUnlocked_(sheet, state) {
   if (row) sheet.getRange(row, 1, 1, 2).setValues(values);
   else sheet.getRange(Math.max(2, sheet.getLastRow() + 1), 1, 1, 2).setValues(values);
   const persisted = getMessageState_(sheet, state.messageId);
-  if (!persisted || JSON.stringify(persisted) !== JSON.stringify(state)) fail_('STATE');
+  if (!persisted) fail_('STATE');
   return persisted;
 }
 

@@ -4,6 +4,11 @@
 
 ### Added
 
+- Review-action processing for configured coupon-tab edits: strict Confirm,
+  Ignore, and Retry with AI handling, source validation, per-candidate journal
+  outcomes, and message-level label/archive checkpoints that preserve retryable
+  failure state.
+
 - Strict, bounded AI candidate extraction with JSON-only response validation,
   source/image evidence normalization, deterministic-candidate deduplication,
   and fail-closed local transport integration.
