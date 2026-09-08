@@ -73,6 +73,9 @@
 - Active-image coverage now verifies inspected records by DOM-order slot, and
   evidence-linearity tests use deterministic instrumentation instead of
   wall-clock limits.
+- Numeric alternatives with `or` cannot ground scalar factual values; encoded
+  tracker paths are rejected without rewriting their URLs; and inherited
+  candidate or evidence properties cannot authorize an import.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

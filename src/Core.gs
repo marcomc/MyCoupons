@@ -43,7 +43,7 @@ const NUMERIC_RANGE_CURRENCY_CODE_PREFIX_FRAGMENT_TOKEN = '(?:[Ee](?:[Uu])?|[Uu]
 const NUMERIC_RANGE_CURRENCY_CODE_SUFFIX_FRAGMENT_TOKEN = '(?:[Rr]|[Uu][Rr]|[Dd]|[Ss][Dd]|[Pp]|[Bb][Pp])';
 const NUMERIC_RANGE_CURRENCY_PREFIX_TOKEN = '(?:[€$£]\\s*|' + NUMERIC_RANGE_CURRENCY_CODE_TOKEN + '\\s+)';
 const NUMERIC_RANGE_UNIT_TOKEN = '(?:\\s*[%€$£]|\\s+(?:[eE][uU][rR][oO][sS]?|[dD][oO][lL][lL][aA][rR][sS]?|[pP][oO][uU][nN][dD][sS]?|[pP][eE][rR][cC][eE][nN][tT][sS]?|' + NUMERIC_RANGE_CURRENCY_CODE_TOKEN + '))';
-const NUMERIC_RANGE_CONNECTOR_FRAGMENT = '(?:[tT][oO]|[oO]|[aA][nN][dD]|[nN][dD]|[dD]|[tT][hH][rR][oO][uU][gG][hH]|[hH][rR][oO][uU][gG][hH]|[rR][oO][uU][gG][hH]|[oO][uU][gG][hH]|[uU][gG][hH]|[gG][hH]|[hH]|[uU][pP]\\s+[tT][oO]|[pP]\\s+[tT][oO])';
+const NUMERIC_RANGE_CONNECTOR_FRAGMENT = '(?:[tT][oO]|[oO][rR]|[oO]|[rR]|[aA][nN][dD]|[nN][dD]|[dD]|[tT][hH][rR][oO][uU][gG][hH]|[hH][rR][oO][uU][gG][hH]|[rR][oO][uU][gG][hH]|[oO][uU][gG][hH]|[uU][gG][hH]|[gG][hH]|[hH]|[uU][pP]\\s+[tT][oO]|[pP]\\s+[tT][oO])';
 const NUMERIC_RANGE_QUALIFIER_FRAGMENT = '(?:[oO][fF][fF]|[fF][fF]|[fF])';
 function truncatedRangeFragment_(text) {
   const currencyPrefix = '(?:' + NUMERIC_RANGE_CURRENCY_PREFIX_TOKEN + ')?';
@@ -58,6 +58,7 @@ function numericRangeEndpoint_(before, after) {
   const unit = '(?:' + NUMERIC_RANGE_UNIT_TOKEN + ')?';
   const qualifier = '(?:\\s+[oO][fF][fF])?';
   const to = '[tT][oO]';
+  const or = '[oO][rR]';
   const and = '[aA][nN][dD]';
   const between = '[bB][eE][tT][wW][eE][eE][nN]';
   const through = '[tT][hH][rR][oO][uU][gG][hH]';
@@ -69,12 +70,16 @@ function numericRangeEndpoint_(before, after) {
   const amount = currency + digit + '+(?:' + decimal + digit + '+)?' + unit;
   const separator = NUMERIC_RANGE_SEPARATOR;
   const nextAmount = currency + digit;
-  const datedRange = new RegExp('^' + unit + qualifier + gap + '(?:' + through + '|' + up + gap + to + ')' + gap +
+  const datedRange = new RegExp('^' + unit + qualifier + gap + '(?:' + or + '|' + through + '|' + up + gap + to + ')' + gap +
     currency + digit + '+(?:' + decimal + digit + '+)?' + gap + month + DATE_MONTH_END, 'iu');
   return new RegExp('^' + unit + space + separator + space + nextAmount, 'u').test(after) ||
     new RegExp(amount + space + separator + space + currency + '$', 'u').test(before) ||
     new RegExp('^' + unit + qualifier + gap + to + gap + nextAmount, 'u').test(after) ||
     new RegExp(amount + qualifier + gap + to + gap + currency + '$', 'u').test(before) ||
+    new RegExp('^' + unit + qualifier + gap + or + gap + nextAmount, 'u').test(after) &&
+      !datedRange.test(after) ||
+    new RegExp(amount + qualifier + gap + or + gap + currency + '$', 'u').test(before) &&
+      !dateMonthFollows_(after) ||
     new RegExp('^' + unit + qualifier + gap + and + gap + nextAmount, 'u').test(after) &&
       new RegExp('\\b' + between + space + currency + '$', 'u').test(before) ||
     new RegExp('\\b' + between + gap + amount + qualifier + gap + and + gap + currency + '$', 'u').test(before) ||
@@ -230,12 +235,19 @@ function remoteImageUrls_(html) {
   const urls = [];
   htmlContent_(html).images.forEach(function (attrs) {
     const src = typeof attrs.src === 'string' ? attrs.src.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '') : '';
-    if (!src || ['width', 'height'].some(function (key) { return smallImageDimension_(attrs[key]); }) ||
-      /(?:pixel|tracking|tracker|beacon|\/open(?:[/.?#;]|$)|transparent|spacer)/i.test(src)) return;
     const url = safeUrl_(src);
-    if (url && urls.indexOf(url) < 0) urls.push(url);
+    if (!url || ['width', 'height'].some(function (key) { return smallImageDimension_(attrs[key]); }) || trackerImageUrl_(url)) return;
+    if (urls.indexOf(url) < 0) urls.push(url);
   });
   return urls;
+}
+const IMAGE_TRACKER_PATTERN = /(?:pixel|tracking|tracker|beacon|\/open(?:[/.?#;]|$)|transparent|spacer)/i;
+function trackerImageUrl_(url) {
+  if (IMAGE_TRACKER_PATTERN.test(url)) return true;
+  const match = /^https:\/\/[a-z0-9.-]+(?::443)?([^?#]*)/i.exec(url);
+  if (!match) return true;
+  try { return IMAGE_TRACKER_PATTERN.test(decodeURIComponent(match[1])); }
+  catch (error) { return true; }
 }
 function couponSignal_(text) {
   return /\b(coupon|voucher|promo(?:tion|code)?|discount|sconto|codice|offert[ae]|redeem|cashback|sale|save|risparmi|buono|buoni|deal)\b|\d\s*%/i.test(text);
@@ -321,6 +333,19 @@ function inspectedImage_(value) {
   const prototype = Object.getPrototypeOf(value);
   return prototype === null || prototype === Object.prototype;
 }
+function ownValue_(value, key) {
+  return value != null && Object.prototype.hasOwnProperty.call(value, key) ? value[key] : undefined;
+}
+function plainObjectWithKeys_(value, keys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  const names = Object.getOwnPropertyNames(value);
+  return (prototype === null || prototype === Object.prototype) && !Object.getOwnPropertySymbols(value).length &&
+    names.every(function (key) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return keys.indexOf(key) >= 0 && descriptor.enumerable && Object.prototype.hasOwnProperty.call(descriptor, 'value');
+    });
+}
 function codeOccurrences_(value, source) {
   const occurrences = [];
   const re = /\S+/gu;
@@ -382,12 +407,12 @@ function fieldOccurrences_(field, value, source) {
     const truncatedAfter = afterEnd < source.length;
     const truncatedBetween = truncatedBefore && new RegExp(currencyPrefix + '[\\p{Nd}]' + rangeUnit +
       '(?:\\s+[oO][fF][fF])?\\s+[aA][nN][dD]\\s+' + currencyPrefix + '$', 'u').test(beforeText);
-    const truncatedDelimiter = truncatedBefore && new RegExp('^\\s*(?:' + NUMERIC_RANGE_SEPARATOR + '\\s*|[tT][oO]\\s+|[aA][nN][dD]\\s+|[tT][hH][rR][oO][uU][gG][hH]\\s+|[uU][pP]\\s+[tT][oO]\\s+)' + currencyPrefix + '$', 'u').test(beforeText);
+    const truncatedDelimiter = truncatedBefore && new RegExp('^\\s*(?:' + NUMERIC_RANGE_SEPARATOR + '\\s*|[tT][oO]\\s+|[oO][rR]\\s+|[aA][nN][dD]\\s+|[tT][hH][rR][oO][uU][gG][hH]\\s+|[uU][pP]\\s+[tT][oO]\\s+)' + currencyPrefix + '$', 'u').test(beforeText);
     const truncatedWhitespace = truncatedBefore && new RegExp('^\\s*' + currencyPrefix + '$', 'u').test(beforeText);
     const truncatedFragment = truncatedBefore && truncatedRangeFragment_(beforeText);
     const truncatedFollowing = truncatedAfter && new RegExp('^(?:\\s|' + NUMERIC_RANGE_UNIT_TOKEN +
-      '(?:\\s+[oO][fF][fF])?(?:\\s+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?|[oO][fF][fF]' +
-      '(?:\\s+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?|[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO])*(?:' +
+      '(?:\\s+[oO][fF][fF])?(?:\\s+(?:[tT][oO]|[oO][rR]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?|[oO][fF][fF]' +
+      '(?:\\s+(?:[tT][oO]|[oO][rR]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?|[tT][oO]|[oO][rR]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO])*(?:' +
       NUMERIC_RANGE_SEPARATOR + '\\s*)?' + trailingCurrencyPrefix + '$', 'u').test(afterText);
     const dateComponent = numericField && (dateMonthFollows_(source.slice(occurrence.end)) || dateMonthPrecedes_(beforeText) || dateMonthDayPrecedes_(beforeText));
     return utf16Boundary_(source, occurrence.start) && utf16Boundary_(source, occurrence.end) &&
@@ -440,35 +465,33 @@ function discountPairTextEvidence_(type, value, typeQuote, valueQuote, span) {
   return false;
 }
 function discountPairImageEvidence_(typeEvidence, valueEvidence, source) {
-  return typeEvidence && valueEvidence && Number.isInteger(typeEvidence.image) &&
-    typeEvidence.image === valueEvidence.image && typeEvidence.image >= 0 &&
-    typeEvidence.image < source.images.length && inspectedImage_(source.images[typeEvidence.image]);
+  const typeImage = typeEvidence && ownValue_(typeEvidence, 'image');
+  const valueImage = valueEvidence && ownValue_(valueEvidence, 'image');
+  return Number.isInteger(typeImage) && typeImage === valueImage && typeImage >= 0 &&
+    typeImage < source.images.length && inspectedImage_(source.images[typeImage]);
 }
 function normalizeCandidate_(raw, message) {
-  function objectWithKeys(value, keys) {
-    return value && typeof value === 'object' && !Array.isArray(value) &&
-      Object.keys(value).every(function (key) { return keys.indexOf(key) >= 0; });
-  }
-  if (!objectWithKeys(raw, MC.fields.concat(['confidence', 'review', 'evidence'])) ||
-    raw.confidence !== undefined && ['high', 'medium', 'low'].indexOf(raw.confidence) < 0 ||
-    raw.review !== undefined && typeof raw.review !== 'boolean') fail_('AI');
-  const evidence = raw.evidence === undefined ? {} : raw.evidence;
-  if (!objectWithKeys(evidence, MC.fields)) fail_('AI');
+  if (!plainObjectWithKeys_(raw, MC.fields.concat(['confidence', 'review', 'evidence'])) ||
+    ownValue_(raw, 'confidence') !== undefined && ['high', 'medium', 'low'].indexOf(ownValue_(raw, 'confidence')) < 0 ||
+    ownValue_(raw, 'review') !== undefined && typeof ownValue_(raw, 'review') !== 'boolean') fail_('AI');
+  const evidence = ownValue_(raw, 'evidence');
+  if (evidence !== undefined && !plainObjectWithKeys_(evidence, MC.fields)) fail_('AI');
   const source = candidateSource_(message);
-  Object.keys(evidence).forEach(function (key) {
-    const ev = evidence[key];
+  Object.keys(evidence || {}).forEach(function (key) {
+    const ev = ownValue_(evidence, key);
     if (ev === undefined) return;
-    if (!objectWithKeys(ev, ['quote', 'image']) ||
-      ev.quote !== undefined && (typeof ev.quote !== 'string' || !wellFormedUtf16_(ev.quote)) ||
-      ev.image !== undefined && !Number.isInteger(ev.image)) fail_('AI');
-    if (ev.image !== undefined && (ev.image < 0 || ev.image >= source.images.length || !inspectedImage_(source.images[ev.image]))) fail_('AI');
+    if (!plainObjectWithKeys_(ev, ['quote', 'image']) ||
+      ownValue_(ev, 'quote') !== undefined && (typeof ownValue_(ev, 'quote') !== 'string' || !wellFormedUtf16_(ownValue_(ev, 'quote'))) ||
+      ownValue_(ev, 'image') !== undefined && !Number.isInteger(ownValue_(ev, 'image'))) fail_('AI');
+    if (ownValue_(ev, 'image') !== undefined && (ownValue_(ev, 'image') < 0 || ownValue_(ev, 'image') >= source.images.length || !inspectedImage_(source.images[ownValue_(ev, 'image')]))) fail_('AI');
   });
   const c = {};
   let truncated = false;
   let invalidNumericValue = false;
   MC.fields.forEach(function (k) {
-    if (raw[k] != null && (typeof raw[k] !== 'string' || !wellFormedUtf16_(raw[k]))) fail_('AI');
-    const value = (raw[k] || '').trim();
+    const rawValue = ownValue_(raw, k);
+    if (rawValue != null && (typeof rawValue !== 'string' || !wellFormedUtf16_(rawValue))) fail_('AI');
+    const value = (rawValue || '').trim();
     const limit = k === 'notes' ? 3500 : 1000;
     if (value.length > limit) truncated = true;
     c[k] = value.length > limit && k !== 'notes' ? '' : boundedText_(value, limit);
@@ -478,26 +501,32 @@ function normalizeCandidate_(raw, message) {
   });
   c.website = safeUrl_(c.website);
   if (c.expiry && !validDate_(c.expiry)) c.expiry = '';
-  c.confidence = ['high', 'medium', 'low'].indexOf(raw.confidence) >= 0 ? raw.confidence : 'low';
-  c.review = raw.review !== false || c.confidence !== 'high' || !c.merchant ||
+  const confidence = ownValue_(raw, 'confidence');
+  const review = ownValue_(raw, 'review');
+  c.confidence = ['high', 'medium', 'low'].indexOf(confidence) >= 0 ? confidence : 'low';
+  c.review = review !== false || c.confidence !== 'high' || !c.merchant ||
     !(c.code || (c.discountType && c.discountValue) || c.website) || source.incomplete || truncated ||
-    invalidNumericValue || Boolean(raw.website && !c.website || raw.expiry && !c.expiry);
+    invalidNumericValue || Boolean(ownValue_(raw, 'website') && !c.website || ownValue_(raw, 'expiry') && !c.expiry);
   // Every asserted field must be anchored to supplied text or an inspected image.
   MC.fields.filter(function (k) { return c[k]; }).forEach(function (k) {
-    const ev = evidence[k];
-    const groundedText = ev && typeof ev.quote === 'string' && ev.quote.trim().length > 0 &&
-      source.evidenceSpans.some(function (span) { return textEvidenceGrounded_(k, c[k], ev.quote, span); });
-    const groundedImage = ev && Number.isInteger(ev.image) && ev.image >= 0 && ev.image < source.images.length &&
-      inspectedImage_(source.images[ev.image]);
+    const ev = ownValue_(evidence, k);
+    const quote = ev && ownValue_(ev, 'quote');
+    const image = ev && ownValue_(ev, 'image');
+    const groundedText = ev && typeof quote === 'string' && quote.trim().length > 0 &&
+      source.evidenceSpans.some(function (span) { return textEvidenceGrounded_(k, c[k], quote, span); });
+    const groundedImage = ev && Number.isInteger(image) && image >= 0 && image < source.images.length &&
+      inspectedImage_(source.images[image]);
     if (!groundedText && !groundedImage) { c[k] = ''; c.review = true; }
     // OCR-only evidence is a proposal, not independently verified import authority.
     if (groundedImage && !groundedText) c.review = true;
   });
-  const typeEvidence = evidence.discountType;
-  const valueEvidence = evidence.discountValue;
+  const typeEvidence = ownValue_(evidence, 'discountType');
+  const valueEvidence = ownValue_(evidence, 'discountValue');
   const pairedText = source.evidenceSpans.some(function (span) {
-    return typeEvidence && valueEvidence && typeof typeEvidence.quote === 'string' && typeof valueEvidence.quote === 'string' &&
-      discountPairTextEvidence_(c.discountType, c.discountValue, typeEvidence.quote, valueEvidence.quote, span);
+    const typeQuote = typeEvidence && ownValue_(typeEvidence, 'quote');
+    const valueQuote = valueEvidence && ownValue_(valueEvidence, 'quote');
+    return typeof typeQuote === 'string' && typeof valueQuote === 'string' &&
+      discountPairTextEvidence_(c.discountType, c.discountValue, typeQuote, valueQuote, span);
   });
   const pairedImage = discountPairImageEvidence_(typeEvidence, valueEvidence, source);
   if (c.discountType && c.discountValue && !pairedText && !pairedImage) {

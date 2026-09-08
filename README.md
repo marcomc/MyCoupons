@@ -37,7 +37,8 @@ The example configuration contains product defaults only.
   letter/number/mark, underscore and hyphen syntax and 3–40 code-point length.
 - Reject unknown candidate or evidence keys and malformed control fields before
   normalizing proposed fields, including notes, against quoted source text.
-  Unsubstantiated fields become empty; code evidence preserves exact spelling
+  Candidate and evidence records must use own properties on plain or null
+  prototypes. Unsubstantiated fields become empty; code evidence preserves exact spelling
   and complete tokens, including punctuation, and numeric values cannot be range,
   ratio, Unicode hyphen/minus/dash, fraction-slash, ellipsis or range-dot endpoints, or supported
   word-delimited interval endpoints, including
@@ -59,8 +60,10 @@ The example configuration contains product defaults only.
   punctuation in paths and queries. This increment makes no AI requests and does
   not establish completeness of extracted offers.
 - Quote formula-like spreadsheet text. Discover HTTPS image URLs while excluding
-  recognizable trackers, IP literals, and local hostnames. This is a lexical
-  filter; it does not resolve DNS or download images.
+  recognizable trackers, including percent-encoded path forms, IP literals, and
+  local hostnames. Path decoding is only for tracker classification; the fetched
+  URL remains byte-for-byte unchanged. This is a lexical filter; it does not
+  resolve DNS or download images.
 - Extract text and actual image elements with a shared standards-based HTML
   document traversal, preserving `html`/`body` attributes. Exclude comments,
   scripts, styles, metadata, inert templates, non-rendered `datalist`/`rp`

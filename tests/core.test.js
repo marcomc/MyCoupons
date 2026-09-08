@@ -75,6 +75,14 @@ test('remote image discovery excludes trackers, private literals and unsafe sche
     'https://shop.com/open?receipt=1', 'https://shop.com/open;id=abc', 'https://shop.com/open.gif']) {
     assert.deepEqual([...ctx.remoteImageUrls_('<img src="' + url + '">')], [], url);
   }
+  for (const path of ['/%6fpen?id=abc', '/%70ixel.gif', '/%74racker.gif', '/%62eacon', '/%73pacer.gif',
+    '/%74ransparent.gif', '/%2f%6fpen', '/%', '/%2', '/%zz', '/%E0%A4%A']) {
+    assert.deepEqual([...ctx.remoteImageUrls_('<img src="https://shop.com' + path + '">')], [], path);
+  }
+  for (const url of ['https://shop.com/%6fpened.jpg', 'https://shop.com/coupon%2Dhero.jpg',
+    'https://shop.com/coupon.jpg?name=%70ixel']) {
+    assert.deepEqual([...ctx.remoteImageUrls_('<img src="' + url + '">')], [url], url);
+  }
   assert.deepEqual([...ctx.remoteImageUrls_('<img src="https://shop.com/opener">')], ['https://shop.com/opener']);
 });
 test('deterministic codes and ungrounded AI fields do not grant archive authority', () => {
@@ -1276,7 +1284,7 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     data[field] = value; data.evidence[field] = {quote: value};
     return ctx.normalizeCandidate_(data, {text: 'Shop SAVE20 ' + source, images: [], incomplete: false})[field];
   }
-  for (const source of ['20‐30%', '20‑30%', '20‒30%', '20−30%', '20⁄30%', '20…30%', '20‥30%', '20..30%', '20...30%', '20 to 30%', '20 To 30%', '20 TO 30%', 'between 20 and 30%', 'BETWEEN 20 AND 30%', 'between 20 percent and 30 percent', 'BETWEEN 20 PERCENTS AND 30 PERCENTS', '20 dollars to 30 dollars', '20 pounds to 30 pounds',
+  for (const source of ['20‐30%', '20‑30%', '20‒30%', '20−30%', '20⁄30%', '20…30%', '20‥30%', '20..30%', '20...30%', '20 to 30%', '20 To 30%', '20 TO 30%', '20 percent or 30 percent', '20% off or 30% off', '20 dollars or 30 dollars', 'USD 20 or USD 30', '20 GBP or 30 GBP', 'between 20 and 30%', 'BETWEEN 20 AND 30%', 'between 20 percent and 30 percent', 'BETWEEN 20 PERCENTS AND 30 PERCENTS', '20 dollars to 30 dollars', '20 pounds to 30 pounds',
     'between 20 dollars and 30 dollars', '20 dollars through 30 dollars', '20 pounds up to 30 pounds',
     'from 20 dollars through 30 dollars', 'from 20 pounds up to 30 pounds',
     '20 USD to 30 USD', 'USD 20 to USD 30', 'between USD 20 and USD 30',
@@ -1293,6 +1301,11 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
       }
     }
   }
+  for (const source of ['20% off or' + ' '.repeat(97) + '30% off', '20% off' + ' '.repeat(97) + 'or 30% off']) {
+    for (const field of ['discountValue', 'minimumSpend']) {
+      for (const endpoint of ['20', '30']) assert.equal(numericCandidate(field, endpoint, source), '', field + ': ' + source);
+    }
+  }
   for (const source of ['Save up to 30%', 'SAVE UP TO € 30', 'Save\u00a0up\u202fto\u00a0€\u202f30']) {
     for (const field of ['discountValue', 'minimumSpend']) assert.equal(numericCandidate(field, '30', source), '', field + ': ' + source);
   }
@@ -1306,6 +1319,7 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
   {text: 'Shop SAVE20 ' + standalone, images: [], incomplete: false});
   assert.equal(standaloneCandidate.minimumSpend, '20'); assert.equal(standaloneCandidate.review, false);
   for (const source of ['20 coffee to 30 tea', '20 tea to 30 tea', '20 offer to 30 people', '20 percentage to 30 percentage',
+    '20 coffee or 30 tea', '20 percentage or 30 percentage', '20 percent or more',
     'from 20 coffee through 30 tea', 'Save €20 through 30 September']) {
     for (const field of ['discountValue', 'minimumSpend']) assert.equal(numericCandidate(field, '20', source), '20', source);
   }
@@ -1318,6 +1332,8 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
   assert.equal(numericCandidate('discountValue', '30', 'from USD 20 through 30 September'), '');
   assert.equal(numericCandidate('discountValue', '20', 'from €20\u00a0through\u202f30\u00a0September'), '20');
   assert.equal(numericCandidate('discountValue', '30', 'from €20\u00a0through\u202f30\u00a0September'), '');
+  assert.equal(numericCandidate('discountValue', '20', '20% or 30 September'), '20');
+  assert.equal(numericCandidate('discountValue', '30', '20% or 30 September'), '');
   for (const source of ['Expires May 20', 'SCADE MAGGIO 20', 'Expires May\u00a020', 'Scade maggio\u202f20',
     'x'.repeat(97) + ' May 20']) {
     for (const field of ['discountValue', 'minimumSpend']) assert.equal(numericCandidate(field, '20', source), '', field + ': ' + source);
@@ -1531,6 +1547,31 @@ test('candidate schema rejects unknown facts and malformed controls before proje
   for (const image of [-1, 0, 4]) {
     assert.throws(() => ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {image}}}, message), /AI/);
   }
+  const inheritedRaw = Object.create(raw);
+  const inheritedEvidence = Object.create(raw.evidence);
+  const inheritedRecord = Object.create(raw.evidence.code);
+  for (const candidate of [inheritedRaw, {...raw, evidence: inheritedEvidence},
+    {...raw, evidence: {...raw.evidence, code: inheritedRecord}}]) {
+    assert.throws(() => ctx.normalizeCandidate_(candidate, message), /AI/);
+  }
+  function hiddenUnknown(value) {
+    Object.defineProperty(value, 'unknown', {value: 'hidden'});
+    return value;
+  }
+  function symbolUnknown(value) {
+    value[Symbol('unknown')] = 'hidden';
+    return value;
+  }
+  for (const mutate of [hiddenUnknown, symbolUnknown]) {
+    for (const candidate of [mutate({...raw}), {...raw, evidence: mutate({...raw.evidence})},
+      {...raw, evidence: {...raw.evidence, code: mutate({...raw.evidence.code})}}]) {
+      assert.throws(() => ctx.normalizeCandidate_(candidate, message), /AI/);
+    }
+  }
+  const nullRaw = Object.assign(Object.create(null), raw);
+  nullRaw.evidence = Object.assign(Object.create(null), raw.evidence);
+  nullRaw.evidence.code = Object.assign(Object.create(null), raw.evidence.code);
+  assert.equal(ctx.normalizeCandidate_(nullRaw, message).review, false);
 });
 
 test('website evidence requires a leading boundary in both quote and complete source', () => {
