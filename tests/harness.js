@@ -27,7 +27,8 @@ function harness({vendorLast = false} = {}) {
     Gmail: {Users: {getProfile: () => ({emailAddress: owner})}}
   };
   vm.createContext(ctx);
-  const names = ['locales/en', 'Config', 'Core'];
+  const names = ['locales/en', 'Config', 'Core', 'NumericEvidence', 'HtmlEvidence',
+    'CandidateEvidence', 'GmailIdentity', 'SheetSafety'];
   if (vendorLast) names.push('vendor/Html');
   else names.unshift('vendor/Html');
   for (const name of names) {
