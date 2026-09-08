@@ -165,8 +165,14 @@ function notifyScheduledImport_(summary) {
     errors: summary.errors.map(function (error) { return {messageId: String(error.messageId || ''), code: String(error.code)}; }).sort(function (a, b) { return (a.messageId + a.code).localeCompare(b.messageId + b.code); }), links: boundedLinks.sort()};
   const fingerprint = digest_(JSON.stringify(payload));
   const previous = notificationState_();
-  if (previous && previous.fingerprint === fingerprint) return {sent: false};
-  const pendingSummary = {imported: summary.imported, importedIds: summary.importedIds, review: summary.review, errors: summary.errors, links: boundedLinks};
+  if (previous && previous.fingerprint === fingerprint) { props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY); return {sent: false}; }
+  const boundedImportedIds = summary.importedIds.filter(function (id, index) {
+    return JSON.stringify(summary.importedIds.slice(0, index + 1)).length <= 2000;
+  });
+  const boundedErrors = summary.errors.filter(function (error, index) {
+    return JSON.stringify(summary.errors.slice(0, index + 1)).length <= 3000;
+  });
+  const pendingSummary = {imported: summary.imported, importedIds: boundedImportedIds, review: summary.review, errors: boundedErrors, links: boundedLinks};
   const pendingJson = JSON.stringify(pendingSummary);
   if (pendingJson.length > 8000) fail_('LIMIT');
   props_().setProperty(MC_PENDING_NOTIFICATION_KEY, pendingJson);

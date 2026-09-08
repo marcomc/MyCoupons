@@ -5,10 +5,10 @@ const MC_FINAL_MESSAGE_STATES = Object.freeze(['confirmed', 'ignored']);
 function readCouponMessages_(state) {
   if (!state || typeof state !== 'object' || !state.label || !state.journalSheet ||
     typeof state.recoveryStart !== 'number' || !isFinite(state.recoveryStart)) fail_('STATE');
-  return readGmailMessages_(state.label, state.recoveryStart, state.journalSheet);
+  return readGmailMessages_(state.label, state.recoveryStart, state.journalSheet, state._deadlineMs);
 }
 
-function readGmailMessages_(label, recoveryStart, journalSheet) {
+function readGmailMessages_(label, recoveryStart, journalSheet, deadlineMs) {
   if (!label || typeof label.id !== 'string' || !label.id ||
     typeof label.name !== 'string' || !label.name ||
     typeof recoveryStart !== 'number' || !isFinite(recoveryStart) || recoveryStart < 0 ||
@@ -23,6 +23,7 @@ function readGmailMessages_(label, recoveryStart, journalSheet) {
   let pageToken = '';
   let pages = 0;
   do {
+    if (deadlineMs && Date.now() >= deadlineMs) { result.truncated = true; break; }
     if (pages >= MC_GMAIL_MAX_PAGES) {
       result.truncated = true;
       break;
@@ -39,6 +40,7 @@ function readGmailMessages_(label, recoveryStart, journalSheet) {
     if (!page || typeof page !== 'object' || page.messages != null && !Array.isArray(page.messages)) fail_('MAIL');
     const summaries = page.messages || [];
     summaries.forEach(function (summary) {
+      if (deadlineMs && Date.now() >= deadlineMs) { result.truncated = true; return; }
       if (!summary || typeof summary.id !== 'string' || !validGmailApiId_(summary.id)) fail_('MAIL');
       if (seen[summary.id]) return;
       seen[summary.id] = true;
@@ -52,6 +54,7 @@ function readGmailMessages_(label, recoveryStart, journalSheet) {
         return;
       }
       try {
+        if (deadlineMs && Date.now() >= deadlineMs) { result.truncated = true; return; }
         const message = canonicalGmailMessage_(raw);
         if (message.receivedAtMs >= recoveryStart) result.messages.push(message);
       } catch (e) {

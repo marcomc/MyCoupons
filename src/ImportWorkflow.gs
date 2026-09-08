@@ -24,6 +24,9 @@ function processCouponMessage_(state, message) {
   if (existing && MC_FINAL_MESSAGE_STATES.indexOf(existing.status) >= 0) {
     return {messageId: message.id, status: existing.status, rows: existing.rowNumbers.slice()};
   }
+  if (existing && existing.status === 'review') {
+    return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
+  }
   let journal = existing || newMessageState_(message.id);
   journal.attempts++;
   journal.status = 'processing'; journal.failureStage = 'extract'; journal.lastError = '';
