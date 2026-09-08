@@ -42,7 +42,9 @@ The example configuration contains product defaults only.
   ratio, Unicode hyphen/minus/dash or fraction-slash endpoints, or supported
   word-delimited interval endpoints, including
   Unicode decimal digits, units, currency, the range qualifier `off`, and
-  Unicode-space-separated symbols. Oversized
+  Unicode-space-separated symbols. Discount and minimum-spend fields store a
+  scalar Unicode decimal literal; units and currency remain source context.
+  Oversized
   structured values become empty; bounded notes
   retain complete Unicode characters and require review. A supplied image-evidence
   index must identify an independently inspected image record.

@@ -30,6 +30,9 @@ function utf16Boundary_(value, index) {
   return !(index > 0 && index < value.length && value.charCodeAt(index - 1) >= 0xd800 &&
     value.charCodeAt(index - 1) <= 0xdbff && value.charCodeAt(index) >= 0xdc00 && value.charCodeAt(index) <= 0xdfff);
 }
+function scalarNumericValue_(value) {
+  return /^\p{Nd}+(?:[.,٫．]\p{Nd}+)?$/u.test(value);
+}
 function numericRangeEndpoint_(before, after) {
   const space = '\\s*';
   const gap = '\\s+';
@@ -312,6 +315,7 @@ function websiteOccurrences_(value, source) {
 }
 function fieldOccurrences_(field, value, source) {
   if (!wellFormedUtf16_(value) || !wellFormedUtf16_(source)) return [];
+  if (['discountValue', 'minimumSpend'].indexOf(field) >= 0 && !scalarNumericValue_(value)) return [];
   if (field === 'code') return codeOccurrences_(value, source);
   if (field === 'website') return websiteOccurrences_(value, source);
   if (field === 'discountType' && /^[%€$£]$/.test(value)) {
@@ -382,6 +386,7 @@ function normalizeCandidate_(raw, message) {
   });
   const c = {};
   let truncated = false;
+  let invalidNumericValue = false;
   MC.fields.forEach(function (k) {
     if (raw[k] != null && (typeof raw[k] !== 'string' || !wellFormedUtf16_(raw[k]))) fail_('AI');
     const value = (raw[k] || '').trim();
@@ -389,12 +394,15 @@ function normalizeCandidate_(raw, message) {
     if (value.length > limit) truncated = true;
     c[k] = value.length > limit && k !== 'notes' ? '' : boundedText_(value, limit);
   });
+  ['discountValue', 'minimumSpend'].forEach(function (k) {
+    if (c[k] && !scalarNumericValue_(c[k])) { c[k] = ''; invalidNumericValue = true; }
+  });
   c.website = safeUrl_(c.website);
   if (c.expiry && !validDate_(c.expiry)) c.expiry = '';
   c.confidence = ['high', 'medium', 'low'].indexOf(raw.confidence) >= 0 ? raw.confidence : 'low';
   c.review = raw.review !== false || c.confidence !== 'high' || !c.merchant ||
     !(c.code || (c.discountType && c.discountValue) || c.website) || source.incomplete || truncated ||
-    Boolean(raw.website && !c.website || raw.expiry && !c.expiry);
+    invalidNumericValue || Boolean(raw.website && !c.website || raw.expiry && !c.expiry);
   // Every asserted field must be anchored to supplied text or an inspected image.
   MC.fields.filter(function (k) { return c[k]; }).forEach(function (k) {
     const ev = evidence[k];

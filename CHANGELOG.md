@@ -43,6 +43,8 @@
 - Unicode decimal range and ratio endpoints cannot ground numeric facts; unmodeled
   canvas fallback forces review; sourceless-image alternative text is extracted;
   and each factual field must occur inside its located source quote.
+- Discount and minimum-spend fields accept only scalar Unicode decimal values;
+  non-scalar proposals are cleared and require review.
 - Active fallback surfaces and unmodeled text controls preserve incomplete HTML
   coverage; image evidence requires an inspected record; and discount symbols
   support ASCII-separated numeric amounts without admitting range endpoints.

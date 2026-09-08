@@ -188,7 +188,8 @@ test('evidence must preserve full code tokens, case, numeric magnitude and URL i
     assert.equal(actual.review, true);
   }
   assert.equal(ctx.fieldInQuote_('code', 'MiXeD20', 'Use MiXeD20 today'), true);
-  assert.equal(ctx.fieldInQuote_('discountValue', '20%', 'Save 20% today'), true);
+  assert.equal(ctx.fieldInQuote_('discountValue', '20', 'Save 20% today'), true);
+  assert.equal(ctx.fieldInQuote_('discountValue', '20%', 'Save 20% today'), false);
   const upperUrl = 'HTTPS://shop.com/voucher';
   const raw = {merchant: 'Shop', website: upperUrl, confidence: 'high', review: false,
     evidence: {merchant: {quote: 'Shop'}, website: {quote: upperUrl}}};
@@ -422,7 +423,8 @@ test('oversized structured fields are cleared rather than changed into prefixes'
   const fields = JSON.parse(require('node:vm').runInContext('JSON.stringify(MC.fields)', ctx));
   for (const field of fields.filter(k => k !== 'notes')) {
     for (const size of [1000, 1001]) {
-      const value = field === 'website' ? 'https://shop.com/' + 'x'.repeat(size - 17) : 'X'.repeat(size);
+      const value = field === 'website' ? 'https://shop.com/' + 'x'.repeat(size - 17) :
+        ['discountValue', 'minimumSpend'].indexOf(field) >= 0 ? '1'.repeat(size) : 'X'.repeat(size);
       for (const evidence of [undefined, {quote: value}, {image: 0}]) {
         const actual = ctx.normalizeCandidate_({[field]: value, evidence: {[field]: evidence}},
           {text: value, images: [{}], incomplete: false});
@@ -1246,6 +1248,28 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
       }
     }
   }
+});
+
+test('numeric candidate fields require complete scalar decimal values', () => {
+  const {ctx} = harness();
+  function candidate(field, value, evidence) {
+    const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+      evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
+    raw[field] = value; raw.evidence[field] = evidence || {quote: value};
+    return ctx.normalizeCandidate_(raw, {text: 'Shop SAVE20 ' + value, images: [{}], incomplete: false});
+  }
+  for (const field of ['discountValue', 'minimumSpend']) {
+    for (const value of ['20', '20.5', '20,5', '٢٠٫٥', '２０．５', '𝟚𝟘.𝟝']) {
+      assert.equal(candidate(field, value)[field], value, field + ': ' + value);
+    }
+    for (const value of ['20-30', '20⁄30', '20:30', '20 – 30', '٢٠٫٥−٣٠٫٥', '２０．５‐３０．５',
+      'between 20 and 30', 'from 20% up to 30%', '-20', '−20', '20%', '€20', '20 euros', '20 off', '20 30', 'twenty']) {
+      const actual = candidate(field, value);
+      assert.equal(actual[field], '', field + ': ' + value); assert.equal(actual.review, true, field + ': ' + value);
+    }
+  }
+  const imageOnly = candidate('discountValue', '20-30', {image: 0});
+  assert.equal(imageOnly.discountValue, ''); assert.equal(imageOnly.review, true);
 });
 
 test('field boundary checks do not rebuild growing Unicode prefixes', () => {
