@@ -4,6 +4,10 @@
 
 ### Added
 
+- Bounded read-only Gmail ingestion for the configured label, with final-state
+  journal skipping, canonical message identity and timestamps, independent
+  plain-text/HTML MIME representations, and retryable malformed-message
+  handling.
 - Coupon configuration and English localization with the existing sheet schema.
 - Deterministic coupon-code detection, source-grounded candidate normalization,
   spreadsheet text escaping, and remote-image URL filtering.
