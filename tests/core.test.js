@@ -885,6 +885,18 @@ test('remaining rendered blocks and non-rendered controls preserve evidence boun
   assert.equal(hiddenCandidate.code, ''); assert.equal(hiddenCandidate.review, true);
   const select = '<select><option>Shop Coupon code SELECT20</option></select><p>Shop Coupon code REAL20</p>';
   assert.equal(ctx.htmlContent_(select).incomplete, true); assert.ok(!ctx.htmlText_(select).includes('SELECT20'));
+  const iframe = '<p>Shop Coupon code REAL20</p><iframe src="https://shop.com/coupon"></iframe>';
+  assert.equal(ctx.htmlContent_(iframe).incomplete, true);
+  assert.equal(ctx.normalizeCandidate_({merchant: 'Shop', code: 'REAL20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'REAL20'}}}, {html: iframe, images: [], incomplete: false}).review, true);
+  const iframeTextCandidate = ctx.normalizeCandidate_({merchant: 'Shop', code: 'REAL20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'REAL20'}}},
+  {text: 'Shop REAL20', html: '<iframe src="https://shop.com/coupon"></iframe>', images: [], incomplete: false});
+  assert.equal(iframeTextCandidate.review, true);
+  assert.equal(ctx.messageOutcome_([{status: iframeTextCandidate.review ? 'review' : 'confirmed'}]), 'review');
+  for (const html of ['<iframe></iframe>', '<iframe src=""></iframe>', '<iframe data-src="https://shop.com/coupon"></iframe>']) {
+    assert.equal(ctx.htmlContent_(html).incomplete, false, html);
+  }
   for (const type of ['button', '', 'submit', 'reset', 'image']) {
     const input = '<p>Shop Coupon code REAL20</p><input' + (type ? ' type="' + type + '"' : '') + ' value="SAVE30">';
     const result = ctx.htmlContent_(input);
@@ -907,7 +919,12 @@ test('remaining rendered blocks and non-rendered controls preserve evidence boun
     '<dialog><input value="SAVE30"></dialog><p>Shop REAL20</p>',
     '<div popover><input value="SAVE30"></div><p>Shop REAL20</p>',
     '<details><summary>Shop</summary><input value="SAVE30"></details><p>REAL20</p>',
-    '<datalist><input value="SAVE30"></datalist><p>Shop REAL20</p>'
+    '<datalist><input value="SAVE30"></datalist><p>Shop REAL20</p>',
+    '<template><iframe src="https://shop.com/coupon"></iframe></template><p>Shop REAL20</p>',
+    '<div hidden><iframe src="https://shop.com/coupon"></iframe></div><p>Shop REAL20</p>',
+    '<dialog><iframe src="https://shop.com/coupon"></iframe></dialog><p>Shop REAL20</p>',
+    '<div popover><iframe src="https://shop.com/coupon"></iframe></div><p>Shop REAL20</p>',
+    '<details><summary>Shop</summary><iframe src="https://shop.com/coupon"></iframe></details><p>REAL20</p>'
   ]) assert.equal(ctx.htmlContent_(html).incomplete, false, html);
   for (const html of [
     '<template><select><option>SELECT20</option></select></template><p>Shop REAL20</p>',

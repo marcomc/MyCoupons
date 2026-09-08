@@ -146,10 +146,15 @@ function htmlContent_(html) {
       return attr.name === 'type' && String(attr.value).toLowerCase() === 'hidden';
     });
     const visibleInput = isHtml && tag === 'input' && !contextSuppressed && !hiddenInput;
+    const activeIframe = isHtml && tag === 'iframe' && !entry.suppressed && !closedPopover &&
+      !nodeAttrs.some(function (attr) { return attr.name === 'hidden'; }) && nodeAttrs.some(function (attr) {
+        return attr.name === 'src' && /[^\t\n\f\r ]/.test(String(attr.value));
+      });
     if (!contextSuppressed && isHtml && (tag === 'picture' || (tag === 'img' || tag === 'source') &&
       nodeAttrs.some(function (attr) { return attr.name === 'srcset'; }))) incomplete = true;
     if (isHtml && tag === 'select' && !contextSuppressed) incomplete = true;
     if (visibleInput) incomplete = true;
+    if (activeIframe) incomplete = true;
     const activeUnmodeled = isHtml && !contextSuppressed && /^(?:audio|canvas|embed|meter|object|progress|textarea|video)$/.test(tag);
     if (activeUnmodeled) incomplete = true;
     const suppressed = contextSuppressed || hiddenInput || activeUnmodeled || isHtml && /^(?:select|optgroup|option)$/.test(tag);
