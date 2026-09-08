@@ -7,7 +7,7 @@ test('AI prompt is bounded and strict response parsing normalizes evidence', () 
   const message = {text: 'Brand offers 20% off with SAVE20', incomplete: false};
   const prompt = ctx.buildCandidatePrompt_(message);
   assert.ok(prompt.includes('JSON only'));
-  assert.ok(prompt.length <= 60000 + 3000);
+  assert.ok(prompt.length <= 60000);
   const candidate = {merchant: 'Brand', website: '', code: 'SAVE20', discountType: '%', discountValue: '20',
     minimumSpend: '', validOn: '', exclusions: '', expiry: '', usageLimits: '', currency: '', notes: '',
     confidence: 'high', review: false,

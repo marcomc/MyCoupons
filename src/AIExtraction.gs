@@ -15,13 +15,14 @@ function buildCandidatePrompt_(message) {
     'Evidence keys are candidate field names; each evidence value has only quote and/or image.',
     'INSPECTED IMAGES: ' + source.images.length + ' images, indexed from 0.'
   ].join('\n\n');
-  const budget = AI_EXTRACTION.maxPromptText - instruction.length - 2;
+  const textLabel = '\n\nTEXT (independent plain text):\n';
+  const htmlLabel = '\n\nHTML-DERIVED SOURCE CONTEXT (separate spans):\n';
+  const budget = AI_EXTRACTION.maxPromptText - instruction.length - textLabel.length - htmlLabel.length;
   if (budget < 0) fail_('GEMINI_REQUEST');
   const textBudget = Math.floor(budget / 2);
   const text = boundedText_(source.evidenceSpans[0] || '', textBudget);
   const htmlContext = boundedText_(source.evidenceSpans.slice(1).join('\n'), budget - text.length);
-  return instruction + '\n\nTEXT (independent plain text):\n' + text +
-    '\n\nHTML-DERIVED SOURCE CONTEXT (separate spans):\n' + htmlContext;
+  return instruction + textLabel + text + htmlLabel + htmlContext;
 }
 
 function duplicateJsonKeys_(json) {
