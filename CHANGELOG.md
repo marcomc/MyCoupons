@@ -4,6 +4,11 @@
 
 ### Added
 
+- Add an idempotent Europe/Rome daily scheduler and safe removal of its owned
+  trigger, preserving unrelated triggers and rejecting ambiguous duplicates.
+- Add delta-based owner email summaries for new imports, new review rows, and
+  changed errors, with retryable delivery state and validated direct links.
+
 - Review-action processing for configured coupon-tab edits: strict Confirm,
   Ignore, and Retry with AI handling, source validation, per-candidate journal
   outcomes, and message-level label/archive checkpoints that preserve retryable

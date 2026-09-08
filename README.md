@@ -184,6 +184,18 @@ npm run check
 npm test
 ```
 
+## Scheduled imports and notifications
+
+`installDailyImportTrigger()` installs or reuses one daily clock trigger at
+approximately 08:00 in `Europe/Rome`; Apps Script may apply scheduling jitter.
+`removeDailyImportTrigger()` removes only that owned trigger and refuses to
+choose between duplicates. `runScheduledImport()` serializes the import,
+notifies the configured owner only for new imports, newly created review rows,
+or changed errors, and stores only a bounded fingerprint and timestamp in
+Script Properties. A successful send is recorded after `MailApp.sendEmail`
+returns; failed sends remain retryable. Review and source links are included
+only after their identifiers and authorities are validated.
+
 HTML parsing uses a pinned, bundled parser. See
 [third-party provenance and update checks](THIRD-PARTY.md); no dependency download
 is needed to run these checks.
