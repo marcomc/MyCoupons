@@ -17,9 +17,9 @@ The current increment provides configuration validation, coupon candidate
 parsing and normalization, historical recovery dates, safe spreadsheet and
 Gmail-label resource setup, a private per-message journal, bounded read-only
 Gmail message ingestion, and local deterministic import-row persistence.
-Deterministic candidates are persisted as review rows; AI requests, review
-triggers, Gmail mutations, and installation automation remain subsequent
-increments. There is no deployment.
+Review actions now expose an installable-edit-compatible `onReviewEdit` entry
+point for Confirm, Ignore, and Retry with AI, with row/source validation and
+message-level archive checkpoints. There is no deployment.
 
 Private installation identifiers and credentials belong outside version control.
 The example configuration contains product defaults only.

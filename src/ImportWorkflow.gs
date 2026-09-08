@@ -28,6 +28,7 @@ function processCouponMessage_(state, message) {
   journal.status = 'processing'; journal.failureStage = 'extract'; journal.lastError = '';
   saveMessageState_(state.journalSheet, journal);
   try {
+    if (!Array.isArray(journal.candidateStates)) journal.candidateStates = [];
     const candidates = deterministicCandidates_(message).map(function (candidate) {
       const normalized = {}; MC.fields.forEach(function (field) { normalized[field] = ''; });
       normalized.code = candidate.code; normalized.notes = candidate.notes;
@@ -54,8 +55,12 @@ function processCouponMessage_(state, message) {
       const status = Object.create(null); status.status = candidate.review ? 'review' : 'confirmed';
       statuses.push(status);
       rows.push(rowNumber);
+      if (!journal.candidateStates.some(function (item) { return item.key === key; })) {
+        journal.candidateStates.push({key: key, rowNumber: rowNumber, status: candidate.review ? 'review' : 'confirmed'});
+      }
     });
     journal.outcome = messageOutcome_(statuses);
+    delete journal.candidateStates;
     journal.status = journal.outcome === 'archive' ? 'confirmed' : 'review';
     if (journal.outcome === 'empty') journal.status = 'failed';
     journal.failureStage = ''; journal.updatedAt = new Date().toISOString();
