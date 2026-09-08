@@ -4,6 +4,10 @@
 
 ### Added
 
+- Deterministic import workflow persistence: canonical reader messages become
+  source-grounded coupon or review rows, with journal-linked deduplication,
+  retryable failures, and no Gmail mutations.
+
 - Bounded read-only Gmail ingestion for the configured label, with final-state
   journal skipping, canonical message identity and timestamps, independent
   plain-text/HTML MIME representations, and retryable malformed-message
