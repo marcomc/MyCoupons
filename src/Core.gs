@@ -72,7 +72,8 @@ function numericRangeEndpoint_(before, after) {
       !datedRange.test(after) &&
       new RegExp('\\b' + from + space + currency + '$', 'u').test(before) ||
     new RegExp('\\b' + from + gap + amount + qualifier + gap + up + gap + to + gap + currency + '$', 'u').test(before) &&
-      !dateMonthFollows_(after);
+      !dateMonthFollows_(after) ||
+    new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])' + up + gap + to + gap + currency + '$', 'u').test(before);
 }
 function dateMonthFollows_(source) {
   return new RegExp('^\\s+' + DATE_MONTH_PATTERN + DATE_MONTH_END, 'iu').test(source);
@@ -81,7 +82,7 @@ function dateMonthPrecedes_(source) {
   return new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])' + DATE_MONTH_PATTERN + '\\s+$', 'iu').test(source);
 }
 function dateMonthDayPrecedes_(source) {
-  return new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])' + DATE_MONTH_PATTERN + '\\s+\\p{Nd}{1,2}\\s*,\\s*$', 'iu').test(source);
+  return new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])' + DATE_MONTH_PATTERN + '\\s+\\p{Nd}{1,2}\\s*,?\\s*$', 'iu').test(source);
 }
 function htmlContent_(html) {
   const root = MC_HTML.parse(String(html), {scriptingEnabled: false});
@@ -337,7 +338,8 @@ function fieldOccurrences_(field, value, source) {
     return rawOccurrences_(value, source, false).filter(function (occurrence) {
       const before = adjacentNonSpaceCodePoint_(source, occurrence.start, true);
       const after = adjacentNonSpaceCodePoint_(source, occurrence.end, false);
-      return value === '%' ? /\p{Nd}/u.test(before) : source === value || /\p{Nd}/u.test(after);
+      return value === '%' ? /\p{Nd}/u.test(before) :
+        source === value || /\p{Nd}/u.test(before) || /\p{Nd}/u.test(after);
     });
   }
   const boundary = /[\p{L}\p{N}\p{M}_]/u;
@@ -394,9 +396,15 @@ function discountPairTextEvidence_(type, value, typeQuote, valueQuote, span) {
       if (/^\s*$/u.test(span.slice(amount.end, symbol.start))) return true;
       valueIndex++; continue;
     }
-    if (amount.start < symbol.end) { valueIndex++; continue; }
-    if (/^\s*$/u.test(span.slice(symbol.end, amount.start))) return true;
-    typeIndex++;
+    if (symbol.end <= amount.start) {
+      if (/^\s*$/u.test(span.slice(symbol.end, amount.start))) return true;
+      typeIndex++; continue;
+    }
+    if (amount.end <= symbol.start) {
+      if (/^\s*$/u.test(span.slice(amount.end, symbol.start))) return true;
+      valueIndex++; continue;
+    }
+    if (amount.start < symbol.start) valueIndex++; else typeIndex++;
   }
   return false;
 }
