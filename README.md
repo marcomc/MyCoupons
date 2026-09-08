@@ -154,6 +154,14 @@ establish source completeness. Future image processing must retain these coverag
 signals rather than treat omitted vector content as processed. Factual fields and
 quotes must be well-formed UTF-16, including complete astral characters.
 
+AI extraction is read-only: `extractCouponCandidates_` builds a bounded prompt
+from independent text, HTML-derived source spans, and inspected images, then
+accepts only a JSON `{ "candidates": [...] }` response. Each candidate may
+contain exactly the existing fields plus `confidence`, `review`, and
+`evidence`. AI candidates use the same source-grounding rules as deterministic
+candidates and are deduplicated by stable offer identity; transport, schema,
+evidence, and bound failures remain retryable.
+
 Source identity recovery accepts canonical lowercase hexadecimal Gmail links under
 `mail.google.com` (case-insensitive with an optional decimal serialization of
 the default HTTPS port) using

@@ -4,6 +4,10 @@
 
 ### Added
 
+- Strict, bounded AI candidate extraction with JSON-only response validation,
+  source/image evidence normalization, deterministic-candidate deduplication,
+  and fail-closed local transport integration.
+
 - Bounded Gemini Developer API transport with generic text/image requests,
   exact daily-quota and prepayment-gated one-hour Vertex fallback, cooldown
   expiry, fail-closed response validation, and local retry/routing tests.

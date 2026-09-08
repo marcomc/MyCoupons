@@ -35,7 +35,7 @@ function harness({vendorLast = false} = {}) {
   };
   vm.createContext(ctx);
   const names = ['locales/en', 'Config', 'GeminiRouting', 'Core', 'NumericEvidence', 'HtmlEvidence', 'ImageAcquisition',
-    'CandidateEvidence', 'GmailIdentity', 'SheetSafety', 'SheetState', 'GmailRead', 'ImportWorkflow'];
+    'CandidateEvidence', 'AIExtraction', 'GmailIdentity', 'SheetSafety', 'SheetState', 'GmailRead', 'ImportWorkflow'];
   if (vendorLast) names.push('vendor/Html');
   else names.unshift('vendor/Html');
   for (const name of names) {
