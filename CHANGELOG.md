@@ -70,6 +70,9 @@
   requires an independently inspected record for complete coverage; and
   `from … through …` and `from … up to …` numeric intervals cannot ground
   endpoints, including with rendered Unicode spacing.
+- Active-image coverage now verifies inspected records by DOM-order slot, and
+  evidence-linearity tests use deterministic instrumentation instead of
+  wall-clock limits.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

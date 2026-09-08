@@ -240,6 +240,10 @@ function remoteImageUrls_(html) {
 function couponSignal_(text) {
   return /\b(coupon|voucher|promo(?:tion|code)?|discount|sconto|codice|offert[ae]|redeem|cashback|sale|save|risparmi|buono|buoni|deal)\b|\d\s*%/i.test(text);
 }
+function activeHtmlImagesInspected_(count, images) {
+  for (let index = 0; index < count; index++) if (!inspectedImage_(images[index])) return false;
+  return true;
+}
 function candidateSource_(message) {
   if (!message || typeof message !== 'object' || Array.isArray(message) ||
     message.text !== undefined && typeof message.text !== 'string' ||
@@ -251,7 +255,7 @@ function candidateSource_(message) {
     evidenceSpans: [message.text || ''].concat(html.evidenceSpans).filter(Boolean),
     images: images,
     incomplete: message.incomplete !== false || html.incomplete ||
-      html.activeImageCount > images.filter(inspectedImage_).length};
+      !activeHtmlImagesInspected_(html.activeImageCount, images)};
 }
 function codeLexemes_(text) {
   // Peel one explicit outer wrapper; punctuation inside a token remains identity.

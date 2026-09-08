@@ -849,18 +849,42 @@ test('factual fields bind to the same source occurrence as their quote', () => {
 
 test('quote occurrence binding scans disjoint evidence intervals linearly', () => {
   const {ctx} = harness();
-  const source = 'a b '.repeat(20000);
-  const started = Date.now();
-  assert.equal(ctx.textEvidenceGrounded_('merchant', 'b', 'a', source), false);
-  assert.ok(Date.now() - started < 1000);
+  const count = 2000;
+  const source = 'b a '.repeat(count);
+  const fieldOccurrences = ctx.fieldOccurrences_;
+  let reads = 0;
+  ctx.fieldOccurrences_ = function () {
+    const occurrences = fieldOccurrences.apply(this, arguments);
+    return new Proxy(occurrences, {get(target, key, receiver) {
+      if (typeof key === 'string' && /^\d+$/.test(key)) reads++;
+      return Reflect.get(target, key, receiver);
+    }});
+  };
+  try {
+    assert.equal(ctx.textEvidenceGrounded_('merchant', 'b', 'a', source), false);
+    assert.ok(reads <= count * 4, 'field occurrence reads must remain linear');
+  } finally {
+    ctx.fieldOccurrences_ = fieldOccurrences;
+  }
 });
 
 test('numeric quote occurrence binding bounds range context linearly', () => {
   const {ctx} = harness();
-  const source = '20% off x '.repeat(20000);
-  const started = Date.now();
-  assert.equal(ctx.textEvidenceGrounded_('discountValue', '20', '20%', source), true);
-  assert.ok(Date.now() - started < 1000);
+  const count = 2000;
+  const source = '20% off x '.repeat(count);
+  const numericRangeEndpoint = ctx.numericRangeEndpoint_;
+  const contexts = [];
+  ctx.numericRangeEndpoint_ = function (before, after) {
+    contexts.push([before.length, after.length]);
+    return numericRangeEndpoint(before, after);
+  };
+  try {
+    assert.equal(ctx.textEvidenceGrounded_('discountValue', '20', '20%', source), true);
+    assert.equal(contexts.length, count);
+    assert.ok(contexts.every(function (context) { return context[0] <= 128 && context[1] <= 128; }));
+  } finally {
+    ctx.numericRangeEndpoint_ = numericRangeEndpoint;
+  }
 });
 
 test('remaining rendered blocks and non-rendered controls preserve evidence boundaries', () => {
@@ -1068,7 +1092,14 @@ test('canonical candidate sources preserve raw HTML coverage and inspected image
   assert.equal(ctx.htmlContent_(activeImages).activeImageCount, 1);
   assert.equal(ctx.normalizeCandidate_(raw, {html: activeImages, images: [], incomplete: false}).review, true);
   assert.equal(ctx.normalizeCandidate_(raw, {html: activeImages, images: [{}], incomplete: false}).review, false);
-  assert.equal(ctx.normalizeCandidate_(raw, {html: activeImages + '<img src="https://shop.com/second.jpg">', images: [{}], incomplete: false}).review, true);
+  assert.equal(ctx.normalizeCandidate_(raw, {html: activeImages, images: [{}, false], incomplete: false}).review, false);
+  for (const images of [[false, {}], [undefined, {}], new Array(1)]) {
+    assert.equal(ctx.normalizeCandidate_(raw, {html: activeImages, images, incomplete: false}).review, true);
+  }
+  const twoActiveImages = activeImages + '<img src="https://shop.com/second.jpg">';
+  assert.equal(ctx.normalizeCandidate_(raw, {html: twoActiveImages, images: [{}], incomplete: false}).review, true);
+  assert.equal(ctx.normalizeCandidate_(raw, {html: twoActiveImages, images: [{}, false, {}], incomplete: false}).review, true);
+  assert.equal(ctx.normalizeCandidate_(raw, {html: twoActiveImages, images: [{}, {}], incomplete: false}).review, false);
   assert.equal(ctx.normalizeCandidate_(raw, {html: activeImages, images: [false], incomplete: false}).review, true);
   for (const change of [{html: null}, {html: 4}, {html: {}}, {html: []}, {text: 4}, {images: {}}, {images: null}]) {
     for (const consumer of [ctx.normalizeCandidate_.bind(null, raw), ctx.deterministicCandidates_]) {

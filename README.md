@@ -72,7 +72,9 @@ The example configuration contains product defaults only.
   object, progress, and video), plus active embeds, are excluded because their
   rendered state is not modeled and therefore force review. Each active
   `img[src]` requires a valid independently inspected image record for complete
-  coverage; parsed attributes never become image evidence. Sourceless image
+  coverage. `message.images` starts with one DOM-order slot for every active
+  image; a missing or failed slot forces review, and a later record cannot cover
+  an earlier image. Parsed attributes never become image evidence. Sourceless image
   alternatives are projected as visible text. Direct
   image URLs trim only surrounding ASCII attribute whitespace. Responsive
   `srcset`/`picture` resources in active rendered content are not selected and
