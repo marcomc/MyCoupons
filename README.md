@@ -5,20 +5,37 @@ Private Gmail-to-Google-Sheets coupon importer built with Google Apps Script.
 ## Table of contents
 
 - [Status](#status)
+- [Sheet state](#sheet-state)
 - [Core behavior](#core-behavior)
 - [Local validation](#local-validation)
 - [Public information pages](#public-information-pages)
 
 ## Status
 
-The first implementation increment provides configuration validation, coupon
-candidate parsing and normalization, historical recovery dates, and English
-localization. It is a tested foundation; Gmail ingestion, AI requests,
-spreadsheet writes, review triggers, and installation are subsequent increments.
-There is no active importer or deployment in this increment.
+The current increment provides configuration validation, coupon candidate
+parsing and normalization, historical recovery dates, safe spreadsheet and
+Gmail-label resource setup, and a private per-message journal. Gmail message
+ingestion, AI requests, coupon-row writes, review triggers, and installation
+automation are subsequent increments. There is no active importer or
+deployment.
 
 Private installation identifiers and credentials belong outside version control.
 The example configuration contains product defaults only.
+
+## Sheet state
+
+- Resolve one configured spreadsheet identity, or adopt one unambiguous exact
+  title match; fail closed on ambiguous or mismatched resources.
+- Preserve the existing 26-column coupon schema and create only missing coupon
+  and journal tabs. The journal is `_MyCoupons Messages` with `Message ID` and
+  `State JSON` columns.
+- Resolve or create each missing prefix of a nested Gmail label path. This
+  setup does not read, label, archive, or otherwise mutate messages.
+- Persist the resolved spreadsheet and label identities after verification.
+  Journal records retain processing status, attempts, retry metadata, dedupe
+  keys, candidate row references, and archive/label checkpoints.
+- Recovery starts on the latest real coupon day in `Europe/Rome`; an empty
+  coupon tab requires the configured `initialDate`.
 
 ## Core behavior
 
