@@ -6,7 +6,7 @@ test('notification delta sends once and ignores unchanged outcome', () => {
   const {ctx, properties} = harness();
   const sent = [];
   ctx.MailApp = {sendEmail: (...args) => sent.push(args)};
-  const summary = {imported: 1, importedIds: ['abcdef'], review: 0, errors: [], links: []};
+  const summary = {imported: 1, importedIds: ['abcdef'], review: 0, errors: [], links: [], omittedLinks: false};
   const first = ctx.notifyScheduledImport_(summary);
   assert.equal(first.sent, true);
   assert.match(first.fingerprint, /^[a-f0-9]{64}$/);
@@ -18,7 +18,7 @@ test('notification delta sends once and ignores unchanged outcome', () => {
 test('notification send failure leaves prior state unchanged for retry', () => {
   const {ctx, properties} = harness();
   ctx.MailApp = {sendEmail: () => { throw new Error('send failed'); }};
-  assert.throws(() => ctx.notifyScheduledImport_({imported: 1, importedIds: ['abcdef'], review: 0, errors: [], links: []}));
+  assert.throws(() => ctx.notifyScheduledImport_({imported: 1, importedIds: ['abcdef'], review: 0, errors: [], links: [], omittedLinks: false}));
   assert.equal(properties.MYCOUPONS_NOTIFICATION_STATE, undefined);
 });
 

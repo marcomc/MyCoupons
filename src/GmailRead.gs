@@ -45,7 +45,7 @@ function readGmailMessages_(label, recoveryStart, journalSheet, deadlineMs) {
       if (seen[summary.id]) return;
       seen[summary.id] = true;
       const state = states[summary.id];
-      if (state && MC_FINAL_MESSAGE_STATES.indexOf(state.status) >= 0) return;
+      if (state && (MC_FINAL_MESSAGE_STATES.indexOf(state.status) >= 0 || state.status === 'review')) return;
       let raw;
       try {
         raw = Gmail.Users.Messages.get('me', summary.id, {format: 'full'});

@@ -56,9 +56,11 @@ function runScheduledImport() {
       return scheduledSummary_(state, before, result);
     });
   } catch (e) {
-    summary = {imported: 0, importedIds: [], review: 0, errors: [{messageId: '', code: errorCode_(e)}], links: []};
+    summary = {imported: 0, importedIds: [], review: 0, errors: [{messageId: '', code: errorCode_(e)}], links: [], omittedLinks: false};
   }
-  try { withLock_(function () { notifyScheduledImport_(summary); }); } catch (e) { /* notification is best effort */ }
+  try { withLock_(function () { notifyScheduledImport_(summary); }); } catch (e) {
+    if (e && e.code === 'BUSY') persistPendingNotification_(summary);
+  }
   return summary;
 }
 
@@ -90,7 +92,7 @@ function scheduledSummary_(state, before, result) {
   });
   const importedIds = (result.messages || []).filter(function (message) { return message.status === 'confirmed'; })
     .map(function (message) { return String(message.messageId); }).sort();
-  return {imported: Number(result.imported) || 0, importedIds: importedIds, review: review, errors: uniqueErrors, links: links};
+  return {imported: Number(result.imported) || 0, importedIds: importedIds, review: review, errors: uniqueErrors, links: links, omittedLinks: false};
 }
 
 function reviewLink_(state, row) {
@@ -124,7 +126,7 @@ function pendingNotification_() {
   if (!raw) return null;
   let summary;
   try { summary = JSON.parse(raw); } catch (e) { props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY); return null; }
-  if (!summary || !Number.isSafeInteger(summary.imported) || summary.imported < 0 || !Array.isArray(summary.importedIds) ||
+  if (!summary || !Number.isSafeInteger(summary.imported) || summary.imported < 0 || typeof summary.omittedLinks !== 'boolean' || !Array.isArray(summary.importedIds) ||
       !summary.importedIds.every(validGmailApiId_) || !Number.isSafeInteger(summary.review) || summary.review < 0 ||
       !Array.isArray(summary.errors) || !summary.errors.every(validNotificationError_) || !Array.isArray(summary.links) ||
       !summary.links.every(validNotificationLink_)) { props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY); return null; }
@@ -137,7 +139,7 @@ function mergeNotificationSummaries_(left, right) {
     return all.findIndex(function (item) { return item.messageId === error.messageId && item.code === error.code; }) === index;
   });
   const links = (left.links || []).concat(right.links || []).filter(function (link, index, all) { return all.indexOf(link) === index; });
-  return {imported: left.imported + right.imported, importedIds: importedIds, review: left.review + right.review, errors: errors, links: links};
+  return {imported: left.imported + right.imported, importedIds: importedIds, review: left.review + right.review, errors: errors, links: links, omittedLinks: !!left.omittedLinks || !!right.omittedLinks};
 }
 
 function validNotificationError_(error) {
@@ -147,7 +149,7 @@ function validNotificationError_(error) {
 
 function notifyScheduledImport_(summary) {
   const c = config_();
-  if (!summary || !Number.isSafeInteger(summary.imported) || summary.imported < 0 || !Array.isArray(summary.importedIds) ||
+  if (!summary || !Number.isSafeInteger(summary.imported) || summary.imported < 0 || typeof summary.omittedLinks !== 'boolean' || !Array.isArray(summary.importedIds) ||
       !summary.importedIds.every(validGmailApiId_) || !Number.isSafeInteger(summary.review) || summary.review < 0 ||
       !Array.isArray(summary.errors) || !summary.errors.every(validNotificationError_) || !Array.isArray(summary.links)) fail_('STATE');
   const pending = pendingNotification_();
@@ -160,13 +162,13 @@ function notifyScheduledImport_(summary) {
     const candidate = links.slice(0, index + 1);
     return JSON.stringify({imported: summary.imported, importedIds: summary.importedIds, review: summary.review, errors: summary.errors, links: candidate}).length <= 8000;
   });
-  const omittedLinks = boundedLinks.length !== links.length;
+  const omittedLinks = summary.omittedLinks || boundedLinks.length !== links.length;
   const payload = {imported: summary.imported, importedIds: summary.importedIds.sort(), review: summary.review,
     errors: summary.errors.map(function (error) { return {messageId: String(error.messageId || ''), code: String(error.code)}; }).sort(function (a, b) { return (a.messageId + a.code).localeCompare(b.messageId + b.code); }), links: boundedLinks.sort()};
   const fingerprint = digest_(JSON.stringify(payload));
   const previous = notificationState_();
   if (previous && previous.fingerprint === fingerprint) { props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY); return {sent: false}; }
-  const pendingSummary = {imported: summary.imported, importedIds: summary.importedIds, review: summary.review, errors: summary.errors, links: boundedLinks};
+  const pendingSummary = {imported: summary.imported, importedIds: summary.importedIds, review: summary.review, errors: summary.errors, links: boundedLinks, omittedLinks: omittedLinks};
   const pendingJson = JSON.stringify(pendingSummary);
   if (pendingJson.length > 8000) fail_('LIMIT');
   props_().setProperty(MC_PENDING_NOTIFICATION_KEY, pendingJson);
@@ -178,6 +180,14 @@ function notifyScheduledImport_(summary) {
     fingerprint: fingerprint, notifiedAt: notifiedAt}));
   props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY);
   return {sent: true, fingerprint: fingerprint, notifiedAt: notifiedAt};
+}
+
+function persistPendingNotification_(summary) {
+  if (!summary || !Array.isArray(summary.errors)) return;
+  const pending = {imported: Number(summary.imported) || 0, importedIds: summary.importedIds || [], review: Number(summary.review) || 0,
+    errors: summary.errors, links: summary.links || [], omittedLinks: !!summary.omittedLinks};
+  const value = JSON.stringify(pending);
+  if (value.length <= 8000) props_().setProperty(MC_PENDING_NOTIFICATION_KEY, value);
 }
 
 function validNotificationLink_(link) {
