@@ -43,7 +43,7 @@ The example configuration contains product defaults only.
   Unicode decimal digits, units, currency, and the range qualifier `off`. Oversized
   structured values become empty; bounded notes
   retain complete Unicode characters and require review. A supplied image-evidence
-  index must identify a present independently inspected image.
+  index must identify an independently inspected image record.
   Image-based proposals and unknown message completeness also require review.
   Website evidence recognizes prose around bare host URLs while preserving
   punctuation in paths and queries. This increment makes no AI requests and does
@@ -57,7 +57,8 @@ The example configuration contains product defaults only.
   content, closed dialogs and popovers, closed-details content except its first
   direct `summary`, and `hidden` subtrees; include `noscript` fallback content.
   Rendered blocks and replaced elements retain text boundaries. Select controls,
-  visible inputs, and canvases are excluded because their rendered state is not
+  visible inputs, textareas, and active fallback surfaces (audio, canvas, meter,
+  object, progress, and video) are excluded because their rendered state is not
   modeled and therefore force review. Sourceless image alternatives are projected
   as visible text. Direct
   image URLs trim only surrounding ASCII attribute whitespace. Responsive

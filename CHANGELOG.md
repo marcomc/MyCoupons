@@ -41,6 +41,9 @@
 - Unicode decimal range endpoints cannot ground numeric facts; unmodeled canvas
   fallback forces review; sourceless-image alternative text is extracted; and each
   factual field must occur inside its located source quote.
+- Active fallback surfaces and unmodeled text controls preserve incomplete HTML
+  coverage; image evidence requires an inspected record; and discount symbols
+  support ASCII-separated numeric amounts without admitting range endpoints.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

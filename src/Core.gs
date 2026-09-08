@@ -39,16 +39,17 @@ function numericRangeEndpoint_(before, after) {
   const between = '[bB][eE][tT][wW][eE][eE][nN]';
   const digit = '\\p{Nd}';
   const decimal = '[.,٫．]';
-  const amount = '[€$£]?' + digit + '+(?:' + decimal + digit + '+)?' + unit;
+  const currency = '(?:[€$£][\\t\\n\\f\\r ]*)?';
+  const amount = currency + digit + '+(?:' + decimal + digit + '+)?' + unit;
   const separator = '[-−–—/:]';
-  const nextAmount = '[€$£]?' + digit;
+  const nextAmount = currency + digit;
   return new RegExp('^' + unit + space + separator + space + nextAmount, 'u').test(after) ||
-    new RegExp(amount + space + separator + space + '[€$£]?$', 'u').test(before) ||
+    new RegExp(amount + space + separator + space + currency + '$', 'u').test(before) ||
     new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+' + to + '[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) ||
-    new RegExp(amount + qualifier + '[\\t\\n\\f\\r ]+' + to + '[\\t\\n\\f\\r ]+[€$£]?$', 'u').test(before) ||
+    new RegExp(amount + qualifier + '[\\t\\n\\f\\r ]+' + to + '[\\t\\n\\f\\r ]+' + currency + '$', 'u').test(before) ||
     new RegExp('^' + unit + qualifier + '[\\t\\n\\f\\r ]+' + and + '[\\t\\n\\f\\r ]+' + nextAmount, 'u').test(after) &&
-      new RegExp('\\b' + between + '[\\t\\n\\f\\r ]*[€$£]?$', 'u').test(before) ||
-    new RegExp('\\b' + between + '[\\t\\n\\f\\r ]+' + amount + qualifier + '[\\t\\n\\f\\r ]+' + and + '[\\t\\n\\f\\r ]+[€$£]?$', 'u').test(before);
+      new RegExp('\\b' + between + '[\\t\\n\\f\\r ]*' + currency + '$', 'u').test(before) ||
+    new RegExp('\\b' + between + '[\\t\\n\\f\\r ]+' + amount + qualifier + '[\\t\\n\\f\\r ]+' + and + '[\\t\\n\\f\\r ]+' + currency + '$', 'u').test(before);
 }
 function htmlContent_(html) {
   const root = MC_HTML.parse(String(html), {scriptingEnabled: false});
@@ -103,13 +104,13 @@ function htmlContent_(html) {
     if (isHtml && tag === 'input' && !contextSuppressed && !nodeAttrs.some(function (attr) {
       return attr.name === 'type' && String(attr.value).toLowerCase() === 'hidden';
     })) incomplete = true;
-    const activeCanvas = isHtml && tag === 'canvas' && !contextSuppressed;
-    if (activeCanvas) incomplete = true;
-    const suppressed = contextSuppressed || activeCanvas || isHtml && /^(?:select|optgroup|option)$/.test(tag);
+    const activeUnmodeled = isHtml && !contextSuppressed && /^(?:audio|canvas|meter|object|progress|textarea|video)$/.test(tag);
+    if (activeUnmodeled) incomplete = true;
+    const suppressed = contextSuppressed || activeUnmodeled || isHtml && /^(?:select|optgroup|option)$/.test(tag);
     const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|caption|center|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|hr|legend|li|listing|main|menu|nav|ol|p|plaintext|pre|search|section|summary|table|tbody|td|tfoot|th|thead|tr|ul|xmp)$/.test(tag);
     if (block || !suppressed && isHtml && tag === 'br') newline(block);
     if (block) stack.push({exit: true});
-    if (activeCanvas) replacementBoundary();
+    if (activeUnmodeled) replacementBoundary();
     if (!suppressed && isHtml && tag === 'img') {
       replacementBoundary();
       const imageAttrs = Object.create(null);
@@ -232,6 +233,21 @@ function adjacentCodePoint_(source, index, before) {
   }
   return index < source.length ? String.fromCodePoint(source.codePointAt(index)) : '';
 }
+function adjacentNonSpaceCodePoint_(source, index, before) {
+  let cursor = index;
+  while (before ? cursor > 0 : cursor < source.length) {
+    const point = adjacentCodePoint_(source, cursor, before);
+    if (!/[\t\n\f\r ]/.test(point)) return point;
+    cursor += before ? -point.length : point.length;
+  }
+  return '';
+}
+function inspectedImage_(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) ||
+    Object.prototype.hasOwnProperty.call(value, Symbol.toStringTag)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === null || prototype === Object.prototype;
+}
 function codeOccurrences_(value, source) {
   const occurrences = [];
   const re = /\S+/gu;
@@ -269,8 +285,8 @@ function fieldOccurrences_(field, value, source) {
   if (field === 'website') return websiteOccurrences_(value, source);
   if (field === 'discountType' && /^[%€$£]$/.test(value)) {
     return rawOccurrences_(value, source, false).filter(function (occurrence) {
-      const before = adjacentCodePoint_(source, occurrence.start, true);
-      const after = adjacentCodePoint_(source, occurrence.end, false);
+      const before = adjacentNonSpaceCodePoint_(source, occurrence.start, true);
+      const after = adjacentNonSpaceCodePoint_(source, occurrence.end, false);
       return source === value || value === '%' && /\p{Nd}/u.test(before) || value !== '%' && /\p{Nd}/u.test(after);
     });
   }
@@ -286,10 +302,10 @@ function fieldOccurrences_(field, value, source) {
     const afterText = source.slice(occurrence.end, afterEnd);
     const truncatedBefore = beforeStart > 0;
     const truncatedAfter = afterEnd < source.length;
-    const truncatedBetween = truncatedBefore && new RegExp('[\\p{Nd}](?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)?(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?[\\t\\n\\f\\r ]+[aA][nN][dD][\\t\\n\\f\\r ]+[€$£]?$', 'u').test(beforeText);
-    const truncatedDelimiter = truncatedBefore && /[\t\n\f\r ]*(?:[-−–—/:][\t\n\f\r ]*|[tT][oO][\t\n\f\r ]+|[aA][nN][dD][\t\n\f\r ]+)[€$£]?$/.test(beforeText);
+    const truncatedBetween = truncatedBefore && new RegExp('(?:[€$£][\\t\\n\\f\\r ]*)?[\\p{Nd}](?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)?(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?[\\t\\n\\f\\r ]+[aA][nN][dD][\\t\\n\\f\\r ]+(?:[€$£][\\t\\n\\f\\r ]*)?$', 'u').test(beforeText);
+    const truncatedDelimiter = truncatedBefore && /[\t\n\f\r ]*(?:[-−–—/:][\t\n\f\r ]*|[tT][oO][\t\n\f\r ]+|[aA][nN][dD][\t\n\f\r ]+)(?:[€$£][\t\n\f\r ]*)?$/.test(beforeText);
     const truncatedWhitespace = truncatedBefore && /^[\t\n\f\r ]*$/.test(beforeText);
-    const truncatedFollowing = truncatedAfter && new RegExp('^(?:[\\t\\n\\f\\r ]|(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?(?:[\\t\\n\\f\\r ]+(?:[tT][oO]|[aA][nN][dD]))?)*$', 'u').test(afterText);
+    const truncatedFollowing = truncatedAfter && new RegExp('^(?:[\\t\\n\\f\\r ]|(?:[\\t\\n\\f\\r ]*[%€$£]|[\\t\\n\\f\\r ]+[eE][uU][rR][oO][sS]?)(?:[\\t\\n\\f\\r ]+[oO][fF][fF])?(?:[\\t\\n\\f\\r ]+(?:[tT][oO]|[aA][nN][dD]))?)*(?:[€$£][\\t\\n\\f\\r ]*)?$', 'u').test(afterText);
     return utf16Boundary_(source, occurrence.start) && utf16Boundary_(source, occurrence.end) &&
       (!before || !boundary.test(before)) && (!after || !boundary.test(after)) &&
       !(numericField && (numericRangeEndpoint_(beforeText, afterText) || truncatedBetween || truncatedDelimiter || truncatedWhitespace || truncatedFollowing)) &&
@@ -330,7 +346,7 @@ function normalizeCandidate_(raw, message) {
     if (!objectWithKeys(ev, ['quote', 'image']) ||
       ev.quote !== undefined && (typeof ev.quote !== 'string' || !wellFormedUtf16_(ev.quote)) ||
       ev.image !== undefined && !Number.isInteger(ev.image)) fail_('AI');
-    if (ev.image !== undefined && (ev.image < 0 || ev.image >= source.images.length || source.images[ev.image] == null)) fail_('AI');
+    if (ev.image !== undefined && (ev.image < 0 || ev.image >= source.images.length || !inspectedImage_(source.images[ev.image]))) fail_('AI');
   });
   const c = {};
   let truncated = false;
@@ -353,7 +369,7 @@ function normalizeCandidate_(raw, message) {
     const groundedText = ev && typeof ev.quote === 'string' && ev.quote.trim().length > 0 &&
       source.evidenceSpans.some(function (span) { return textEvidenceGrounded_(k, c[k], ev.quote, span); });
     const groundedImage = ev && Number.isInteger(ev.image) && ev.image >= 0 && ev.image < source.images.length &&
-      source.images[ev.image] != null;
+      inspectedImage_(source.images[ev.image]);
     if (!groundedText && !groundedImage) { c[k] = ''; c.review = true; }
     // OCR-only evidence is a proposal, not independently verified import authority.
     if (groundedImage && !groundedText) c.review = true;
