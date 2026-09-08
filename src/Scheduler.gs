@@ -21,6 +21,8 @@ function installDailyImportTrigger() {
 
 function removeDailyImportTrigger() {
   return withLock_(function () {
+    const c = config_();
+    assertOwner_(c);
     const triggers = ownedImportTriggers_();
     if (triggers.length > 1) fail_('RESOURCE');
     if (!triggers.length) { props_().deleteProperty(MC_TRIGGER_ID_KEY); return {removed: false}; }
@@ -47,15 +49,16 @@ function runScheduledImport() {
   let summary;
   try {
     const state = ensureSheetState_();
+    state._deadlineMs = Date.now() + MC.maxRuntimeMs - 15000;
     summary = withLock_(function () {
       const before = readMessageJournal_(state.journalSheet);
       const result = runImportWorkflow_(state);
       return scheduledSummary_(state, before, result);
     });
   } catch (e) {
-    summary = {imported: 0, review: 0, errors: [{code: errorCode_(e)}], links: []};
+    summary = {imported: 0, importedIds: [], review: 0, errors: [{messageId: '', code: errorCode_(e)}], links: []};
   }
-  try { notifyScheduledImport_(summary); } catch (e) { /* notification is best effort */ }
+  try { withLock_(function () { notifyScheduledImport_(summary); }); } catch (e) { /* notification is best effort */ }
   return summary;
 }
 
@@ -85,7 +88,9 @@ function scheduledSummary_(state, before, result) {
   errors.forEach(function (error) {
     if (!uniqueErrors.some(function (item) { return item.messageId === error.messageId && item.code === error.code; })) uniqueErrors.push(error);
   });
-  return {imported: Number(result.imported) || 0, review: review, errors: uniqueErrors, links: links};
+  const importedIds = (result.messages || []).filter(function (message) { return message.status === 'confirmed'; })
+    .map(function (message) { return String(message.messageId); }).sort();
+  return {imported: Number(result.imported) || 0, importedIds: importedIds, review: review, errors: uniqueErrors, links: links};
 }
 
 function reviewLink_(state, row) {
@@ -109,7 +114,7 @@ function notificationState_() {
   const raw = props_().getProperty(MC_NOTIFICATION_STATE_KEY);
   if (!raw) return null;
   let state;
-  try { state = JSON.parse(raw); } catch (e) { fail_('STATE'); }
+  try { state = JSON.parse(raw); } catch (e) { props_().deleteProperty(MC_NOTIFICATION_STATE_KEY); return null; }
   if (!validNotificationState_(state)) { props_().deleteProperty(MC_NOTIFICATION_STATE_KEY); return null; }
   return state;
 }
@@ -119,34 +124,54 @@ function pendingNotification_() {
   if (!raw) return null;
   let summary;
   try { summary = JSON.parse(raw); } catch (e) { props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY); return null; }
-  if (!summary || !Number.isSafeInteger(summary.imported) || summary.imported < 0 || !Number.isSafeInteger(summary.review) || summary.review < 0 || !Array.isArray(summary.errors) || !Array.isArray(summary.links)) { props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY); return null; }
+  if (!summary || !Number.isSafeInteger(summary.imported) || summary.imported < 0 || !Array.isArray(summary.importedIds) ||
+      !summary.importedIds.every(validGmailApiId_) || !Number.isSafeInteger(summary.review) || summary.review < 0 ||
+      !Array.isArray(summary.errors) || !summary.errors.every(validNotificationError_) || !Array.isArray(summary.links) ||
+      !summary.links.every(validNotificationLink_)) { props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY); return null; }
   return summary;
 }
 
 function mergeNotificationSummaries_(left, right) {
-  return {imported: left.imported + right.imported, review: left.review + right.review,
-    errors: (left.errors || []).concat(right.errors || []), links: (left.links || []).concat(right.links || [])};
+  const importedIds = (left.importedIds || []).concat(right.importedIds || []).filter(function (id, index, all) { return all.indexOf(id) === index; });
+  const errors = (left.errors || []).concat(right.errors || []).filter(function (error, index, all) {
+    return all.findIndex(function (item) { return item.messageId === error.messageId && item.code === error.code; }) === index;
+  });
+  const links = (left.links || []).concat(right.links || []).filter(function (link, index, all) { return all.indexOf(link) === index; });
+  return {imported: left.imported + right.imported, importedIds: importedIds, review: left.review + right.review, errors: errors, links: links};
+}
+
+function validNotificationError_(error) {
+  return error && typeof error === 'object' && typeof error.messageId === 'string' &&
+    (!error.messageId || validGmailApiId_(error.messageId)) && typeof error.code === 'string' && !!error.code;
 }
 
 function notifyScheduledImport_(summary) {
   const c = config_();
-  if (!summary || !Number.isSafeInteger(summary.imported) || summary.imported < 0 ||
-      !Number.isSafeInteger(summary.review) || summary.review < 0 || !Array.isArray(summary.errors) ||
-      !Array.isArray(summary.links)) fail_('STATE');
+  if (!summary || !Number.isSafeInteger(summary.imported) || summary.imported < 0 || !Array.isArray(summary.importedIds) ||
+      !summary.importedIds.every(validGmailApiId_) || !Number.isSafeInteger(summary.review) || summary.review < 0 ||
+      !Array.isArray(summary.errors) || !summary.errors.every(validNotificationError_) || !Array.isArray(summary.links)) fail_('STATE');
   const pending = pendingNotification_();
   if (pending) summary = mergeNotificationSummaries_(pending, summary);
   const meaningful = summary.imported > 0 || summary.review > 0 || summary.errors.length > 0;
   if (!meaningful) return {sent: false};
   const links = summary.links.filter(validNotificationLink_);
   if (links.length !== summary.links.length) fail_('STATE');
-  const payload = {imported: summary.imported, review: summary.review,
-    errors: summary.errors.map(function (error) { return {messageId: String(error.messageId || ''), code: String(error.code)}; }).sort(function (a, b) { return (a.messageId + a.code).localeCompare(b.messageId + b.code); }), links: links.sort()};
+  const boundedLinks = links.filter(function (link, index) {
+    const candidate = links.slice(0, index + 1);
+    return JSON.stringify({imported: summary.imported, importedIds: summary.importedIds, review: summary.review, errors: summary.errors, links: candidate}).length <= 8000;
+  });
+  const omittedLinks = boundedLinks.length !== links.length;
+  const payload = {imported: summary.imported, importedIds: summary.importedIds.sort(), review: summary.review,
+    errors: summary.errors.map(function (error) { return {messageId: String(error.messageId || ''), code: String(error.code)}; }).sort(function (a, b) { return (a.messageId + a.code).localeCompare(b.messageId + b.code); }), links: boundedLinks.sort()};
   const fingerprint = digest_(JSON.stringify(payload));
   const previous = notificationState_();
   if (previous && previous.fingerprint === fingerprint) return {sent: false};
-  props_().setProperty(MC_PENDING_NOTIFICATION_KEY, JSON.stringify(summary));
+  const pendingSummary = {imported: summary.imported, importedIds: summary.importedIds, review: summary.review, errors: summary.errors, links: boundedLinks};
+  const pendingJson = JSON.stringify(pendingSummary);
+  if (pendingJson.length > 8000) fail_('LIMIT');
+  props_().setProperty(MC_PENDING_NOTIFICATION_KEY, pendingJson);
   const body = boundedText_(t_('summaryBody', {imported: summary.imported, review: summary.review,
-    errors: summary.errors.length, links: links.length ? '\n' + links.join('\n') : ''}), 4000);
+    errors: summary.errors.length, links: boundedLinks.length ? '\n' + boundedLinks.join('\n') + (omittedLinks ? '\nAdditional links omitted; open the review sheet for the complete list.' : '') : ''}), 4000);
   MailApp.sendEmail(c.ownerEmail, EN.summarySubject, body);
   const notifiedAt = new Date().toISOString();
   props_().setProperty(MC_NOTIFICATION_STATE_KEY, JSON.stringify({version: MC_NOTIFICATION_STATE_VERSION,

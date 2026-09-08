@@ -7,8 +7,9 @@ function runImportWorkflow_(input) {
     state.errors = read.errors;
     state.truncated = read.truncated;
   }
-  const result = {imported: 0, review: 0, errors: state.errors || [], messages: []};
+  const result = {imported: 0, review: 0, errors: state.errors || [], messages: [], truncated: false};
   state.messages.forEach(function (message) {
+    if (state._deadlineMs && Date.now() >= state._deadlineMs) { result.truncated = true; return; }
     const outcome = processCouponMessage_(state, message);
     result.messages.push(outcome);
     if (outcome.status === 'confirmed') result.imported += outcome.rows.length;
