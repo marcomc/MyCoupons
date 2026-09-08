@@ -78,7 +78,8 @@ Both extraction and normalization derive HTML coverage through the same adapter;
 `incomplete: false` cannot override unsupported HTML content. Do not premerge an
 HTML projection into `message.text`, and keep evidence matches within one source
 representation, across a rendered block boundary, or from a quote occurrence
-that does not contain the asserted field. The string-only `htmlText_` and URL-discovery helpers cannot
+that does not contain the asserted field. Suppressed markup also splits source
+spans before deterministic extraction and evidence checks. The string-only `htmlText_` and URL-discovery helpers cannot
 establish source completeness. Future image processing must retain these coverage
 signals rather than treat omitted vector content as processed. Factual fields and
 quotes must be well-formed UTF-16, including complete astral characters.

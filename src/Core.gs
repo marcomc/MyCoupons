@@ -111,6 +111,7 @@ function htmlContent_(html) {
     if (block || !suppressed && isHtml && tag === 'br') newline(block);
     if (block) stack.push({exit: true});
     if (activeUnmodeled) replacementBoundary();
+    else if (suppressed && !entry.suppressed) flushEvidence();
     if (!suppressed && isHtml && tag === 'img') {
       replacementBoundary();
       const imageAttrs = Object.create(null);
@@ -179,7 +180,7 @@ function candidateSource_(message) {
     Object.prototype.hasOwnProperty.call(message, 'html') && typeof message.html !== 'string' ||
     message.images !== undefined && !Array.isArray(message.images)) fail_('AI');
   const html = message.html === undefined ? {text: '', evidenceSpans: [], incomplete: false} : htmlContent_(message.html);
-  return {spans: [message.text || '', html.text].filter(Boolean),
+  return {spans: [message.text || ''].concat(html.evidenceSpans).filter(Boolean),
     evidenceSpans: [message.text || ''].concat(html.evidenceSpans).filter(Boolean),
     images: message.images === undefined ? [] : message.images,
     incomplete: message.incomplete !== false || html.incomplete};

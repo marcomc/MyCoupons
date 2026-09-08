@@ -44,6 +44,7 @@
 - Active fallback surfaces and unmodeled text controls preserve incomplete HTML
   coverage; image evidence requires an inspected record; and discount symbols
   support ASCII-separated numeric amounts without admitting range endpoints.
+- Suppressed inline HTML content now splits extraction and factual-evidence spans.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.

@@ -695,6 +695,24 @@ test('rendered images split text and factual evidence spans', () => {
   assert.deepEqual(Array.from(ctx.remoteImageUrls_(compatible)), ['https://shop.com/offer.jpg']);
 });
 
+test('suppressed inline markup splits text and factual evidence spans', () => {
+  const {ctx} = harness();
+  const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
+  for (const [markup, incomplete, spans] of [['<span hidden>x</span>', false], ['<span hidden><i>x</i></span>', false],
+    ['<template>x</template>', false], ['<select><option>x</option></select>', true], ['<canvas>x</canvas>', true],
+    ['<svg><text>x</text></svg>', true], ['<dialog>x</dialog>', false], ['<span popover>x</span>', false],
+    ['<details><summary>x</summary>later</details>', false, ['Shop Coupon code SAVE', 'x', '20']]]) {
+    const html = 'Shop Coupon code SAVE' + markup + '20';
+    const content = ctx.htmlContent_(html);
+    assert.deepEqual(Array.from(content.evidenceSpans), spans || ['Shop Coupon code SAVE', '20'], markup);
+    assert.equal(content.incomplete, incomplete, markup);
+    assert.ok(!ctx.deterministicCandidates_({html}).some(function (candidate) { return candidate.code === 'SAVE20'; }), markup);
+    const candidate = ctx.normalizeCandidate_(raw, {html, images: [], incomplete: false});
+    assert.equal(candidate.code, '', markup); assert.equal(candidate.review, true, markup);
+  }
+});
+
 test('unmodeled rendered fallback and sourceless image alternatives preserve source coverage', () => {
   const {ctx} = harness();
   for (const tag of ['audio', 'canvas', 'meter', 'object', 'progress', 'textarea', 'video']) {
