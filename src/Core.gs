@@ -105,7 +105,11 @@ function htmlContent_(html) {
   }
   while (stack.length) {
     const entry = stack.pop();
-    if (entry.exit) { newline(true); continue; }
+    if (entry.exit) {
+      if (entry.exit === 'block') newline(true);
+      else flushEvidence();
+      continue;
+    }
     const node = entry.node;
     if (node.nodeName === '#text') {
       if (!entry.suppressed && node.value) appendProjectedText(node.value);
@@ -136,9 +140,11 @@ function htmlContent_(html) {
     const activeUnmodeled = isHtml && !contextSuppressed && /^(?:audio|canvas|embed|meter|object|progress|textarea|video)$/.test(tag);
     if (activeUnmodeled) incomplete = true;
     const suppressed = contextSuppressed || hiddenInput || activeUnmodeled || isHtml && /^(?:select|optgroup|option)$/.test(tag);
+    const buttonBoundary = !suppressed && isHtml && tag === 'button';
     const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|caption|center|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|hr|legend|li|listing|main|menu|nav|ol|p|plaintext|pre|search|section|summary|table|tbody|td|tfoot|th|thead|tr|ul|xmp)$/.test(tag);
     if (block || !suppressed && isHtml && tag === 'br') newline(block);
-    if (block) stack.push({exit: true});
+    if (block) stack.push({exit: 'block'});
+    if (buttonBoundary) { flushEvidence(); stack.push({exit: 'button'}); }
     if (activeUnmodeled) replacementBoundary();
     else if (suppressed && !entry.suppressed) flushEvidence();
     if (!suppressed && isHtml && tag === 'img') {

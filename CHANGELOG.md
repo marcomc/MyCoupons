@@ -40,6 +40,8 @@
   review without projecting their attributes as text.
 - Hidden HTML inputs split source/evidence spans without forcing incomplete
   coverage.
+- Rendered button controls split source/evidence spans without changing their
+  projected text.
 - Unicode decimal range and ratio endpoints cannot ground numeric facts; unmodeled
   canvas fallback forces review; sourceless-image alternative text is extracted;
   and each factual field must occur inside its located source quote.

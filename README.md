@@ -61,7 +61,7 @@ The example configuration contains product defaults only.
   content, closed dialogs and popovers, closed-details content except its first
   direct `summary`, and `hidden` subtrees; include `noscript` fallback content.
   Rendered blocks and replaced elements retain text boundaries; hidden inputs
-  also split source/evidence spans. Select controls, visible inputs, textareas,
+  and button controls also split source/evidence spans. Select controls, visible inputs, textareas,
   and active fallback surfaces (audio, canvas, meter,
   object, progress, and video), plus active embeds, are excluded because their
   rendered state is not modeled and therefore force review. Each active

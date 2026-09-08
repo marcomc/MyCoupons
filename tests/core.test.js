@@ -733,6 +733,30 @@ test('suppressed inline markup splits text and factual evidence spans', () => {
   assert.equal(ctx.htmlContent_('<input type="hidden " value="SAVE30">').incomplete, true);
 });
 
+test('buttons split text and factual evidence spans', () => {
+  const {ctx} = harness();
+  const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
+  for (const [html, text, spans] of [
+    ['<button>Shop coupon code SAVE</button><button>20</button>', 'Shop coupon code SAVE20', ['Shop coupon code SAVE', '20']],
+    ['Shop coupon code SAVE<button>Redeem</button>20', 'Shop coupon code SAVERedeem20', ['Shop coupon code SAVE', 'Redeem', '20']],
+    ['Shop coupon code SAVE<button>20</button>', 'Shop coupon code SAVE20', ['Shop coupon code SAVE', '20']],
+    ['<button>Shop coupon code SAVE</button>20', 'Shop coupon code SAVE20', ['Shop coupon code SAVE', '20']]
+  ]) {
+    const content = ctx.htmlContent_(html);
+    assert.equal(content.text, text, html); assert.deepEqual(Array.from(content.evidenceSpans), spans, html);
+    assert.ok(!ctx.deterministicCandidates_({html}).some(function (candidate) { return candidate.code === 'SAVE20'; }), html);
+    const candidate = ctx.normalizeCandidate_(raw, {html, images: [], incomplete: false});
+    assert.equal(candidate.code, '', html); assert.equal(candidate.review, true, html);
+  }
+  for (const html of ['<button>Shop coupon code SAVE20</button>', '<button>Shop coupon code <b>SAVE20</b></button>']) {
+    const content = ctx.htmlContent_(html);
+    assert.deepEqual(Array.from(content.evidenceSpans), ['Shop coupon code SAVE20'], html);
+    assert.ok(ctx.deterministicCandidates_({html}).some(function (candidate) { return candidate.code === 'SAVE20'; }), html);
+    assert.equal(ctx.normalizeCandidate_(raw, {html, images: [], incomplete: false}).review, false, html);
+  }
+});
+
 test('comments split deterministic and factual evidence source spans', () => {
   const {ctx} = harness();
   const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
