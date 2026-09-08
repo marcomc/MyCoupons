@@ -84,6 +84,7 @@ function canonicalGmailMessage_(raw) {
   const receivedAt = new Date(receivedAtMs);
   if (!isFinite(receivedAt.getTime())) fail_('MAIL');
   const payload = parseMimePayload_(raw.payload);
+  const acquired = acquireMessageImages_(raw, payload.html);
   return {
     id: raw.id,
     threadId: raw.threadId || '',
@@ -94,7 +95,8 @@ function canonicalGmailMessage_(raw) {
     text: payload.text,
     html: payload.html,
     link: gmailLink_(raw.id),
-    incomplete: payload.incomplete
+    incomplete: payload.incomplete || acquired.incomplete,
+    images: acquired.images
   };
 }
 

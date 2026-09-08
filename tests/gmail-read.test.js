@@ -81,7 +81,7 @@ test('reads bounded Gmail pages and preserves independent canonical MIME represe
     id: 'abc123', threadId: 'thread-abc123', receivedAt: '2026-05-22T10:15:00.000Z',
     receivedAtMs: Date.parse('2026-05-22T10:15:00Z'), sender: 'offers@example.com', subject: 'Save 20%',
     text: 'Plain coupon code SAVE20', html: '<p>HTML coupon code <strong>SAVE20</strong></p>',
-    link: 'https://mail.google.com/mail/u/0/#all/abc123', incomplete: false
+    link: 'https://mail.google.com/mail/u/0/#all/abc123', incomplete: false, images: []
   });
   assert.equal(result.messages[1].text, 'Another offer');
   assert.equal(result.messages[1].html, '');
