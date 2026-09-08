@@ -153,7 +153,7 @@ function notifyScheduledImport_(summary) {
   const pending = pendingNotification_();
   if (pending) summary = mergeNotificationSummaries_(pending, summary);
   const meaningful = summary.imported > 0 || summary.review > 0 || summary.errors.length > 0;
-  if (!meaningful) return {sent: false};
+  if (!meaningful) { props_().deleteProperty(MC_NOTIFICATION_STATE_KEY); props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY); return {sent: false}; }
   const links = summary.links.filter(validNotificationLink_);
   if (links.length !== summary.links.length) fail_('STATE');
   const boundedLinks = links.filter(function (link, index) {
@@ -166,13 +166,7 @@ function notifyScheduledImport_(summary) {
   const fingerprint = digest_(JSON.stringify(payload));
   const previous = notificationState_();
   if (previous && previous.fingerprint === fingerprint) { props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY); return {sent: false}; }
-  const boundedImportedIds = summary.importedIds.filter(function (id, index) {
-    return JSON.stringify(summary.importedIds.slice(0, index + 1)).length <= 2000;
-  });
-  const boundedErrors = summary.errors.filter(function (error, index) {
-    return JSON.stringify(summary.errors.slice(0, index + 1)).length <= 3000;
-  });
-  const pendingSummary = {imported: summary.imported, importedIds: boundedImportedIds, review: summary.review, errors: boundedErrors, links: boundedLinks};
+  const pendingSummary = {imported: summary.imported, importedIds: summary.importedIds, review: summary.review, errors: summary.errors, links: boundedLinks};
   const pendingJson = JSON.stringify(pendingSummary);
   if (pendingJson.length > 8000) fail_('LIMIT');
   props_().setProperty(MC_PENDING_NOTIFICATION_KEY, pendingJson);
@@ -187,5 +181,7 @@ function notifyScheduledImport_(summary) {
 }
 
 function validNotificationLink_(link) {
-  return typeof link === 'string' && /^https:\/\/(?:docs\.google\.com\/spreadsheets\/d\/|mail\.google\.com\/mail\/u\/0\/)/.test(link);
+  if (typeof link !== 'string') return false;
+  if (/^https:\/\/docs\.google\.com\/spreadsheets\/d\/[\w-]+\/edit#gid=\d+&range=A\d+$/.test(link)) return true;
+  return /^https:\/\/mail\.google\.com\/mail\/u\/0\//.test(link) && !!sourceId_(link);
 }

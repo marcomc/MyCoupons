@@ -24,7 +24,7 @@ test('notification send failure leaves prior state unchanged for retry', () => {
 
 test('notification links require the supported HTTPS authorities', () => {
   const {ctx} = harness();
-  assert.equal(ctx.validNotificationLink_('https://docs.google.com/spreadsheets/d/sheet/edit#gid=1'), true);
+  assert.equal(ctx.validNotificationLink_('https://docs.google.com/spreadsheets/d/sheet/edit#gid=1&range=A2'), true);
   assert.equal(ctx.validNotificationLink_('https://mail.google.com/mail/u/0/#all/abcdef'), true);
   assert.equal(ctx.validNotificationLink_('http://docs.google.com/spreadsheets/d/sheet'), false);
   assert.equal(ctx.validNotificationLink_('https://evil.example/sheet'), false);
