@@ -61,6 +61,7 @@
   excluded from source coverage.
 - Nonempty iframe documents force review; semicolon-delimited image trackers are
   excluded; prose punctuation after a bare website authority is handled safely.
+- Textual `percent` range units cannot ground numeric discount or spend values.
 - Active fallback surfaces and unmodeled text controls preserve incomplete HTML
   coverage; image evidence requires an inspected record; and discount symbols
   support ASCII-separated numeric amounts without admitting range endpoints.

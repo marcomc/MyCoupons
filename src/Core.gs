@@ -41,7 +41,7 @@ const NUMERIC_RANGE_SEPARATOR = '(?:[-‐‑‒−–—－/⁄:]|…|‥|\\.{2,
 function numericRangeEndpoint_(before, after) {
   const space = '\\s*';
   const gap = '\\s+';
-  const unit = '(?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?)?';
+  const unit = '(?:\\s*[%€$£]|\\s+[eE][uU][rR][oO][sS]?|\\s+[pP][eE][rR][cC][eE][nN][tT][sS]?)?';
   const qualifier = '(?:\\s+[oO][fF][fF])?';
   const to = '[tT][oO]';
   const and = '[aA][nN][dD]';

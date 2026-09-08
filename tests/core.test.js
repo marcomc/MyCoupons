@@ -1214,6 +1214,9 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     const candidate = ctx.normalizeCandidate_(raw, {text: source, images: [], incomplete: false});
     assert.equal(candidate.discountValue, '', source); assert.equal(candidate.review, true, source);
   }
+  const wordRange = ctx.normalizeCandidate_({...raw, discountType: 'percent', evidence: {...raw.evidence, discountType: {quote: 'percent'}}},
+    {text: 'Shop SAVE20 discounts between 20 percent and 30 percent', images: [], incomplete: false});
+  assert.equal(wordRange.discountValue, ''); assert.equal(wordRange.review, true);
   for (const source of ['Shop SAVE20 20%', 'Shop SAVE20 20 euros']) {
     assert.equal(ctx.normalizeCandidate_(raw, {text: source, images: [], incomplete: false}).discountValue, '20', source);
   }
@@ -1227,7 +1230,7 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     data[field] = value; data.evidence[field] = {quote: value};
     return ctx.normalizeCandidate_(data, {text: 'Shop SAVE20 ' + source, images: [], incomplete: false})[field];
   }
-  for (const source of ['20‐30%', '20‑30%', '20‒30%', '20−30%', '20⁄30%', '20…30%', '20‥30%', '20..30%', '20...30%', '20 to 30%', '20 To 30%', '20 TO 30%', 'between 20 and 30%', 'BETWEEN 20 AND 30%',
+  for (const source of ['20‐30%', '20‑30%', '20‒30%', '20−30%', '20⁄30%', '20…30%', '20‥30%', '20..30%', '20...30%', '20 to 30%', '20 To 30%', '20 TO 30%', 'between 20 and 30%', 'BETWEEN 20 AND 30%', 'between 20 percent and 30 percent', 'BETWEEN 20 PERCENTS AND 30 PERCENTS',
     '20% to 30%', '20% off to 30% off', '20% OFF TO 30% OFF', 'between 20% oFf and 30% oFf', '€20 to €30',
     '€20 off to €30 off', '20 euros TO 30 euros', '€ 20 to € 30', '€ 20-€ 30', 'between € 20 and € 30',
     '20 % to € 30', 'from 20% through 30%', 'FROM 20% OFF THROUGH 30% OFF', 'from € 20 through € 30',
