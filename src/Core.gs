@@ -123,15 +123,16 @@ function htmlContent_(html) {
     const contextSuppressed = entry.suppressed || foreign || isHtml &&
       (/^(?:script|style|template|title|head|iframe|noembed|noframes|datalist|rp)$/.test(tag) ||
         closedDialog || closedPopover || nodeAttrs.some(function (attr) { return attr.name === 'hidden'; }));
+    const hiddenInput = isHtml && tag === 'input' && nodeAttrs.some(function (attr) {
+      return attr.name === 'type' && String(attr.value).toLowerCase() === 'hidden';
+    });
     if (!contextSuppressed && isHtml && (tag === 'picture' || (tag === 'img' || tag === 'source') &&
       nodeAttrs.some(function (attr) { return attr.name === 'srcset'; }))) incomplete = true;
     if (isHtml && tag === 'select' && !contextSuppressed) incomplete = true;
-    if (isHtml && tag === 'input' && !contextSuppressed && !nodeAttrs.some(function (attr) {
-      return attr.name === 'type' && String(attr.value).toLowerCase() === 'hidden';
-    })) incomplete = true;
+    if (isHtml && tag === 'input' && !contextSuppressed && !hiddenInput) incomplete = true;
     const activeUnmodeled = isHtml && !contextSuppressed && /^(?:audio|canvas|embed|meter|object|progress|textarea|video)$/.test(tag);
     if (activeUnmodeled) incomplete = true;
-    const suppressed = contextSuppressed || activeUnmodeled || isHtml && /^(?:select|optgroup|option)$/.test(tag);
+    const suppressed = contextSuppressed || hiddenInput || activeUnmodeled || isHtml && /^(?:select|optgroup|option)$/.test(tag);
     const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|caption|center|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|hr|legend|li|listing|main|menu|nav|ol|p|plaintext|pre|search|section|summary|table|tbody|td|tfoot|th|thead|tr|ul|xmp)$/.test(tag);
     if (block || !suppressed && isHtml && tag === 'br') newline(block);
     if (block) stack.push({exit: true});

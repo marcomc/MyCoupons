@@ -708,7 +708,8 @@ test('suppressed inline markup splits text and factual evidence spans', () => {
   const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
     evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
   for (const [markup, incomplete, spans] of [['<span hidden>x</span>', false], ['<span hidden><i>x</i></span>', false],
-    ['<template>x</template>', false], ['<select><option>x</option></select>', true], ['<canvas>x</canvas>', true],
+    ['<template>x</template>', false], ['<input type="hidden" value="x">', false],
+    ['<input TYPE="HIDDEN" value="x">', false], ['<select><option>x</option></select>', true], ['<canvas>x</canvas>', true],
     ['<svg><text>x</text></svg>', true], ['<dialog>x</dialog>', false], ['<span popover>x</span>', false],
     ['<details><summary>x</summary>later</details>', false, ['Shop Coupon code SAVE', 'x', '20']]]) {
     const html = 'Shop Coupon code SAVE' + markup + '20';
@@ -719,6 +720,10 @@ test('suppressed inline markup splits text and factual evidence spans', () => {
     const candidate = ctx.normalizeCandidate_(raw, {html, images: [], incomplete: false});
     assert.equal(candidate.code, '', markup); assert.equal(candidate.review, true, markup);
   }
+  for (const markup of ['<input type="hidden" value="x">', '<input TYPE="HIDDEN" value="x">']) {
+    assert.equal(ctx.htmlText_('Shop Coupon code SAVE' + markup + '20'), 'Shop Coupon code SAVE20', markup);
+  }
+  assert.equal(ctx.htmlContent_('<input type="hidden " value="SAVE30">').incomplete, true);
 });
 
 test('comments split deterministic and factual evidence source spans', () => {
