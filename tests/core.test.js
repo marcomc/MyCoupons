@@ -1224,14 +1224,15 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
   const wordRange = ctx.normalizeCandidate_({...raw, discountType: 'percent', evidence: {...raw.evidence, discountType: {quote: 'percent'}}},
     {text: 'Shop SAVE20 discounts between 20 percent and 30 percent', images: [], incomplete: false});
   assert.equal(wordRange.discountValue, ''); assert.equal(wordRange.review, true);
-  for (const [discountType, source] of [['dollars', 'Shop SAVE20 discounts 20 dollars to 30 dollars'], ['pounds', 'Shop SAVE20 discounts 20 pounds to 30 pounds']]) {
+  for (const [discountType, source] of [['dollars', 'Shop SAVE20 discounts 20 dollars to 30 dollars'], ['pounds', 'Shop SAVE20 discounts 20 pounds to 30 pounds'],
+    ['USD', 'Shop SAVE20 discounts 20 USD to 30 USD'], ['EUR', 'Shop SAVE20 discounts EUR 20 to EUR 30'], ['GBP', 'Shop SAVE20 discounts 20 GBP to 30 GBP']]) {
     const currencyWordRange = ctx.normalizeCandidate_({...raw, discountType,
       evidence: {...raw.evidence, discountType: {quote: discountType}}}, {text: source, images: [], incomplete: false});
     assert.equal(currencyWordRange.discountType, discountType, source);
     assert.equal(currencyWordRange.discountValue, '', source);
     assert.equal(currencyWordRange.review, true, source);
   }
-  for (const source of ['Shop SAVE20 20%', 'Shop SAVE20 20 euros', 'Shop SAVE20 20 dollars', 'Shop SAVE20 20 pounds']) {
+  for (const source of ['Shop SAVE20 20%', 'Shop SAVE20 20 euros', 'Shop SAVE20 20 dollars', 'Shop SAVE20 20 pounds', 'Shop SAVE20 20 USD', 'Shop SAVE20 EUR 20']) {
     assert.equal(ctx.normalizeCandidate_(raw, {text: source, images: [], incomplete: false}).discountValue, '20', source);
   }
   const spend = {merchant: 'Shop', code: 'SAVE20', minimumSpend: '20', confidence: 'high', review: false,
@@ -1247,7 +1248,8 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
   for (const source of ['20‐30%', '20‑30%', '20‒30%', '20−30%', '20⁄30%', '20…30%', '20‥30%', '20..30%', '20...30%', '20 to 30%', '20 To 30%', '20 TO 30%', 'between 20 and 30%', 'BETWEEN 20 AND 30%', 'between 20 percent and 30 percent', 'BETWEEN 20 PERCENTS AND 30 PERCENTS', '20 dollars to 30 dollars', '20 pounds to 30 pounds',
     'between 20 dollars and 30 dollars', '20 dollars through 30 dollars', '20 pounds up to 30 pounds',
     'from 20 dollars through 30 dollars', 'from 20 pounds up to 30 pounds',
-    '20% to 30%', '20% off to 30% off', '20% OFF TO 30% OFF', 'between 20% oFf and 30% oFf', '€20 to €30',
+    '20 USD to 30 USD', 'USD 20 to USD 30', 'between USD 20 and USD 30',
+    '20 EUR through 30 EUR', 'GBP 20 up to GBP 30', '20% to 30%', '20% off to 30% off', '20% OFF TO 30% OFF', 'between 20% oFf and 30% oFf', '€20 to €30',
     '€20 off to €30 off', '20 euros TO 30 euros', '€ 20 to € 30', '€ 20-€ 30', 'between € 20 and € 30',
     '20 % to € 30', 'from 20% through 30%', 'FROM 20% OFF THROUGH 30% OFF', 'from € 20 through € 30',
     'from 20 euros through 30 euros', 'from 20% up to 30%', 'FROM 20% UP TO 30%', 'from € 20 up to € 30',
@@ -1272,12 +1274,17 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, minimumSpend: {quote: standalone}}},
   {text: 'Shop SAVE20 ' + standalone, images: [], incomplete: false});
   assert.equal(standaloneCandidate.minimumSpend, '20'); assert.equal(standaloneCandidate.review, false);
-  for (const source of ['20 coffee to 30 tea', '20 offer to 30 people', '20 percentage to 30 percentage',
+  for (const source of ['20 coffee to 30 tea', '20 tea to 30 tea', '20 offer to 30 people', '20 percentage to 30 percentage',
     'from 20 coffee through 30 tea', 'Save €20 through 30 September']) {
     for (const field of ['discountValue', 'minimumSpend']) assert.equal(numericCandidate(field, '20', source), '20', source);
   }
+  for (const field of ['discountValue', 'minimumSpend']) {
+    assert.equal(numericCandidate(field, '30', 'x'.repeat(97) + ' 20 tea to 30 coffee'), '30', field);
+  }
   assert.equal(numericCandidate('discountValue', '20', 'from €20 through 30 September'), '20');
   assert.equal(numericCandidate('discountValue', '30', 'from €20 through 30 September'), '');
+  assert.equal(numericCandidate('discountValue', '20', 'from USD 20 through 30 September'), '20');
+  assert.equal(numericCandidate('discountValue', '30', 'from USD 20 through 30 September'), '');
   assert.equal(numericCandidate('discountValue', '20', 'from €20\u00a0through\u202f30\u00a0September'), '20');
   assert.equal(numericCandidate('discountValue', '30', 'from €20\u00a0through\u202f30\u00a0September'), '');
   for (const source of ['Expires May 20', 'SCADE MAGGIO 20', 'Expires May\u00a020', 'Scade maggio\u202f20',
@@ -1349,7 +1356,12 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
     '20…' + ' '.repeat(97) + '30%', '20‥' + ' '.repeat(97) + '30%', '20..' + ' '.repeat(97) + '30%', '20...' + ' '.repeat(97) + '30%',
     '20' + ' '.repeat(97) + '…30%', '20' + ' '.repeat(97) + '‥30%', '20' + ' '.repeat(97) + '..30%', '20' + ' '.repeat(97) + '...30%', '20%' + ' '.repeat(97) + 'to 30%',
     '20% OFF TO' + ' '.repeat(97) + '30% OFF', '20 dollars off to' + ' '.repeat(97) + '30 dollars off',
-    '20 pounds off to' + ' '.repeat(97) + '30 pounds off', 'BETWEEN' + ' '.repeat(97) + '20% OFF AND 30% OFF',
+    '20 pounds off to' + ' '.repeat(97) + '30 pounds off', '20 USD off to' + ' '.repeat(97) + '30 USD off',
+    'USD 20 off to' + ' '.repeat(97) + 'USD 30 off', '20 USD off to' + ' '.repeat(95) + '30 USD off',
+    'USD 20 off to' + ' '.repeat(91) + 'USD 30 off', 'from 20 USD off through' + ' '.repeat(90) + '30 USD off',
+    'between USD 20 off and' + ' '.repeat(90) + 'USD 30 off', 'USD 20 off to' + ' '.repeat(87) + 'USD 30 off',
+    'between USD 20 off and' + ' '.repeat(86) + 'USD 30 off', 'from USD 20 off through' + ' '.repeat(82) + 'USD 30 off',
+    'from USD 20 off up to' + ' '.repeat(84) + 'USD 30 off', 'BETWEEN' + ' '.repeat(97) + '20% OFF AND 30% OFF',
     'between 20%' + ' '.repeat(97) + 'and 30%', 'from 20% through' + ' '.repeat(97) + '30%',
     'from 20% through' + ' '.repeat(97) + '€30', 'from 20\u00a0% up\u202fto' + '\u00a0'.repeat(97) + '30\u00a0%']) {
     for (const field of ['discountValue', 'minimumSpend']) {

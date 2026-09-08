@@ -38,7 +38,20 @@ const DATE_MONTH_DOTTED_ABBREVIATION = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|s
 const DATE_MONTH_TOKEN_PATTERN = '(?:' + DATE_MONTH_PATTERN + '|' + DATE_MONTH_DOTTED_ABBREVIATION + ')';
 const DATE_MONTH_END = '(?=$|[^\\p{L}\\p{N}\\p{M}_])';
 const NUMERIC_RANGE_SEPARATOR = '(?:[-‐‑‒−–—－/⁄:]|…|‥|\\.{2,})';
-const NUMERIC_RANGE_UNIT_TOKEN = '(?:\\s*[%€$£]|\\s+(?:[eE][uU][rR][oO][sS]?|[dD][oO][lL][lL][aA][rR][sS]?|[pP][oO][uU][nN][dD][sS]?|[pP][eE][rR][cC][eE][nN][tT][sS]?))';
+const NUMERIC_RANGE_CURRENCY_CODE_TOKEN = '(?:[Ee][Uu][Rr]|[Uu][Ss][Dd]|[Gg][Bb][Pp])';
+const NUMERIC_RANGE_CURRENCY_CODE_PREFIX_FRAGMENT_TOKEN = '(?:[Ee](?:[Uu])?|[Uu](?:[Ss])?|[Gg](?:[Bb])?)';
+const NUMERIC_RANGE_CURRENCY_CODE_SUFFIX_FRAGMENT_TOKEN = '(?:[Rr]|[Uu][Rr]|[Dd]|[Ss][Dd]|[Pp]|[Bb][Pp])';
+const NUMERIC_RANGE_CURRENCY_PREFIX_TOKEN = '(?:[€$£]\\s*|' + NUMERIC_RANGE_CURRENCY_CODE_TOKEN + '\\s+)';
+const NUMERIC_RANGE_UNIT_TOKEN = '(?:\\s*[%€$£]|\\s+(?:[eE][uU][rR][oO][sS]?|[dD][oO][lL][lL][aA][rR][sS]?|[pP][oO][uU][nN][dD][sS]?|[pP][eE][rR][cC][eE][nN][tT][sS]?|' + NUMERIC_RANGE_CURRENCY_CODE_TOKEN + '))';
+const NUMERIC_RANGE_CONNECTOR_FRAGMENT = '(?:[tT][oO]|[oO]|[aA][nN][dD]|[nN][dD]|[dD]|[tT][hH][rR][oO][uU][gG][hH]|[hH][rR][oO][uU][gG][hH]|[rR][oO][uU][gG][hH]|[oO][uU][gG][hH]|[uU][gG][hH]|[gG][hH]|[hH]|[uU][pP]\\s+[tT][oO]|[pP]\\s+[tT][oO])';
+const NUMERIC_RANGE_QUALIFIER_FRAGMENT = '(?:[oO][fF][fF]|[fF][fF]|[fF])';
+function truncatedRangeFragment_(text) {
+  const currencyPrefix = '(?:' + NUMERIC_RANGE_CURRENCY_PREFIX_TOKEN + ')?';
+  const currencySuffix = '(?:' + NUMERIC_RANGE_CURRENCY_CODE_TOKEN + '|' +
+    NUMERIC_RANGE_CURRENCY_CODE_SUFFIX_FRAGMENT_TOKEN + ')?';
+  return new RegExp('^\\s*' + currencySuffix + '\\s*(?:' + NUMERIC_RANGE_QUALIFIER_FRAGMENT + '\\s+)?' +
+    NUMERIC_RANGE_CONNECTOR_FRAGMENT + '\\s*' + currencyPrefix + '$', 'u').test(text);
+}
 function numericRangeEndpoint_(before, after) {
   const space = '\\s*';
   const gap = '\\s+';
@@ -52,7 +65,7 @@ function numericRangeEndpoint_(before, after) {
   const digit = '\\p{Nd}';
   const decimal = '[.,٫．]';
   const month = DATE_MONTH_PATTERN;
-  const currency = '(?:[€$£]\\s*)?';
+  const currency = '(?:' + NUMERIC_RANGE_CURRENCY_PREFIX_TOKEN + ')?';
   const amount = currency + digit + '+(?:' + decimal + digit + '+)?' + unit;
   const separator = NUMERIC_RANGE_SEPARATOR;
   const nextAmount = currency + digit;
@@ -351,6 +364,9 @@ function fieldOccurrences_(field, value, source) {
   const numericField = ['discountValue', 'minimumSpend'].indexOf(field) >= 0 && /\p{Nd}/u.test(value);
   const rangeContext = 96;
   const rangeUnit = '(?:' + NUMERIC_RANGE_UNIT_TOKEN + ')?';
+  const currencyPrefix = '(?:' + NUMERIC_RANGE_CURRENCY_PREFIX_TOKEN + ')?';
+  const trailingCurrencyPrefix = '(?:' + NUMERIC_RANGE_CURRENCY_PREFIX_TOKEN + '|' +
+    NUMERIC_RANGE_CURRENCY_CODE_TOKEN + '|' + NUMERIC_RANGE_CURRENCY_CODE_PREFIX_FRAGMENT_TOKEN + ')?';
   return rawOccurrences_(value, source, true).filter(function (occurrence) {
     const before = adjacentCodePoint_(source, occurrence.start, true);
     const after = adjacentCodePoint_(source, occurrence.end, false);
@@ -360,17 +376,19 @@ function fieldOccurrences_(field, value, source) {
     const afterText = source.slice(occurrence.end, afterEnd);
     const truncatedBefore = beforeStart > 0;
     const truncatedAfter = afterEnd < source.length;
-    const truncatedBetween = truncatedBefore && new RegExp('(?:[€$£]\\s*)?[\\p{Nd}]' + rangeUnit +
-      '(?:\\s+[oO][fF][fF])?\\s+[aA][nN][dD]\\s+(?:[€$£]\\s*)?$', 'u').test(beforeText);
-    const truncatedDelimiter = truncatedBefore && new RegExp('\\s*(?:' + NUMERIC_RANGE_SEPARATOR + '\\s*|[tT][oO]\\s+|[aA][nN][dD]\\s+|[tT][hH][rR][oO][uU][gG][hH]\\s+|[uU][pP]\\s+[tT][oO]\\s+)(?:[€$£]\\s*)?$', 'u').test(beforeText);
-    const truncatedWhitespace = truncatedBefore && /^\s*(?:[€$£]\s*)?$/.test(beforeText);
-    const truncatedFollowing = truncatedAfter && new RegExp('^(?:\\s|(?:' + NUMERIC_RANGE_UNIT_TOKEN +
-      ')(?:\\s+[oO][fF][fF])?(?:\\s+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?)*(?:' +
-      NUMERIC_RANGE_SEPARATOR + '\\s*)?(?:[€$£]\\s*)?$', 'u').test(afterText);
+    const truncatedBetween = truncatedBefore && new RegExp(currencyPrefix + '[\\p{Nd}]' + rangeUnit +
+      '(?:\\s+[oO][fF][fF])?\\s+[aA][nN][dD]\\s+' + currencyPrefix + '$', 'u').test(beforeText);
+    const truncatedDelimiter = truncatedBefore && new RegExp('^\\s*(?:' + NUMERIC_RANGE_SEPARATOR + '\\s*|[tT][oO]\\s+|[aA][nN][dD]\\s+|[tT][hH][rR][oO][uU][gG][hH]\\s+|[uU][pP]\\s+[tT][oO]\\s+)' + currencyPrefix + '$', 'u').test(beforeText);
+    const truncatedWhitespace = truncatedBefore && new RegExp('^\\s*' + currencyPrefix + '$', 'u').test(beforeText);
+    const truncatedFragment = truncatedBefore && truncatedRangeFragment_(beforeText);
+    const truncatedFollowing = truncatedAfter && new RegExp('^(?:\\s|' + NUMERIC_RANGE_UNIT_TOKEN +
+      '(?:\\s+[oO][fF][fF])?(?:\\s+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?|[oO][fF][fF]' +
+      '(?:\\s+(?:[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO]))?|[tT][oO]|[aA][nN][dD]|[tT][hH][rR][oO][uU][gG][hH]|[uU][pP]\\s+[tT][oO])*(?:' +
+      NUMERIC_RANGE_SEPARATOR + '\\s*)?' + trailingCurrencyPrefix + '$', 'u').test(afterText);
     const dateComponent = numericField && (dateMonthFollows_(source.slice(occurrence.end)) || dateMonthPrecedes_(beforeText) || dateMonthDayPrecedes_(beforeText));
     return utf16Boundary_(source, occurrence.start) && utf16Boundary_(source, occurrence.end) &&
       (!before || !boundary.test(before)) && (!after || !boundary.test(after)) &&
-      !(numericField && (dateComponent || numericRangeEndpoint_(beforeText, afterText) || truncatedBetween || truncatedDelimiter || truncatedWhitespace || truncatedFollowing)) &&
+      !(numericField && (dateComponent || numericRangeEndpoint_(beforeText, afterText) || truncatedBetween || truncatedDelimiter || truncatedWhitespace || truncatedFragment || truncatedFollowing)) &&
       !(/\p{Nd}$/u.test(value) && /^[.,٫．]\p{Nd}/u.test(source.slice(occurrence.end, occurrence.end + 3))) &&
       !(/^\p{Nd}/u.test(value) && /\p{Nd}[.,٫．]$/u.test(source.slice(Math.max(0, occurrence.start - 3), occurrence.start)));
   });

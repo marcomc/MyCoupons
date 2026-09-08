@@ -42,7 +42,8 @@ The example configuration contains product defaults only.
   ratio, Unicode hyphen/minus/dash, fraction-slash, ellipsis or range-dot endpoints, or supported
   word-delimited interval endpoints, including
   Unicode decimal digits, units, currency, the range qualifier `off`, and
-  Unicode-space-separated symbols. Discount and minimum-spend fields store a
+  Unicode-space-separated symbols. Range units recognize `EUR`, `USD`, and
+  `GBP` in either documented currency position. Discount and minimum-spend fields store a
   scalar Unicode decimal literal; units and currency remain source context.
   A discount symbol and its amount must be adjacent in the same source span;
   currencies may precede or follow their amount. Calendar date components with
