@@ -59,10 +59,16 @@ function t_(key, values) {
   Object.keys(values || {}).forEach(function (k) { text = text.replace('{' + k + '}', values[k]); });
   return text;
 }
+var MC_LOCK_DEPTH = 0;
 function withLock_(fn) {
+  if (MC_LOCK_DEPTH > 0) {
+    MC_LOCK_DEPTH++;
+    try { return fn(); } finally { MC_LOCK_DEPTH--; }
+  }
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) fail_('BUSY');
-  try { return fn(); } finally { lock.releaseLock(); }
+  MC_LOCK_DEPTH = 1;
+  try { return fn(); } finally { MC_LOCK_DEPTH = 0; lock.releaseLock(); }
 }
 function assertOwner_(c) {
   const profile = Gmail.Users.getProfile('me');
