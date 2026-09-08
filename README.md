@@ -43,7 +43,12 @@ The example configuration contains product defaults only.
 - Canonical message payloads preserve the message ID, thread ID, received time,
   sender, subject, plain text, raw HTML, and canonical Gmail link. MIME
   alternatives remain independent; unsupported content marks the payload
-  incomplete and malformed message data produces a retryable error.
+  incomplete and malformed message data produces a retryable error. Bounded
+  image acquisition preserves DOM-order slots, maps only matching inline CIDs,
+  fetches only safe HTTPS images, and stores inspected bytes/blob data with
+  safe dimensions when known. Rejected, missing, duplicate, redirected,
+  oversized, non-image, tracker, and small-pixel resources retain incomplete
+  coverage.
 - `runImportWorkflow_` consumes canonical reader output, derives deterministic
   candidates, persists bounded 26-column rows, and records candidate row
   references in the journal. Dedupe keys make reruns idempotent while retaining

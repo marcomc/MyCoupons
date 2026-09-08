@@ -13,6 +13,7 @@ function harness({vendorLast = false} = {}) {
       DigestAlgorithm: {SHA_256: 'sha256'}, Charset: {UTF_8: 'utf8'},
       computeDigest: (_, s) => [...crypto.createHash('sha256').update(s).digest()],
       base64DecodeWebSafe: value => [...Buffer.from(value.replace(/-/g, '+').replace(/_/g, '/'), 'base64')],
+      base64EncodeWebSafe: bytes => Buffer.from(bytes).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
       newBlob: bytes => ({getDataAsString: charset => Buffer.from(bytes).toString(charset.toLowerCase() === 'iso-8859-1' ? 'latin1' : 'utf8')}),
       formatDate: (d, zone, format) => {
         const value = new Intl.DateTimeFormat('en-CA', {timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit'}).format(d);
@@ -32,7 +33,7 @@ function harness({vendorLast = false} = {}) {
     Gmail: {Users: {getProfile: () => ({emailAddress: owner})}}
   };
   vm.createContext(ctx);
-  const names = ['locales/en', 'Config', 'Core', 'NumericEvidence', 'HtmlEvidence',
+  const names = ['locales/en', 'Config', 'Core', 'NumericEvidence', 'HtmlEvidence', 'ImageAcquisition',
     'CandidateEvidence', 'GmailIdentity', 'SheetSafety', 'SheetState', 'GmailRead', 'ImportWorkflow'];
   if (vendorLast) names.push('vendor/Html');
   else names.unshift('vendor/Html');

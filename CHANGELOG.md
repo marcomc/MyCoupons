@@ -4,6 +4,11 @@
 
 ### Added
 
+- Bounded canonical image acquisition for Gmail attachments, inline CID parts,
+  and safe HTTPS HTML images, with DOM-order identity, byte/count limits,
+  MIME/status/redirect filtering, tracker and small-pixel rejection, and
+  incomplete-coverage propagation without Gmail mutations.
+
 - Deterministic import workflow persistence: canonical reader messages become
   source-grounded coupon or review rows, with journal-linked deduplication,
   retryable failures, and no Gmail mutations.
