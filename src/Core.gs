@@ -38,6 +38,7 @@ const DATE_MONTH_DOTTED_ABBREVIATION = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|s
 const DATE_MONTH_TOKEN_PATTERN = '(?:' + DATE_MONTH_PATTERN + '|' + DATE_MONTH_DOTTED_ABBREVIATION + ')';
 const DATE_MONTH_END = '(?=$|[^\\p{L}\\p{N}\\p{M}_])';
 const NUMERIC_RANGE_SEPARATOR = '(?:[-‐‑‒−–—－/⁄:]|…|‥|\\.{2,})';
+const NUMERIC_SIGN_TOKEN = '(?:[+＋﹢⁺₊]|[-‐‑‒−–—―－﹣⁻₋])';
 const NUMERIC_RANGE_CURRENCY_CODE_TOKEN = '(?:[Ee][Uu][Rr]|[Uu][Ss][Dd]|[Gg][Bb][Pp])';
 const NUMERIC_RANGE_CURRENCY_CODE_PREFIX_FRAGMENT_TOKEN = '(?:[Ee](?:[Uu])?|[Uu](?:[Ss])?|[Gg](?:[Bb])?)';
 const NUMERIC_RANGE_CURRENCY_CODE_SUFFIX_FRAGMENT_TOKEN = '(?:[Rr]|[Uu][Rr]|[Dd]|[Ss][Dd]|[Pp]|[Bb][Pp])';
@@ -51,6 +52,9 @@ function truncatedRangeFragment_(text) {
     NUMERIC_RANGE_CURRENCY_CODE_SUFFIX_FRAGMENT_TOKEN + ')?';
   return new RegExp('^\\s*' + currencySuffix + '\\s*(?:' + NUMERIC_RANGE_QUALIFIER_FRAGMENT + '\\s+)?' +
     NUMERIC_RANGE_CONNECTOR_FRAGMENT + '\\s*' + currencyPrefix + '$', 'u').test(text);
+}
+function signedNumericPrefix_(before) {
+  return new RegExp(NUMERIC_SIGN_TOKEN + '\\s*(?:' + NUMERIC_RANGE_CURRENCY_PREFIX_TOKEN + ')?$', 'u').test(before);
 }
 function numericRangeEndpoint_(before, after) {
   const space = '\\s*';
@@ -252,20 +256,35 @@ function trackerImageUrl_(url) {
 function couponSignal_(text) {
   return /\b(coupon|voucher|promo(?:tion|code)?|discount|sconto|codice|offert[ae]|redeem|cashback|sale|save|risparmi|buono|buoni|deal)\b|\d\s*%/i.test(text);
 }
+function inspectedImageAt_(images, index) {
+  const descriptor = Object.getOwnPropertyDescriptor(images, index);
+  return descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value') && inspectedImage_(descriptor.value);
+}
 function activeHtmlImagesInspected_(count, images) {
-  for (let index = 0; index < count; index++) if (!inspectedImage_(images[index])) return false;
+  for (let index = 0; index < count; index++) if (!inspectedImageAt_(images, index)) return false;
   return true;
 }
+function sourceFieldValue_(message, key) {
+  const descriptor = Object.getOwnPropertyDescriptor(message, key);
+  if (!descriptor) {
+    if (key in message) fail_('AI');
+    return undefined;
+  }
+  if (!Object.prototype.hasOwnProperty.call(descriptor, 'value')) fail_('AI');
+  return descriptor.value;
+}
 function candidateSource_(message) {
-  if (!message || typeof message !== 'object' || Array.isArray(message) ||
-    message.text !== undefined && typeof message.text !== 'string' ||
-    Object.prototype.hasOwnProperty.call(message, 'html') && typeof message.html !== 'string' ||
-    message.images !== undefined && !Array.isArray(message.images)) fail_('AI');
-  const html = message.html === undefined ? {text: '', evidenceSpans: [], activeImageCount: 0, incomplete: false} : htmlContent_(message.html);
-  const images = message.images === undefined ? [] : message.images;
+  if (!message || typeof message !== 'object' || Array.isArray(message)) fail_('AI');
+  const text = sourceFieldValue_(message, 'text');
+  const htmlInput = sourceFieldValue_(message, 'html');
+  const suppliedImages = sourceFieldValue_(message, 'images');
+  if (text !== undefined && typeof text !== 'string' || htmlInput !== undefined && typeof htmlInput !== 'string' ||
+    suppliedImages !== undefined && !Array.isArray(suppliedImages)) fail_('AI');
+  const html = htmlInput === undefined ? {text: '', evidenceSpans: [], activeImageCount: 0, incomplete: false} : htmlContent_(htmlInput);
+  const images = suppliedImages === undefined ? [] : suppliedImages;
   const incomplete = ownEnumerableDataValue_(message, 'incomplete');
-  return {spans: [message.text || ''].concat(html.evidenceSpans).filter(Boolean),
-    evidenceSpans: [message.text || ''].concat(html.evidenceSpans).filter(Boolean),
+  return {spans: [text || ''].concat(html.evidenceSpans).filter(Boolean),
+    evidenceSpans: [text || ''].concat(html.evidenceSpans).filter(Boolean),
     images: images,
     incomplete: incomplete !== false || html.incomplete ||
       !activeHtmlImagesInspected_(html.activeImageCount, images)};
@@ -422,7 +441,7 @@ function fieldOccurrences_(field, value, source) {
     const dateComponent = numericField && (dateMonthFollows_(source.slice(occurrence.end)) || dateMonthPrecedes_(beforeText) || dateMonthDayPrecedes_(beforeText));
     return utf16Boundary_(source, occurrence.start) && utf16Boundary_(source, occurrence.end) &&
       (!before || !boundary.test(before)) && (!after || !boundary.test(after)) &&
-      !(numericField && (dateComponent || numericRangeEndpoint_(beforeText, afterText) || truncatedBetween || truncatedDelimiter || truncatedWhitespace || truncatedFragment || truncatedFollowing)) &&
+      !(numericField && (signedNumericPrefix_(beforeText) || dateComponent || numericRangeEndpoint_(beforeText, afterText) || truncatedBetween || truncatedDelimiter || truncatedWhitespace || truncatedFragment || truncatedFollowing)) &&
       !(/\p{Nd}$/u.test(value) && /^[.,٫．]\p{Nd}/u.test(source.slice(occurrence.end, occurrence.end + 3))) &&
       !(/^\p{Nd}/u.test(value) && /\p{Nd}[.,٫．]$/u.test(source.slice(Math.max(0, occurrence.start - 3), occurrence.start)));
   });
@@ -473,7 +492,7 @@ function discountPairImageEvidence_(typeEvidence, valueEvidence, source) {
   const typeImage = typeEvidence && ownValue_(typeEvidence, 'image');
   const valueImage = valueEvidence && ownValue_(valueEvidence, 'image');
   return Number.isInteger(typeImage) && typeImage === valueImage && typeImage >= 0 &&
-    typeImage < source.images.length && inspectedImage_(source.images[typeImage]);
+    typeImage < source.images.length && inspectedImageAt_(source.images, typeImage);
 }
 function normalizeCandidate_(raw, message) {
   if (!plainObjectWithKeys_(raw, MC.fields.concat(['confidence', 'review', 'evidence'])) ||
@@ -488,7 +507,7 @@ function normalizeCandidate_(raw, message) {
     if (!plainObjectWithKeys_(ev, ['quote', 'image']) ||
       ownValue_(ev, 'quote') !== undefined && (typeof ownValue_(ev, 'quote') !== 'string' || !wellFormedUtf16_(ownValue_(ev, 'quote'))) ||
       ownValue_(ev, 'image') !== undefined && !Number.isInteger(ownValue_(ev, 'image'))) fail_('AI');
-    if (ownValue_(ev, 'image') !== undefined && (ownValue_(ev, 'image') < 0 || ownValue_(ev, 'image') >= source.images.length || !inspectedImage_(source.images[ownValue_(ev, 'image')]))) fail_('AI');
+    if (ownValue_(ev, 'image') !== undefined && (ownValue_(ev, 'image') < 0 || ownValue_(ev, 'image') >= source.images.length || !inspectedImageAt_(source.images, ownValue_(ev, 'image')))) fail_('AI');
   });
   const c = {};
   let truncated = false;
@@ -520,11 +539,12 @@ function normalizeCandidate_(raw, message) {
     const groundedText = ev && typeof quote === 'string' && quote.trim().length > 0 &&
       source.evidenceSpans.some(function (span) { return textEvidenceGrounded_(k, c[k], quote, span); });
     const groundedImage = ev && Number.isInteger(image) && image >= 0 && image < source.images.length &&
-      inspectedImage_(source.images[image]);
+      inspectedImageAt_(source.images, image);
     if (!groundedText && !groundedImage) { c[k] = ''; c.review = true; }
     // OCR-only evidence is a proposal, not independently verified import authority.
     if (groundedImage && !groundedText) c.review = true;
   });
+  if (Boolean(c.discountType) !== Boolean(c.discountValue)) c.review = true;
   const typeEvidence = ownValue_(evidence, 'discountType');
   const valueEvidence = ownValue_(evidence, 'discountValue');
   const pairedText = source.evidenceSpans.some(function (span) {

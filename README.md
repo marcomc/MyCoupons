@@ -45,7 +45,9 @@ The example configuration contains product defaults only.
   Unicode decimal digits, units, currency, the range qualifier `off`, and
   Unicode-space-separated symbols. Range units recognize `EUR`, `USD`, and
   `GBP` in either documented currency position. Discount and minimum-spend fields store a
-  scalar Unicode decimal literal; units and currency remain source context.
+  scalar Unicode decimal literal; units and currency remain source context. Signed
+  source expressions cannot ground an unsigned scalar value, and a lone discount
+  component always requires review.
   A discount symbol and its amount must be adjacent in the same source span;
   currencies may precede or follow their amount. Calendar date components with
   supported English or Italian month labels cannot
@@ -92,6 +94,8 @@ The example configuration contains product defaults only.
 
 Candidate helpers accept optional raw `message.html` alongside independent
 `message.text` (plain text and subject) and independently inspected `message.images`.
+Each supplied source field must be an own data property; inherited and accessor
+fields are rejected before extraction.
 Both extraction and normalization derive HTML coverage through the same adapter;
 an own enumerable data `incomplete: false` cannot override unsupported HTML
 content. Do not premerge an HTML projection into `message.text`, and keep evidence matches within one source

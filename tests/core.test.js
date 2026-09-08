@@ -114,6 +114,14 @@ test('grounded complete AI text can confirm, OCR alone requires review', () => {
       evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountType: {quote: discountType}, discountValue: {quote: discountValue}}};
     assert.equal(ctx.normalizeCandidate_(spaced, {text, images: [], incomplete: false}).review, false, text);
   }
+  const loneValue = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', discountValue: '20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountValue: {quote: '20'}}},
+  {text: 'Shop SAVE20 minimum spend $20', images: [], incomplete: false});
+  assert.equal(loneValue.discountValue, '20'); assert.equal(loneValue.review, true);
+  const loneType = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', discountType: '%', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}, discountType: {quote: '%'}}},
+  {text: 'Shop SAVE20 20%', images: [], incomplete: false});
+  assert.equal(loneType.discountType, '%'); assert.equal(loneType.review, true);
 });
 test('mixed outcomes consistently leave email unchanged', () => {
   const {ctx} = harness();
@@ -514,6 +522,26 @@ test('HTML extraction excludes hidden lexical contexts without losing following 
       evidence: {merchant: {quote: 'Shop'}, code: {quote: 'HIDDEN'}}}, {text, images: [], incomplete: false});
     assert.equal(actual.code, ''); assert.equal(actual.review, true);
   }
+});
+
+test('candidate source fields must be own data properties', () => {
+  const {ctx} = harness();
+  const raw = {merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
+    evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}};
+  const inheritedText = Object.assign(Object.create({text: 'Shop SAVE20'}), {images: [], incomplete: false});
+  const inheritedHtml = Object.assign(Object.create({html: '<p>Shop SAVE20</p>'}), {images: [], incomplete: false});
+  const inheritedImages = Object.assign(Object.create({images: [{}]}), {html: '<p>Shop SAVE20<img src="https://shop.com/offer.jpg"></p>', incomplete: false});
+  for (const message of [inheritedText, inheritedHtml, inheritedImages]) {
+    assert.throws(() => ctx.normalizeCandidate_(raw, message), /AI/);
+  }
+  for (const key of ['text', 'html', 'images']) {
+    const message = {incomplete: false};
+    Object.defineProperty(message, key, {enumerable: true, get() { throw new Error('read'); }});
+    assert.throws(() => ctx.normalizeCandidate_(raw, message), /AI/);
+  }
+  const nullPrototype = Object.create(null);
+  Object.assign(nullPrototype, {text: 'Shop SAVE20', images: [], incomplete: false});
+  assert.equal(ctx.normalizeCandidate_(raw, nullPrototype).review, false);
 });
 
 test('only explicit boolean completeness can allow automatic confirmation', () => {
@@ -1276,6 +1304,14 @@ test('supplied image evidence indexes must denote inspected images', () => {
     assert.throws(() => ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {image: 0}}},
       {text: 'Shop', images, incomplete: false}), /AI/);
   }
+  const inheritedSlot = [];
+  Object.setPrototypeOf(inheritedSlot, Object.assign([], {0: {}}));
+  assert.throws(() => ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {image: 0}}},
+    {text: 'Shop', images: inheritedSlot, incomplete: false}), /AI/);
+  const accessorSlot = [];
+  Object.defineProperty(accessorSlot, '0', {enumerable: true, get() { throw new Error('read'); }});
+  assert.throws(() => ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {image: 0}}},
+    {text: 'Shop', images: accessorSlot, incomplete: false}), /AI/);
   assert.equal(ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, code: {image: 0}}},
     {text: 'Shop', images: [Object.create(null)], incomplete: false}).review, true);
 });
@@ -1287,6 +1323,13 @@ test('numeric factual evidence cannot be a range or ratio endpoint', () => {
   for (const source of ['Shop SAVE20 20-30%', 'Shop SAVE20 20 – 30%', 'Shop SAVE20 20/30', 'Shop SAVE20 20:30']) {
     const candidate = ctx.normalizeCandidate_(raw, {text: source, images: [], incomplete: false});
     assert.equal(candidate.discountValue, '', source); assert.equal(candidate.review, true, source);
+  }
+  for (const source of ['Shop SAVE20 -20%', 'Shop SAVE20 −20%', 'Shop SAVE20 +20%', 'Shop SAVE20 ＋20%',
+    'Shop SAVE20 −２０%', 'Shop SAVE20 −€20', 'Shop SAVE20 -$20', 'Shop SAVE20 −USD 20']) {
+    const signed = ctx.normalizeCandidate_({...raw, evidence: {...raw.evidence, discountValue: {quote: source}}},
+      {text: source, images: [], incomplete: false});
+    assert.equal(signed.discountValue, '', source); assert.equal(signed.review, true, source);
+    assert.equal(ctx.fieldInQuote_('discountValue', source.includes('２０') ? '２０' : '20', source), false, source);
   }
   const wordRange = ctx.normalizeCandidate_({...raw, discountType: 'percent', evidence: {...raw.evidence, discountType: {quote: 'percent'}}},
     {text: 'Shop SAVE20 discounts between 20 percent and 30 percent', images: [], incomplete: false});

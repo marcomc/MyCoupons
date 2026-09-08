@@ -79,6 +79,8 @@
 - Automatic confirmation requires an own enumerable data completeness flag;
   archive outcomes require a plain own status; and valid zoned timestamps accept
   fractional seconds beyond millisecond precision.
+- Signed numeric source expressions cannot ground unsigned scalar values; source
+  fields must be own data properties; and unpaired discount components require review.
 - Reserved internal sheet-name and capacity validation across config reloads.
 - Recovery dates based on the latest real coupon import in `Europe/Rome`, with
   calendar validation and explicit technical-row filtering.
