@@ -33,9 +33,14 @@ resources. `clasp` authorization must remain in an operator-owned private file.
 Create or select the private Apps Script project, upload `src/`, inspect the
 manifest scopes, and configure the owner email, private Sheet name/ID, Gmail
 label, locale, time zone, model, and optional Vertex fallback through the
-installer. `installMyCoupons` creates only missing Sheet tabs, nested Gmail
-label prefixes, and the owned daily trigger; it rejects ambiguous matches and
-preserves existing headers and rows. Store secrets only in Script Properties.
+installer. On a fresh project, call `beginMyCouponsInstallation` with the
+validated fields from `config/example.json`; it persists non-secret
+configuration and continues through the installer. On later runs,
+`installMyCoupons` resumes from persisted configuration. The installer creates
+only missing Sheet tabs, nested Gmail label prefixes, the owned daily trigger,
+and the installable `onReviewEdit` trigger; it rejects ambiguous matches and
+non-private sharing, and preserves existing headers and rows. Store secrets
+only in Script Properties.
 
 ## Recovery
 
