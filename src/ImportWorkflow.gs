@@ -7,8 +7,9 @@ function runImportWorkflow_(input) {
     state.errors = read.errors;
     state.truncated = read.truncated;
   }
-  const result = {imported: 0, review: 0, errors: state.errors || [], messages: []};
+  const result = {imported: 0, review: 0, errors: state.errors || [], messages: [], truncated: !!state.truncated};
   state.messages.forEach(function (message) {
+    if (state._deadlineMs && Date.now() >= state._deadlineMs) { result.truncated = true; return; }
     const outcome = processCouponMessage_(state, message);
     result.messages.push(outcome);
     if (outcome.status === 'confirmed') result.imported += outcome.rows.length;
@@ -22,6 +23,9 @@ function processCouponMessage_(state, message) {
   const existing = getMessageState_(state.journalSheet, message.id);
   if (existing && MC_FINAL_MESSAGE_STATES.indexOf(existing.status) >= 0) {
     return {messageId: message.id, status: existing.status, rows: existing.rowNumbers.slice()};
+  }
+  if (existing && existing.status === 'review') {
+    return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
   }
   let journal = existing || newMessageState_(message.id);
   journal.attempts++;

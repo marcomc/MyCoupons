@@ -2,6 +2,7 @@ const EN = Object.freeze({
   actions: {confirm: 'Confirm', ignore: 'Ignore', retry_ai: 'Retry with AI'},
   statuses: {confirmed: 'Imported', review: 'Needs review', ignored: 'Ignored'},
   summarySubject: 'MyCoupons: import summary',
+  summaryBody: 'New imports: {imported}\nNew review items: {review}\nErrors: {errors}{links}',
   yes: 'Yes',
   imported: 'New imports', review: 'Review items', errors: 'Errors',
   source: 'Source email', row: 'Open row', reviewHelp: 'Edit uncertain fields, then select an action in Action needed.',
