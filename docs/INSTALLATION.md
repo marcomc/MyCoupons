@@ -42,6 +42,13 @@ and the installable `onReviewEdit` trigger; it rejects ambiguous matches and
 non-private sharing, and preserves existing headers and rows. Store secrets
 only in Script Properties.
 
+The Apps Script editor does not pass arguments to functions. For first setup,
+deploy the owner-only Execution API deployment, authenticate as the owner, and
+invoke `beginMyCouponsInstallation` with a JSON request containing the same
+non-secret fields as `config/example.json`. Alternatively, use an
+operator-owned wrapper that supplies that object from a private local file.
+Do not commit the wrapper or private file.
+
 ## Recovery
 
 Installation is resumable. Existing resource identities are persisted after

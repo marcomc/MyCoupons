@@ -31,27 +31,34 @@ function installMyCoupons(input) {
 }
 
 function beginMyCouponsInstallation(input) {
-  const config = validateInstallerInput_(input, false);
-  assertOwner_(config);
-  props_().setProperty(MC.configKey, JSON.stringify(config));
-  return installMyCoupons();
+  return withLock_(function () {
+    const config = validateInstallerInput_(input, false);
+    assertOwner_(config);
+    props_().setProperty(MC.configKey, JSON.stringify(config));
+    return installMyCoupons();
+  });
 }
 
 function assertPrivateSpreadsheet_(spreadsheet, config) {
   let file;
   try { file = DriveApp.getFileById(spreadsheet.getId()); } catch (e) { fail_('RESOURCE'); }
   if (file.getSharingAccess && file.getSharingAccess() !== DriveApp.Access.PRIVATE) fail_('RESOURCE');
-  if (file.getSharingPermission && file.getSharingPermission() !== DriveApp.Permission.OWNER) fail_('RESOURCE');
-  if (file.getEditors && file.getEditors().some(function (user) {
+  if (file.getSharingPermission && file.getSharingPermission() !== DriveApp.Permission.NONE) fail_('RESOURCE');
+  const sharedUsers = (file.getEditors ? file.getEditors() : []).concat(file.getViewers ? file.getViewers() : []);
+  if (sharedUsers.some(function (user) {
     return String(user.getEmail()).toLowerCase() !== String(config.ownerEmail).toLowerCase();
   })) fail_('RESOURCE');
 }
 
 function installReviewEditTrigger_(spreadsheet) {
-  const triggers = ScriptApp.getProjectTriggers().filter(function (trigger) {
-    return trigger.getHandlerFunction() === MC_REVIEW_HANDLER &&
-      trigger.getEventType() === ScriptApp.EventType.ON_EDIT &&
-      (!trigger.getTriggerSourceId || String(trigger.getTriggerSourceId()) === String(spreadsheet.getId()));
+  const all = ScriptApp.getProjectTriggers().filter(function (trigger) {
+    return trigger.getHandlerFunction() === MC_REVIEW_HANDLER && trigger.getEventType() === ScriptApp.EventType.ON_EDIT;
+  });
+  all.filter(function (trigger) {
+    return trigger.getTriggerSourceId && String(trigger.getTriggerSourceId()) !== String(spreadsheet.getId());
+  }).forEach(function (trigger) { ScriptApp.deleteTrigger(trigger); });
+  const triggers = all.filter(function (trigger) {
+    return !trigger.getTriggerSourceId || String(trigger.getTriggerSourceId()) === String(spreadsheet.getId());
   });
   if (triggers.length > 1) fail_('RESOURCE');
   if (triggers.length === 1) return {created: false, trigger: triggers[0]};
@@ -69,6 +76,11 @@ function getInstallationStatus() {
   }
   const config = config_();
   const triggers = ownedImportTriggers_();
+  const reviewTriggers = config.spreadsheetId ? ScriptApp.getProjectTriggers().filter(function (trigger) {
+    return trigger.getHandlerFunction() === MC_REVIEW_HANDLER && trigger.getEventType() === ScriptApp.EventType.ON_EDIT &&
+      trigger.getTriggerSourceId && String(trigger.getTriggerSourceId()) === String(config.spreadsheetId);
+  }) : [];
   return {configured: true, spreadsheetId: config.spreadsheetId || '', labelId: config.labelId || '',
-    triggerCount: triggers.length, ready: !!config.spreadsheetId && !!config.labelId && triggers.length === 1};
+    triggerCount: triggers.length, reviewTriggerCount: reviewTriggers.length,
+    ready: !!config.spreadsheetId && !!config.labelId && triggers.length === 1 && reviewTriggers.length === 1};
 }
