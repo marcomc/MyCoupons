@@ -4,6 +4,11 @@
 
 ### Added
 
+- Add a secure, standard-library local provisioner foundation with strict
+  Installer-compatible configuration validation, private atomic resumable
+  state, non-blocking locking, deterministic Apps Script source digests, safe
+  tool discovery, and read-only gcloud identity/project preflight.
+
 - Add an idempotent Europe/Rome daily scheduler and safe removal of its owned
   trigger, preserving unrelated triggers and rejecting ambiguous duplicates.
 - Add delta-based owner email summaries for new imports, new review rows, and

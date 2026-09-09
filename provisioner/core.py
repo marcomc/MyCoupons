@@ -1,0 +1,546 @@
+"""Fail-closed local foundation for a future MyCoupons provisioner.
+
+This module deliberately has no Google API client dependency.  Its only
+external process support is a narrowly constrained, read-only gcloud preflight.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import datetime
+import hashlib
+import hmac
+import json
+import os
+import re
+import secrets
+import shutil
+import stat
+import subprocess
+import tempfile
+import uuid
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Sequence
+
+
+class ProvisionerError(Exception):
+    """A safe, operator-facing failure that never includes command output."""
+
+
+CONFIG_KEYS = frozenset(
+    {
+        "ownerEmail",
+        "spreadsheetId",
+        "spreadsheetName",
+        "sheetName",
+        "labelName",
+        "locale",
+        "timeZone",
+        "initialDate",
+        "developerProject",
+        "vertexProject",
+        "vertexLocation",
+        "model",
+        "autoVertexFallback",
+        "fetchRemoteImages",
+    }
+)
+
+CONFIG_DEFAULTS: dict[str, Any] = {
+    "spreadsheetId": "",
+    "spreadsheetName": "My Coupons",
+    "sheetName": "Coupon Manager",
+    "labelName": "Coupon Code Discount",
+    "locale": "en",
+    "timeZone": "Europe/Rome",
+    "initialDate": "",
+    "developerProject": "",
+    "vertexProject": "",
+    "vertexLocation": "global",
+    "model": "gemini-flash-latest",
+    "autoVertexFallback": False,
+    "fetchRemoteImages": True,
+}
+
+IDENTITY_FILE = "identity.key"
+STATE_FILE = "state.json"
+LOCK_FILE = "install.lock"
+STATE_VERSION = 1
+MAX_CONFIG_BYTES = 8000
+PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+MODEL_RE = re.compile(r"^gemini-[a-z0-9._-]+$")
+VERTEX_LOCATION_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _sha256(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _is_private_mode(mode: int, required: int) -> bool:
+    return stat.S_IMODE(mode) & 0o077 == 0 and stat.S_IMODE(mode) & required == required
+
+
+def _assert_not_symlink(path: Path) -> None:
+    if path.is_symlink():
+        raise ProvisionerError("refusing symlinked provisioning path")
+
+
+def _no_duplicate_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _assert_well_formed_unicode(value: Any) -> None:
+    if isinstance(value, str):
+        try:
+            value.encode("utf-16-le")
+        except UnicodeEncodeError as exc:
+            raise ProvisionerError("private provisioning JSON contains malformed Unicode") from exc
+    elif isinstance(value, list):
+        for item in value:
+            _assert_well_formed_unicode(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _assert_well_formed_unicode(key)
+            _assert_well_formed_unicode(item)
+
+
+def _utf16_units(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
+def _assert_regular_private_file(path: Path) -> None:
+    _assert_not_symlink(path)
+    try:
+        file_stat = path.stat()
+    except OSError as exc:
+        raise ProvisionerError("private provisioning file cannot be inspected") from exc
+    if not stat.S_ISREG(file_stat.st_mode) or not _is_private_mode(file_stat.st_mode, 0o600):
+        raise ProvisionerError("private provisioning file must be a regular mode-0600 file")
+
+
+def _assert_private_directory(path: Path) -> None:
+    _assert_not_symlink(path)
+    try:
+        directory_stat = path.stat()
+    except OSError as exc:
+        raise ProvisionerError("provisioning directory cannot be inspected") from exc
+    if not stat.S_ISDIR(directory_stat.st_mode) or not _is_private_mode(directory_stat.st_mode, 0o700):
+        raise ProvisionerError("provisioning directory must be mode 0700 and not group/world accessible")
+
+
+def _assert_existing_parents_safe(path: Path) -> None:
+    missing: list[Path] = []
+    parent = path.parent
+    while True:
+        _assert_not_symlink(parent)
+        try:
+            parent_stat = parent.stat()
+        except FileNotFoundError:
+            missing.append(parent)
+            if parent == parent.parent:
+                raise ProvisionerError("provisioning directory has no usable parent")
+            parent = parent.parent
+            continue
+        except OSError as exc:
+            raise ProvisionerError("provisioning directory parent cannot be inspected") from exc
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            raise ProvisionerError("provisioning directory parent is not a directory")
+        break
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            _assert_private_directory(directory)
+        except OSError as exc:
+            raise ProvisionerError("unable to create private provisioning parent directory") from exc
+        _assert_private_directory(directory)
+
+
+def _inside_git_worktree(path: Path) -> bool:
+    for candidate in (path, *path.parents):
+        if (candidate / ".git").exists():
+            return True
+    return False
+
+
+def _assert_outside_worktree(path: Path) -> None:
+    if _inside_git_worktree(path):
+        raise ProvisionerError("private provisioning state must be outside the Git worktree")
+
+
+def ensure_state_dir(path: Path) -> Path:
+    """Create or validate a local state directory without following symlinks."""
+    path = Path(os.path.abspath(os.fspath(path.expanduser())))
+    _assert_outside_worktree(path)
+    _assert_existing_parents_safe(path)
+    if path.exists():
+        _assert_private_directory(path)
+        return path
+    try:
+        path.mkdir(mode=0o700, parents=False, exist_ok=False)
+    except OSError as exc:
+        raise ProvisionerError("unable to create provisioning directory") from exc
+    _assert_private_directory(path)
+    return path
+
+
+def _read_json_file(path: Path, *, maximum_bytes: int) -> Any:
+    _assert_regular_private_file(path)
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ProvisionerError("unable to read private provisioning file") from exc
+    if len(raw) > maximum_bytes:
+        raise ProvisionerError("private provisioning file is too large")
+    try:
+        result = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_object)
+        _assert_well_formed_unicode(result)
+        return result
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ProvisionerError("private provisioning file is malformed") from exc
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    """Load a private local config and validate the Apps Script installer shape."""
+    config = _read_json_file(path, maximum_bytes=MAX_CONFIG_BYTES)
+    if not isinstance(config, dict):
+        raise ProvisionerError("installation config must be a JSON object")
+    if set(config) != CONFIG_KEYS:
+        raise ProvisionerError("installation config keys must exactly match the installer contract")
+    if _utf16_units(_canonical_json(config).decode("utf-8")) > MAX_CONFIG_BYTES:
+        raise ProvisionerError("installation config exceeds the installer size limit")
+    if not isinstance(config["ownerEmail"], str) or not EMAIL_RE.fullmatch(config["ownerEmail"]):
+        raise ProvisionerError("installation config ownerEmail is invalid")
+    for key, expected in CONFIG_DEFAULTS.items():
+        if not isinstance(config[key], type(expected)):
+            raise ProvisionerError(f"installation config {key} has the wrong type")
+    if config["locale"] != "en" or config["timeZone"] != "Europe/Rome":
+        raise ProvisionerError("installation config locale and timeZone are unsupported")
+    if not MODEL_RE.fullmatch(config["model"]) or not VERTEX_LOCATION_RE.fullmatch(config["vertexLocation"]):
+        raise ProvisionerError("installation config model or vertexLocation is invalid")
+    for key, limit in (("spreadsheetName", 200), ("sheetName", 100), ("labelName", 200)):
+        value = config[key]
+        if not value.strip() or _utf16_units(value) > limit or any(ord(char) < 32 for char in value):
+            raise ProvisionerError(f"installation config {key} is invalid")
+    if re.search(r"[\[\]*?:/\\]", config["sheetName"]) or config["sheetName"].casefold() == "_mycoupons messages":
+        raise ProvisionerError("installation config sheetName is reserved or invalid")
+    if any(not part.strip() for part in config["labelName"].split("/")):
+        raise ProvisionerError("installation config labelName is invalid")
+    for key in ("developerProject", "vertexProject"):
+        if config[key] and not PROJECT_ID_RE.fullmatch(config[key]):
+            raise ProvisionerError(f"installation config {key} is invalid")
+    if config["autoVertexFallback"] and not config["vertexProject"]:
+        raise ProvisionerError("autoVertexFallback requires vertexProject")
+    if config["initialDate"]:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", config["initialDate"]):
+            raise ProvisionerError("installation config initialDate is invalid")
+        try:
+            datetime.date.fromisoformat(config["initialDate"])
+        except ValueError as exc:
+            raise ProvisionerError("installation config initialDate is invalid") from exc
+    if config["spreadsheetId"] and not re.fullmatch(r"[\w-]+", config["spreadsheetId"]):
+        raise ProvisionerError("installation config spreadsheetId is invalid")
+    return config
+
+
+def config_digest(config: Mapping[str, Any]) -> str:
+    return _sha256(_canonical_json(dict(config)))
+
+
+def _write_private_atomic(path: Path, content: bytes) -> None:
+    _assert_private_directory(path.parent)
+    _assert_not_symlink(path)
+    descriptor = -1
+    temporary_path: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        temporary_path = Path(temporary_name)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        os.chmod(path, 0o600)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        raise ProvisionerError("unable to atomically persist provisioning state") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink(missing_ok=True)
+
+
+def _load_or_create_identity_key(state_dir: Path) -> bytes:
+    key_path = state_dir / IDENTITY_FILE
+    if key_path.exists():
+        _assert_regular_private_file(key_path)
+        key = key_path.read_bytes()
+        if len(key) != 32:
+            raise ProvisionerError("installation identity key is malformed")
+        return key
+    _write_private_atomic(key_path, secrets.token_bytes(32))
+    return key_path.read_bytes()
+
+
+def _identity_proof(key: bytes, state: Mapping[str, Any]) -> str:
+    signed = _canonical_json(
+        {
+            "version": state["version"],
+            "installationId": state["installationId"],
+            "configDigest": state["configDigest"],
+            "phase": state["phase"],
+            "bundleDigest": state["bundleDigest"],
+        }
+    )
+    return hmac.new(key, b"mycoupons-state\0" + signed, hashlib.sha256).hexdigest()
+
+
+def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
+    if not isinstance(state, dict) or set(state) != {"version", "installationId", "configDigest", "identityProof", "phase", "bundleDigest"}:
+        raise ProvisionerError("installation state has an unsupported shape")
+    if state["version"] != STATE_VERSION or state["phase"] not in {"initialized", "bundle-validated"}:
+        raise ProvisionerError("installation state has an unsupported version or phase")
+    if not isinstance(state["installationId"], str) or not isinstance(state["configDigest"], str) or not isinstance(state["identityProof"], str):
+        raise ProvisionerError("installation state has invalid identity fields")
+    try:
+        uuid.UUID(state["installationId"])
+    except ValueError as exc:
+        raise ProvisionerError("installation state has invalid identity") from exc
+    if not re.fullmatch(r"[0-9a-f]{64}", state["configDigest"]) or not re.fullmatch(r"[0-9a-f]{64}", state["identityProof"]):
+        raise ProvisionerError("installation state has invalid digests")
+    if state["bundleDigest"] is not None and not re.fullmatch(r"[0-9a-f]{64}", state["bundleDigest"]):
+        raise ProvisionerError("installation state has invalid bundle digest")
+    expected = _identity_proof(key, state)
+    if not hmac.compare_digest(state["identityProof"], expected):
+        raise ProvisionerError("installation state is not bound to this local installation")
+    return state
+
+
+@dataclasses.dataclass
+class InstallationLock:
+    """Advisory non-blocking process lock for a single installation directory."""
+
+    state_dir: Path
+    descriptor: int | None = None
+
+    def __enter__(self) -> "InstallationLock":
+        import fcntl
+
+        _assert_private_directory(self.state_dir)
+        lock_path = self.state_dir / LOCK_FILE
+        _assert_not_symlink(lock_path)
+        try:
+            self.descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            os.fchmod(self.descriptor, 0o600)
+            fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError) as exc:
+            if self.descriptor is not None:
+                os.close(self.descriptor)
+                self.descriptor = None
+            raise ProvisionerError("another provisioning operation is already running") from exc
+        return self
+
+    def __exit__(self, _type: Any, _value: Any, _traceback: Any) -> None:
+        if self.descriptor is not None:
+            import fcntl
+
+            fcntl.flock(self.descriptor, fcntl.LOCK_UN)
+            os.close(self.descriptor)
+            self.descriptor = None
+
+
+def initialize_state(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any]:
+    """Create resumable state or safely resume the exact same installation."""
+    state_dir = ensure_state_dir(state_dir)
+    digest = config_digest(config)
+    with InstallationLock(state_dir):
+        key = _load_or_create_identity_key(state_dir)
+        state_path = state_dir / STATE_FILE
+        if state_path.exists():
+            state = _validate_state(_read_json_file(state_path, maximum_bytes=4096), key)
+            if state["configDigest"] != digest:
+                raise ProvisionerError("installation config does not match persisted installation identity")
+            return state
+        installation_id = str(uuid.uuid4())
+        state: dict[str, Any] = {
+            "version": STATE_VERSION,
+            "installationId": installation_id,
+            "configDigest": digest,
+            "phase": "initialized",
+            "bundleDigest": None,
+        }
+        state["identityProof"] = _identity_proof(key, state)
+        _write_private_atomic(state_path, _canonical_json(state))
+        return state
+
+
+def mark_bundle_validated(state_dir: Path, config: Mapping[str, Any], digest: str) -> dict[str, Any]:
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ProvisionerError("bundle digest is invalid")
+    state_dir = ensure_state_dir(state_dir)
+    with InstallationLock(state_dir):
+        key = _load_or_create_identity_key(state_dir)
+        state_path = state_dir / STATE_FILE
+        state = _validate_state(_read_json_file(state_path, maximum_bytes=4096), key)
+        if state["configDigest"] != config_digest(config):
+            raise ProvisionerError("installation config does not match persisted installation identity")
+        state = dict(state)
+        state["phase"] = "bundle-validated"
+        state["bundleDigest"] = digest
+        state["identityProof"] = _identity_proof(key, state)
+        _write_private_atomic(state_path, _canonical_json(state))
+        return state
+
+
+def _iter_bundle_files(source_dir: Path) -> Iterable[Path]:
+    if not source_dir.is_dir() or source_dir.is_symlink():
+        raise ProvisionerError("Apps Script source directory must be a real directory")
+    for path in sorted(source_dir.rglob("*")):
+        if path.is_symlink():
+            raise ProvisionerError("Apps Script source bundle cannot contain symlinks")
+        if path.is_file() and path.suffix in {".gs", ".html", ".json"}:
+            yield path
+
+
+def validate_bundle(source_dir: Path) -> str:
+    """Validate the checked-in Apps Script manifest and hash all source files."""
+    source_dir = Path(os.path.abspath(os.fspath(source_dir.expanduser())))
+    captured: dict[str, bytes] = {}
+    for path in _iter_bundle_files(source_dir):
+        relative = path.relative_to(source_dir).as_posix()
+        try:
+            before = path.stat()
+            content = path.read_bytes()
+            after = path.stat()
+        except OSError as exc:
+            raise ProvisionerError("Apps Script source bundle cannot be read") from exc
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ):
+            raise ProvisionerError("Apps Script source bundle changed during validation")
+        captured[relative] = content
+    manifest_content = captured.get("appsscript.json")
+    if manifest_content is None:
+        raise ProvisionerError("Apps Script manifest is missing")
+    try:
+        manifest = json.loads(manifest_content.decode("utf-8"), object_pairs_hook=_no_duplicate_object)
+        _assert_well_formed_unicode(manifest)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ProvisionerError("Apps Script manifest is malformed") from exc
+    expected_scopes = {
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/script.external_request",
+        "https://www.googleapis.com/auth/script.scriptapp",
+        "https://www.googleapis.com/auth/script.send_mail",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/cloud-platform",
+    }
+    if not isinstance(manifest, dict) or manifest.get("timeZone") != "Europe/Rome" or manifest.get("runtimeVersion") != "V8":
+        raise ProvisionerError("Apps Script manifest runtime contract is invalid")
+    scopes = manifest.get("oauthScopes")
+    if not isinstance(scopes, list) or len(scopes) != len(expected_scopes) or not all(isinstance(scope, str) for scope in scopes):
+        raise ProvisionerError("Apps Script manifest OAuth scope contract is invalid")
+    if manifest.get("executionApi") != {"access": "MYSELF"} or set(scopes) != expected_scopes:
+        raise ProvisionerError("Apps Script manifest access or OAuth scope contract is invalid")
+    dependencies = manifest.get("dependencies")
+    services = dependencies.get("enabledAdvancedServices") if isinstance(dependencies, dict) else None
+    expected_services = {("Gmail", "gmail", "v1"), ("Drive", "drive", "v3")}
+    if not isinstance(services, list) or len(services) != len(expected_services) or not all(
+        isinstance(service, dict) and all(isinstance(service.get(key), str) for key in ("userSymbol", "serviceId", "version"))
+        for service in services
+    ):
+        raise ProvisionerError("Apps Script manifest service contract is invalid")
+    found_services = {(service["userSymbol"], service["serviceId"], service["version"]) for service in services}
+    if found_services != expected_services:
+        raise ProvisionerError("Apps Script manifest service contract is invalid")
+    if not captured:
+        raise ProvisionerError("Apps Script source bundle contains no deployable files")
+    digest = hashlib.sha256()
+    for name, content in sorted(captured.items()):
+        relative = name.encode("utf-8")
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
+def oauth_authorization_command() -> str:
+    """Return the Cloud SDK login command used by the active-account preflight."""
+    return "gcloud auth login --update-adc"
+
+
+def discover_tools(names: Sequence[str] = ("gcloud", "clasp")) -> dict[str, str | None]:
+    """Discover executables without running them, returning canonical paths."""
+    result: dict[str, str | None] = {}
+    for name in names:
+        candidate = shutil.which(name)
+        if candidate is None:
+            result[name] = None
+            continue
+        path = Path(candidate)
+        try:
+            resolved = path.resolve(strict=True)
+            mode = resolved.stat().st_mode
+        except OSError:
+            result[name] = None
+            continue
+        result[name] = str(resolved) if stat.S_ISREG(mode) and os.access(resolved, os.X_OK) else None
+    return result
+
+
+def _run_json(command: Sequence[str]) -> Any:
+    try:
+        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ProvisionerError("read-only authentication preflight could not run") from exc
+    if completed.returncode != 0:
+        raise ProvisionerError("read-only authentication preflight was rejected")
+    try:
+        response = json.loads(completed.stdout, object_pairs_hook=_no_duplicate_object)
+        _assert_well_formed_unicode(response)
+        return response
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ProvisionerError("read-only authentication preflight returned unexpected output") from exc
+
+
+def authenticated_identity_preflight(expected_owner: str, project_id: str) -> dict[str, bool]:
+    """Prove active gcloud identity and project access with harmless JSON reads.
+
+    Raw command output is never returned, because gcloud diagnostics may expose
+    local paths or authorization details.
+    """
+    if not EMAIL_RE.fullmatch(expected_owner) or not PROJECT_ID_RE.fullmatch(project_id):
+        raise ProvisionerError("preflight identity or project is invalid")
+    gcloud = discover_tools(("gcloud",))["gcloud"]
+    if gcloud is None:
+        raise ProvisionerError("gcloud is required for authentication preflight")
+    accounts = _run_json((gcloud, "auth", "list", "--format=json", "--quiet"))
+    if not isinstance(accounts, list):
+        raise ProvisionerError("read-only authentication preflight returned unexpected accounts")
+    active = [entry for entry in accounts if isinstance(entry, dict) and entry.get("status") == "ACTIVE" and isinstance(entry.get("account"), str)]
+    if len(active) != 1 or active[0]["account"].casefold() != expected_owner.casefold():
+        raise ProvisionerError("active gcloud identity is absent, ambiguous, or does not match ownerEmail")
+    project = _run_json((gcloud, "projects", "describe", project_id, "--format=json", "--quiet"))
+    if not isinstance(project, dict) or project.get("projectId") != project_id:
+        raise ProvisionerError("read-only project identity response is malformed or mismatched")
+    return {"ownerMatched": True, "projectReadable": True}
