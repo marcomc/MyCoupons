@@ -47,9 +47,10 @@ function ownedImportTriggers_() {
 
 function runScheduledImport() {
   let summary;
+  const deadlineMs = Date.now() + MC.maxRuntimeMs - 15000;
   try {
-    const state = ensureSheetState_();
-    state._deadlineMs = Date.now() + MC.maxRuntimeMs - 15000;
+    const state = ensureSheetState_(null, deadlineMs);
+    state._deadlineMs = deadlineMs;
     summary = withLock_(function () {
       const before = readMessageJournal_(state.journalSheet);
       const result = runImportWorkflow_(state);
@@ -70,8 +71,10 @@ function scheduledSummary_(state, before, result) {
   let review = 0;
   (result.messages || []).forEach(function (message) {
     if (message.status !== 'review') return;
-    const priorRows = before[message.messageId] && before[message.messageId].rowNumbers || [];
-    const newRows = message.rows.filter(function (row) { return priorRows.indexOf(row) < 0; });
+    const prior = before[message.messageId];
+    const priorRows = prior && prior.rowNumbers || [];
+    const recovered = prior && prior.status === 'failed';
+    const newRows = message.rows.filter(function (row) { return recovered || priorRows.indexOf(row) < 0; });
     if (!newRows.length) return;
     review += newRows.length;
     newRows.forEach(function (row) { links.push(reviewLink_(state, row)); });

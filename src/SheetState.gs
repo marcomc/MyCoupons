@@ -12,7 +12,7 @@ const MC_LEGACY_MESSAGE_STATE_KEYS = Object.freeze([
   'failureStage', 'outcome', 'labelApplied', 'archived', 'updatedAt'
 ]);
 
-function ensureSheetState_(input) {
+function ensureSheetState_(input, deadlineMs) {
   const c = validateConfig_(input || config_());
   return withLock_(function () {
     assertOwner_(c);
@@ -33,7 +33,7 @@ function ensureSheetState_(input) {
       recoveryStart: recoveryStart,
       label: label
     };
-  });
+  }, deadlineMs);
 }
 
 function resolveSpreadsheet_(c) {

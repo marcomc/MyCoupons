@@ -60,13 +60,14 @@ function t_(key, values) {
   return text;
 }
 var MC_LOCK_DEPTH = 0;
-function withLock_(fn) {
+function withLock_(fn, deadlineMs) {
   if (MC_LOCK_DEPTH > 0) {
     MC_LOCK_DEPTH++;
     try { return fn(); } finally { MC_LOCK_DEPTH--; }
   }
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(240000)) fail_('BUSY');
+  const waitMs = deadlineMs ? Math.max(1, Math.min(240000, deadlineMs - Date.now())) : 240000;
+  if (!lock.tryLock(waitMs)) fail_('BUSY');
   MC_LOCK_DEPTH = 1;
   try { return fn(); } finally { MC_LOCK_DEPTH = 0; lock.releaseLock(); }
 }
