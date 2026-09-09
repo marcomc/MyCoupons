@@ -46,15 +46,17 @@ The Apps Script editor does not pass arguments to functions. For first setup,
 deploy the owner-only Execution API deployment, authenticate as the owner, and
 invoke `beginMyCouponsInstallation` with a JSON request containing the same
 non-secret fields as `config/example.json`. Alternatively, use an
-operator-owned wrapper that supplies that object from a private local file.
-Do not commit the wrapper or private file.
+operator-owned wrapper that stores the object temporarily in the
+`MYCOUPONS_BOOTSTRAP_CONFIG` Script Property and invokes the no-argument
+`beginMyCouponsInstallationFromBootstrapProperty` function. Delete the property
+after setup; do not commit the wrapper or private file.
 
 ## Recovery
 
 Installation is resumable. Existing resource identities are persisted after
 verification, and the importer recovers from the latest real coupon date.
-Empty sheets require an explicit `initialDate`. To roll back automation, use
-`removeDailyImportTrigger`; resource data and labels are not deleted.
+Empty sheets require an explicit `initialDate`. To roll back all automation,
+use `removeMyCouponsAutomation`; resource data and labels are not deleted.
 
 ## Live validation
 

@@ -26,6 +26,10 @@ function installMyCoupons(input) {
       if (config.spreadsheetId && config.spreadsheetId !== previousConfig.spreadsheetId) {
         assertPrivateSpreadsheet_(openSpreadsheetById_(config.spreadsheetId), config);
       }
+    } else if (!config.spreadsheetId) {
+      const matches = findSpreadsheetsByName_(config.spreadsheetName);
+      if (matches.length > 1) fail_('RESOURCE');
+      if (matches.length === 1) assertPrivateSpreadsheet_(openSpreadsheetById_(matches[0]), config);
     }
     const state = ensureSheetState_(config);
     assertPrivateSpreadsheet_(state.spreadsheet, config);
@@ -47,6 +51,16 @@ function beginMyCouponsInstallation(input) {
   });
 }
 
+function beginMyCouponsInstallationFromBootstrapProperty() {
+  const raw = props_().getProperty('MYCOUPONS_BOOTSTRAP_CONFIG');
+  if (!raw) fail_('CONFIG');
+  let input;
+  try { input = JSON.parse(raw); } catch (e) { fail_('CONFIG'); }
+  const result = beginMyCouponsInstallation(input);
+  props_().deleteProperty('MYCOUPONS_BOOTSTRAP_CONFIG');
+  return result;
+}
+
 function assertPrivateSpreadsheet_(spreadsheet, config) {
   let file;
   try { file = DriveApp.getFileById(spreadsheet.getId()); } catch (e) { fail_('RESOURCE'); }
@@ -56,6 +70,17 @@ function assertPrivateSpreadsheet_(spreadsheet, config) {
   if (sharedUsers.some(function (user) {
     return String(user.getEmail()).toLowerCase() !== String(config.ownerEmail).toLowerCase();
   })) fail_('RESOURCE');
+  if (typeof Drive !== 'undefined' && Drive.Permissions && Drive.Permissions.list) {
+    let token = '';
+    do {
+      const response = Drive.Permissions.list(String(spreadsheet.getId()), {pageToken: token || undefined});
+      (response.permissions || []).forEach(function (permission) {
+        if (permission.type !== 'user' || String(permission.role).toLowerCase() !== 'owner' ||
+            String(permission.emailAddress || '').toLowerCase() !== String(config.ownerEmail).toLowerCase()) fail_('RESOURCE');
+      });
+      token = response.nextPageToken || '';
+    } while (token);
+  }
 }
 
 function installReviewEditTrigger_(spreadsheet) {
@@ -75,6 +100,24 @@ function installReviewEditTrigger_(spreadsheet) {
   return {created: true, trigger: trigger};
 }
 
+function removeReviewEditTriggers_() {
+  const triggers = ScriptApp.getProjectTriggers().filter(function (trigger) {
+    return trigger.getHandlerFunction() === MC_REVIEW_HANDLER && trigger.getEventType() === ScriptApp.EventType.ON_EDIT;
+  });
+  triggers.forEach(function (trigger) { ScriptApp.deleteTrigger(trigger); });
+  return {removed: triggers.length};
+}
+
+function removeMyCouponsAutomation() {
+  return withLock_(function () {
+    const c = config_();
+    assertOwner_(c);
+    const scheduled = removeDailyImportTrigger();
+    const review = removeReviewEditTriggers_();
+    return {scheduledRemoved: !!scheduled.removed, reviewRemoved: review.removed};
+  });
+}
+
 function getInstallationStatus() {
   if (!props_().getProperty(MC.configKey)) {
     const triggers = ScriptApp.getProjectTriggers().filter(function (trigger) {
@@ -92,7 +135,14 @@ function getInstallationStatus() {
     return trigger.getHandlerFunction() === MC_REVIEW_HANDLER && trigger.getEventType() === ScriptApp.EventType.ON_EDIT &&
       trigger.getTriggerSourceId && String(trigger.getTriggerSourceId()) === String(config.spreadsheetId);
   }) : [];
+  let resourcesReady = !!config.spreadsheetId && !!config.labelId;
+  if (resourcesReady) {
+    try {
+      assertSpreadsheetIdentity_(openSpreadsheetById_(config.spreadsheetId), config);
+      resourcesReady = listGmailLabels_().some(function (label) { return label.id === config.labelId && label.name === config.labelName; });
+    } catch (e) { resourcesReady = false; }
+  }
   return {configured: true, spreadsheetId: config.spreadsheetId || '', labelId: config.labelId || '',
     triggerCount: triggers.length, reviewTriggerCount: reviewTriggers.length,
-    ready: !!config.spreadsheetId && !!config.labelId && triggers.length === 1 && reviewTriggers.length === 1};
+    ready: resourcesReady && triggers.length === 1 && reviewTriggers.length === 1};
 }
