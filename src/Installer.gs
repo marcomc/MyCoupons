@@ -140,7 +140,9 @@ function getInstallationStatus() {
   let resourcesReady = !!config.spreadsheetId && !!config.labelId;
   if (resourcesReady) {
     try {
-      assertSpreadsheetIdentity_(openSpreadsheetById_(config.spreadsheetId), config);
+      const spreadsheet = openSpreadsheetById_(config.spreadsheetId);
+      assertSpreadsheetIdentity_(spreadsheet, config);
+      assertPrivateSpreadsheet_(spreadsheet, config);
       resourcesReady = listGmailLabels_().some(function (label) { return label.id === config.labelId && label.name === config.labelName; });
     } catch (e) { resourcesReady = false; }
   }
