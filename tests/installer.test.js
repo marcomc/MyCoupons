@@ -108,6 +108,35 @@ test('review edits reload configuration after acquiring the lock', () => {
   assert.equal(processed, 0);
 });
 
+test('review edits ignore an action that changed before the lock was acquired', () => {
+  const {ctx, config} = harness();
+  let processed = 0;
+  ctx.withLock_ = fn => fn();
+  ctx.config_ = () => config;
+  ctx.assertPrivateSpreadsheet_ = () => {};
+  ctx.processReviewAction_ = () => { processed += 1; };
+  const sheet = {
+    getName: () => config.sheetName,
+    getParent: () => ({getId: () => config.spreadsheetId}),
+    getRange: () => ({getValues: () => [['Review', '', '', '', '', '', '', 'Ignore']]})
+  };
+  ctx.onReviewEdit({value: 'Confirm', range: {getSheet: () => sheet, getColumn: () => 25, getRow: () => 2}});
+  assert.equal(processed, 0);
+});
+
+test('fresh explicit spreadsheet IDs are privacy-checked before resource setup', () => {
+  const {ctx, properties, config} = harness();
+  delete properties.MYCOUPONS_CONFIG;
+  let privacyChecks = 0;
+  ctx.openSpreadsheetById_ = id => ({getId: () => id});
+  ctx.assertPrivateSpreadsheet_ = () => { privacyChecks += 1; };
+  ctx.ensureSheetState_ = () => {
+    assert.equal(privacyChecks, 1);
+    throw new Error('STOP');
+  };
+  assert.throws(() => ctx.installMyCoupons(config), /STOP/);
+});
+
 test('review validation ignores the internal dedupe key column', () => {
   const {ctx} = harness();
   const row = Array(26).fill('');

@@ -13,6 +13,8 @@ function onReviewEdit(e) {
     const spreadsheet = sheet.getParent();
     if (!spreadsheet || typeof spreadsheet.getId !== 'function' || String(spreadsheet.getId()) !== String(c.spreadsheetId)) return;
     assertPrivateSpreadsheet_(spreadsheet, c);
+    const current = sheet.getRange(rowNumber, 18, 1, 8).getValues()[0];
+    if (String(current[0]) !== EN.statuses.review || String(current[7]) !== action) return;
     processReviewAction_(sheet, rowNumber, action, c);
   });
 }
@@ -34,7 +36,8 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   if (action === EN.actions.ignore) {
     setReviewStatus_(sheet, rowNumber, EN.statuses.ignored, '');
     candidate[0].status = 'ignored';
-    state.status = 'review'; state.outcome = 'mixed'; state.updatedAt = new Date().toISOString();
+    state.outcome = messageOutcome_(state.candidateStates.map(function (item) { return {status: item.status}; }));
+    state.status = state.outcome === 'review' ? 'review' : 'ignored'; state.updatedAt = new Date().toISOString();
     saveMessageState_(journalSheet, state); return;
   }
   const message = getReviewMessage_(state.messageId);

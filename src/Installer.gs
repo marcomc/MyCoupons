@@ -23,9 +23,9 @@ function installMyCoupons(input) {
     let previousConfig = null;
     if (previous) {
       try { previousConfig = validateConfig_(JSON.parse(previous)); } catch (e) { fail_('CONFIG'); }
-      if (config.spreadsheetId && config.spreadsheetId !== previousConfig.spreadsheetId) {
-        assertPrivateSpreadsheet_(openSpreadsheetById_(config.spreadsheetId), config);
-      }
+    }
+    if (config.spreadsheetId && (!previousConfig || config.spreadsheetId !== previousConfig.spreadsheetId)) {
+      assertPrivateSpreadsheet_(openSpreadsheetById_(config.spreadsheetId), config);
     } else if (!config.spreadsheetId) {
       const matches = findSpreadsheetsByName_(config.spreadsheetName);
       if (matches.length > 1) fail_('RESOURCE');
