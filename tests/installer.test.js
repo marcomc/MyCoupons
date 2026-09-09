@@ -114,6 +114,29 @@ test('bootstrap rejects a missing or mismatched Secret Manager response identity
   assert.equal(installed, 0);
 });
 
+test('bootstrap rejects a canonical Secret Manager project number that differs from the resolved project', () => {
+  const {ctx, properties, config} = harness();
+  delete properties.MYCOUPONS_CONFIG;
+  const payload = bootstrapPayload({...config, vertexProject: 'vertex-project'});
+  let installed = 0;
+  ctx.beginMyCouponsInstallation = () => { installed += 1; };
+  ctx.UrlFetchApp = {fetch: url => {
+    if (url.startsWith('https://secretmanager.googleapis.com/')) {
+      return bootstrapSecret(payload, {name: 'projects/999999999/secrets/mycoupons-bootstrap/versions/7'});
+    }
+    if (url === 'https://cloudresourcemanager.googleapis.com/v1/projects/vertex-project') {
+      return {getResponseCode: () => 200, getContentText: () => JSON.stringify({
+        projectId: 'vertex-project', projectNumber: '123456789'
+      })};
+    }
+    assert.fail('unexpected bootstrap request: ' + url);
+  }};
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
+  assert.equal(installed, 0);
+  assert.equal(properties.GEMINI_API_KEY, undefined);
+  assert.equal(properties.MYCOUPONS_CONFIG, undefined);
+});
+
 test('bootstrap requires every non-persisted installer configuration field', () => {
   const {ctx, properties, config} = harness();
   delete properties.MYCOUPONS_CONFIG;
