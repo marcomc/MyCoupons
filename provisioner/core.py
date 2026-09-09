@@ -13,11 +13,13 @@ import hmac
 import json
 import os
 import re
+import selectors
 import secrets
 import shutil
 import stat
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -67,6 +69,7 @@ STATE_FILE = "state.json"
 LOCK_FILE = "install.lock"
 STATE_VERSION = 1
 MAX_CONFIG_BYTES = 8000
+MAX_COMMAND_OUTPUT_BYTES = 65536
 PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 MODEL_RE = re.compile(r"^gemini-[a-z0-9._-]+$")
@@ -74,7 +77,7 @@ VERTEX_LOCATION_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
 
 def _canonical_json(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return json.dumps(value, allow_nan=False, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _sha256(value: bytes) -> str:
@@ -97,6 +100,10 @@ def _no_duplicate_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise ValueError("duplicate JSON key")
         result[key] = value
     return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"unsupported JSON constant: {value}")
 
 
 def _assert_well_formed_unicode(value: Any) -> None:
@@ -189,7 +196,7 @@ def ensure_state_dir(path: Path) -> Path:
 def _read_private_bytes(path: Path, *, maximum_bytes: int) -> bytes:
     descriptor = -1
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         file_stat = os.fstat(descriptor)
         if not stat.S_ISREG(file_stat.st_mode) or not _is_private_mode(file_stat.st_mode, 0o600):
             raise ProvisionerError("private provisioning file must be a regular mode-0600 file")
@@ -211,10 +218,14 @@ def _read_private_bytes(path: Path, *, maximum_bytes: int) -> bytes:
 def _read_json_file(path: Path, *, maximum_bytes: int) -> Any:
     raw = _read_private_bytes(path, maximum_bytes=maximum_bytes)
     try:
-        result = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_object)
+        result = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_no_duplicate_object,
+            parse_constant=_reject_json_constant,
+        )
         _assert_well_formed_unicode(result)
         return result
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (RecursionError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ProvisionerError("private provisioning file is malformed") from exc
 
 
@@ -322,7 +333,7 @@ def _identity_proof(key: bytes, state: Mapping[str, Any]) -> str:
 def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
     if not isinstance(state, dict) or set(state) != {"version", "installationId", "configDigest", "identityProof", "phase", "bundleDigest"}:
         raise ProvisionerError("installation state has an unsupported shape")
-    if state["version"] != STATE_VERSION or state["phase"] not in {"initialized", "bundle-validated"}:
+    if state["version"] != STATE_VERSION or not isinstance(state["phase"], str) or state["phase"] not in {"initialized", "bundle-validated"}:
         raise ProvisionerError("installation state has an unsupported version or phase")
     if not isinstance(state["installationId"], str) or not isinstance(state["configDigest"], str) or not isinstance(state["identityProof"], str):
         raise ProvisionerError("installation state has invalid identity fields")
@@ -332,7 +343,9 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
         raise ProvisionerError("installation state has invalid identity") from exc
     if not re.fullmatch(r"[0-9a-f]{64}", state["configDigest"]) or not re.fullmatch(r"[0-9a-f]{64}", state["identityProof"]):
         raise ProvisionerError("installation state has invalid digests")
-    if state["bundleDigest"] is not None and not re.fullmatch(r"[0-9a-f]{64}", state["bundleDigest"]):
+    if state["bundleDigest"] is not None and (
+        not isinstance(state["bundleDigest"], str) or not re.fullmatch(r"[0-9a-f]{64}", state["bundleDigest"])
+    ):
         raise ProvisionerError("installation state has invalid bundle digest")
     expected = _identity_proof(key, state)
     if not hmac.compare_digest(state["identityProof"], expected):
@@ -436,16 +449,38 @@ def validate_and_mark_bundle(state_dir: Path, config: Mapping[str, Any], source_
 def _iter_bundle_files(source_dir: Path) -> Iterable[Path]:
     if not source_dir.is_dir() or source_dir.is_symlink():
         raise ProvisionerError("Apps Script source directory must be a real directory")
-    for path in sorted(source_dir.rglob("*")):
-        if path.is_symlink():
-            raise ProvisionerError("Apps Script source bundle cannot contain symlinks")
-        if path.is_file() and path.suffix in {".gs", ".html", ".json"}:
-            yield path
+
+    def traversal_error(error: OSError) -> None:
+        raise ProvisionerError("Apps Script source bundle cannot be traversed") from error
+
+    bundle_files: list[Path] = []
+    for directory_name, directory_names, file_names in os.walk(
+        source_dir,
+        topdown=True,
+        followlinks=False,
+        onerror=traversal_error,
+    ):
+        directory = Path(directory_name)
+        for child_name in directory_names:
+            if (directory / child_name).is_symlink():
+                raise ProvisionerError("Apps Script source bundle cannot contain symlinks")
+        for child_name in file_names:
+            path = directory / child_name
+            if path.is_symlink():
+                raise ProvisionerError("Apps Script source bundle cannot contain symlinks")
+            if path.is_file() and path.suffix in {".gs", ".html", ".json"}:
+                bundle_files.append(path)
+    yield from sorted(bundle_files)
 
 
 def validate_bundle(source_dir: Path) -> str:
     """Validate the checked-in Apps Script manifest and hash all source files."""
     source_dir = Path(os.path.abspath(os.fspath(source_dir.expanduser())))
+    _assert_not_symlink(source_dir)
+    try:
+        source_dir = source_dir.resolve(strict=True)
+    except OSError as exc:
+        raise ProvisionerError("Apps Script source directory cannot be resolved") from exc
     captured: dict[str, bytes] = {}
     for path in _iter_bundle_files(source_dir):
         relative = path.relative_to(source_dir).as_posix()
@@ -464,9 +499,13 @@ def validate_bundle(source_dir: Path) -> str:
     if manifest_content is None:
         raise ProvisionerError("Apps Script manifest is missing")
     try:
-        manifest = json.loads(manifest_content.decode("utf-8"), object_pairs_hook=_no_duplicate_object)
+        manifest = json.loads(
+            manifest_content.decode("utf-8"),
+            object_pairs_hook=_no_duplicate_object,
+            parse_constant=_reject_json_constant,
+        )
         _assert_well_formed_unicode(manifest)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (OSError, RecursionError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ProvisionerError("Apps Script manifest is malformed") from exc
     expected_scopes = {
         "https://www.googleapis.com/auth/gmail.modify",
@@ -496,8 +535,9 @@ def validate_bundle(source_dir: Path) -> str:
     found_services = {(service["userSymbol"], service["serviceId"], service["version"]) for service in services}
     if found_services != expected_services:
         raise ProvisionerError("Apps Script manifest service contract is invalid")
-    if not captured:
-        raise ProvisionerError("Apps Script source bundle contains no deployable files")
+    installer_source = captured.get("Installer.gs")
+    if installer_source is None or not re.search(rb"\bfunction\s+bootstrapFromSecret\s*\(", installer_source):
+        raise ProvisionerError("Apps Script source bundle is missing the bootstrapFromSecret entry point")
     digest = hashlib.sha256()
     for name, content in sorted(captured.items()):
         relative = name.encode("utf-8")
@@ -533,17 +573,56 @@ def discover_tools(names: Sequence[str] = ("gcloud", "clasp")) -> dict[str, str 
 
 
 def _run_json(command: Sequence[str]) -> Any:
+    process: subprocess.Popen[bytes] | None = None
+    selector: selectors.BaseSelector | None = None
     try:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        if process.stdout is None:
+            raise OSError("gcloud stdout pipe was not created")
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        output = bytearray()
+        deadline = time.monotonic() + 30
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, 30)
+            if not selector.select(remaining):
+                continue
+            chunk = os.read(process.stdout.fileno(), min(8192, MAX_COMMAND_OUTPUT_BYTES + 1 - len(output)))
+            if not chunk:
+                selector.unregister(process.stdout)
+                continue
+            output.extend(chunk)
+            if len(output) > MAX_COMMAND_OUTPUT_BYTES:
+                raise ProvisionerError("read-only authentication preflight returned unexpected output")
+        completed_returncode = process.wait(timeout=max(0, deadline - time.monotonic()))
     except (OSError, subprocess.TimeoutExpired) as exc:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
         raise ProvisionerError("read-only authentication preflight could not run") from exc
-    if completed.returncode != 0:
+    except ProvisionerError:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+        raise
+    finally:
+        if selector is not None:
+            selector.close()
+        if process is not None and process.stdout is not None:
+            process.stdout.close()
+    if completed_returncode != 0:
         raise ProvisionerError("read-only authentication preflight was rejected")
     try:
-        response = json.loads(completed.stdout, object_pairs_hook=_no_duplicate_object)
+        response = json.loads(
+            bytes(output).decode("utf-8"),
+            object_pairs_hook=_no_duplicate_object,
+            parse_constant=_reject_json_constant,
+        )
         _assert_well_formed_unicode(response)
         return response
-    except (json.JSONDecodeError, ValueError) as exc:
+    except (RecursionError, json.JSONDecodeError, ValueError) as exc:
         raise ProvisionerError("read-only authentication preflight returned unexpected output") from exc
 
 

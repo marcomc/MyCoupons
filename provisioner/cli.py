@@ -21,7 +21,8 @@ from .core import (
 
 
 def _default_state_dir() -> Path:
-    return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "mycoupons"
+    state_home = os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")
+    return Path(state_home) / "mycoupons"
 
 
 def _parser() -> argparse.ArgumentParser:

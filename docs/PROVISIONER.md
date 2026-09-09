@@ -28,11 +28,12 @@ cannot be silently redirected through broad-permission paths.
 
 Local state defaults to `${XDG_STATE_HOME:-$HOME/.local/state}/mycoupons`.
 The directory is created mode 0700; its state, key, and lock files are mode
-0600. The CLI refuses symlinked config, state, and source-bundle inputs,
-permissive state/config files, malformed JSON, unexpected config keys, and a
-config whose digest differs from existing local state. State updates are
-atomically written and signed with a random local identity key. Concurrent
-operations fail immediately rather than wait.
+0600. The CLI refuses symlinked config, state, source-root, and bundle-entry
+inputs; it canonicalizes an ancestor alias before reading a source bundle.
+It also rejects permissive state/config files, malformed JSON, unexpected
+config keys, and a config whose digest differs from existing local state.
+State updates are atomically written and signed with a random local identity
+key. Concurrent operations fail immediately rather than wait.
 
 ## Implemented commands
 

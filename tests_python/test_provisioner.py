@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 import os
 import stat
-import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from provisioner import core
-from provisioner.cli import main
+from provisioner.cli import _default_state_dir, main
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -103,8 +103,23 @@ class ProvisionerConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "too large"):
                 core.load_config(config_path)
 
+    def test_config_rejects_nonstandard_constants_and_excessive_nesting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path = Path(temporary) / "config.json"
+            config_path.write_text('{"ownerEmail":NaN}', encoding="utf-8")
+            config_path.chmod(0o600)
+            with self.assertRaisesRegex(core.ProvisionerError, "malformed"):
+                core.load_config(config_path)
+            config_path.write_text("[" * 1100 + "]" * 1100, encoding="utf-8")
+            with self.assertRaisesRegex(core.ProvisionerError, "malformed"):
+                core.load_config(config_path)
+
 
 class ProvisionerStateTests(unittest.TestCase):
+    def test_empty_xdg_state_home_uses_the_standard_default(self) -> None:
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": ""}):
+            self.assertEqual(_default_state_dir(), Path.home() / ".local" / "state" / "mycoupons")
+
     def test_state_rejects_a_directory_inside_the_git_worktree(self) -> None:
         with self.assertRaisesRegex(core.ProvisionerError, "outside the Git worktree"):
             core.ensure_state_dir(ROOT / "private-state-forbidden")
@@ -187,6 +202,43 @@ class ProvisionerStateTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "too large"):
                 core.initialize_state(state_dir, config)
 
+    def test_private_special_files_fail_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fifo_path = Path(temporary) / "config.fifo"
+            os.mkfifo(fifo_path, 0o600)
+            with self.assertRaisesRegex(core.ProvisionerError, "regular mode-0600"):
+                core.load_config(fifo_path)
+
+    def test_state_rejects_non_string_bundle_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_path = root / "config.json"
+            private_json(config_path, valid_config())
+            config = core.load_config(config_path)
+            state_dir = root / "state"
+            core.initialize_state(state_dir, config)
+            state_path = state_dir / "state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["bundleDigest"] = 42
+            private_json(state_path, state)
+            with self.assertRaisesRegex(core.ProvisionerError, "bundle digest"):
+                core.initialize_state(state_dir, config)
+
+    def test_state_rejects_non_string_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_path = root / "config.json"
+            private_json(config_path, valid_config())
+            config = core.load_config(config_path)
+            state_dir = root / "state"
+            core.initialize_state(state_dir, config)
+            state_path = state_dir / "state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["phase"] = []
+            private_json(state_path, state)
+            with self.assertRaisesRegex(core.ProvisionerError, "version or phase"):
+                core.initialize_state(state_dir, config)
+
     def test_state_rejects_symlink_and_nonblocking_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -214,8 +266,11 @@ class ProvisionerBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             source_link = Path(temporary) / "source-link"
             source_link.symlink_to(source, target_is_directory=True)
-            with self.assertRaisesRegex(core.ProvisionerError, "real directory"):
+            with self.assertRaisesRegex(core.ProvisionerError, "symlink"):
                 core.validate_bundle(source_link)
+            source_alias = Path(temporary) / "source-alias"
+            source_alias.symlink_to(ROOT, target_is_directory=True)
+            self.assertEqual(first, core.validate_bundle(source_alias / "src"))
             copied = Path(temporary) / "src"
             shutil_copytree(source, copied)
             manifest = json.loads((copied / "appsscript.json").read_text(encoding="utf-8"))
@@ -246,6 +301,14 @@ class ProvisionerBundleTests(unittest.TestCase):
 
             with mock.patch("provisioner.core.json.loads", side_effect=replace_manifest_after_capture):
                 self.assertEqual(html_digest, core.validate_bundle(copied))
+            (copied / "appsscript.json").write_text('{"exceptionLogging":NaN}', encoding="utf-8")
+            with self.assertRaisesRegex(core.ProvisionerError, "malformed"):
+                core.validate_bundle(copied)
+            manifest["executionApi"] = {"access": "MYSELF"}
+            (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
+            (copied / "Installer.gs").unlink()
+            with self.assertRaisesRegex(core.ProvisionerError, "bootstrapFromSecret"):
+                core.validate_bundle(copied)
 
     def test_bundle_validation_holds_the_installation_lock_until_state_is_written(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -265,6 +328,18 @@ class ProvisionerBundleTests(unittest.TestCase):
             with mock.patch("provisioner.core.validate_bundle", side_effect=validate_while_locked):
                 digest, state = core.validate_and_mark_bundle(state_dir, config, ROOT / "src")
             self.assertEqual(state["bundleDigest"], digest)
+
+    def test_bundle_rejects_a_traversal_error(self) -> None:
+        def inaccessible_walk(*_args: object, **kwargs: object) -> object:
+            onerror = kwargs["onerror"]
+            assert callable(onerror)
+            onerror(PermissionError("unreadable"))
+            return iter(())
+
+        with mock.patch("provisioner.core.os.walk", side_effect=inaccessible_walk), self.assertRaisesRegex(
+            core.ProvisionerError, "cannot be traversed"
+        ):
+            list(core._iter_bundle_files(ROOT / "src"))
 
 
 def shutil_copytree(source: Path, target: Path) -> None:
@@ -291,37 +366,35 @@ class ProvisionerCommandTests(unittest.TestCase):
                 self.assertEqual(core.discover_tools(("gcloud",)), {"gcloud": str(target.resolve())})
 
     def test_identity_preflight_parses_only_expected_json_and_redacts_failure_output(self) -> None:
-        commands: list[tuple[str, ...]] = []
-
-        def fake_run(command: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-            commands.append(tuple(command))
-            if "auth" in command:
-                return subprocess.CompletedProcess(command, 0, '[{"account":"owner@example.com","status":"ACTIVE"}]', "token=private")
-            return subprocess.CompletedProcess(command, 0, '{"projectId":"vertex-project"}', "")
-
-        with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch("provisioner.core.subprocess.run", side_effect=fake_run):
+        with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+            "provisioner.core._run_json",
+            side_effect=[
+                [{"account": "owner@example.com", "status": "ACTIVE"}],
+                {"projectId": "vertex-project"},
+            ],
+        ) as run_json:
             result = core.authenticated_identity_preflight("owner@example.com", "vertex-project")
         self.assertEqual(result, {"ownerMatched": True, "projectReadable": True})
         self.assertNotIn("owner@example.com", json.dumps(result))
         self.assertNotIn("vertex-project", json.dumps(result))
-        self.assertEqual(commands[1][1:4], ("projects", "describe", "vertex-project"))
+        self.assertEqual(run_json.call_args_list[1].args[0][1:4], ("projects", "describe", "vertex-project"))
         with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
-            "provisioner.core.subprocess.run", return_value=subprocess.CompletedProcess(("gcloud",), 0, "not json", "secret=never-show")
-        ):
-            with self.assertRaisesRegex(core.ProvisionerError, "unexpected output") as raised:
-                core.authenticated_identity_preflight("owner@example.com", "vertex-project")
-        self.assertNotIn("secret", str(raised.exception))
-        with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
-            "provisioner.core.subprocess.run", return_value=subprocess.CompletedProcess(("gcloud",), 0, '[{"account":"one","account":"two"}]', "")
-        ):
-            with self.assertRaisesRegex(core.ProvisionerError, "unexpected output"):
-                core.authenticated_identity_preflight("owner@example.com", "vertex-project")
-        malformed_active = '[{"account":"owner@example.com","status":"ACTIVE"},{"status":"ACTIVE"}]'
-        with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
-            "provisioner.core.subprocess.run", return_value=subprocess.CompletedProcess(("gcloud",), 0, malformed_active, "")
+            "provisioner.core._run_json", return_value=[{"account": "owner@example.com", "status": "ACTIVE"}, {"status": "ACTIVE"}]
         ):
             with self.assertRaisesRegex(core.ProvisionerError, "unexpected accounts"):
                 core.authenticated_identity_preflight("owner@example.com", "vertex-project")
+
+    def test_preflight_command_output_is_bounded_and_redacted(self) -> None:
+        invalid_json = (sys.executable, "-c", "import sys; sys.stdout.write('not json'); sys.stderr.write('secret=never-show')")
+        with self.assertRaisesRegex(core.ProvisionerError, "unexpected output") as raised:
+            core._run_json(invalid_json)
+        self.assertNotIn("secret", str(raised.exception))
+        excessive_output = (sys.executable, "-c", f"import sys; sys.stdout.buffer.write(b'x' * {core.MAX_COMMAND_OUTPUT_BYTES + 1})")
+        with self.assertRaisesRegex(core.ProvisionerError, "unexpected output"):
+            core._run_json(excessive_output)
+        nonstandard_constant = (sys.executable, "-c", "import sys; sys.stdout.write('{\\\"account\\\":NaN}')")
+        with self.assertRaisesRegex(core.ProvisionerError, "unexpected output"):
+            core._run_json(nonstandard_constant)
 
     def test_cli_rejects_secret_like_config_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
