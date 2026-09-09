@@ -33,7 +33,7 @@ function removeDailyImportTrigger() {
     if (raw) assertOwner_(config_());
     else if (String(Gmail.Users.getProfile('me').emailAddress).toLowerCase() !==
       String(Session.getEffectiveUser().getEmail()).toLowerCase()) fail_('OWNER');
-    const triggers = raw ? ownedImportTriggers_() : ScriptApp.getProjectTriggers().filter(function (trigger) {
+    const triggers = raw ? ownedImportTriggers_(true) : ScriptApp.getProjectTriggers().filter(function (trigger) {
       return trigger && trigger.getHandlerFunction() === MC_SCHEDULED_HANDLER &&
         trigger.getEventType() === ScriptApp.EventType.CLOCK;
     });
@@ -45,14 +45,18 @@ function removeDailyImportTrigger() {
   });
 }
 
-function ownedImportTriggers_() {
+function ownedImportTriggers_(allowMissingIdRecovery) {
   const triggers = ScriptApp.getProjectTriggers().filter(function (trigger) {
     return trigger && trigger.getHandlerFunction() === MC_SCHEDULED_HANDLER &&
       trigger.getEventType() === ScriptApp.EventType.CLOCK;
   });
   const id = props_().getProperty(MC_TRIGGER_ID_KEY);
   if (id && !/^[A-Za-z0-9_-]{1,200}$/.test(id)) fail_('STATE');
-  if (!id) return triggers.length ? fail_('RESOURCE') : [];
+  if (!id) {
+    if (!triggers.length) return [];
+    if (allowMissingIdRecovery && triggers.length === 1) return triggers;
+    fail_('RESOURCE');
+  }
   if (!triggers.length) {
     props_().deleteProperty(MC_TRIGGER_ID_KEY);
     return [];
