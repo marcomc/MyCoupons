@@ -155,9 +155,13 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
   const row = sheet.getRange(rowNumber, 1, 1, MC.headers.length).getDisplayValues()[0];
   const enriched = candidates.filter(function (item) { return retryCandidateMatchesRow_(item, row); });
   if (enriched.length !== 1) return reviewFailure_(sheet, rowNumber, 'REVIEW');
+  const knownRows = state.candidateStates.map(function (known) {
+    const knownRow = findCouponRowByDedupeKey_(sheet, known.key);
+    return knownRow && sheet.getRange(knownRow, 1, 1, MC.headers.length).getDisplayValues()[0];
+  });
+  if (knownRows.some(function (knownRow) { return !knownRow; })) return reviewFailure_(sheet, rowNumber, 'STATE');
   if (candidates.some(function (item) {
-    return !state.candidateStates.some(function (known) {
-      const knownRow = sheet.getRange(known.rowNumber, 1, 1, MC.headers.length).getDisplayValues()[0];
+    return !knownRows.some(function (knownRow) {
       return retryCandidateMatchesRow_(item, knownRow);
     });
   })) return reviewFailure_(sheet, rowNumber, 'REVIEW');
