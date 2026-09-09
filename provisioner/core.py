@@ -264,8 +264,8 @@ def load_config(path: Path) -> dict[str, Any]:
     for key in ("developerProject", "vertexProject"):
         if config[key] and not PROJECT_ID_RE.fullmatch(config[key]):
             raise ProvisionerError(f"installation config {key} is invalid")
-    if config["autoVertexFallback"] and not config["vertexProject"]:
-        raise ProvisionerError("autoVertexFallback requires vertexProject")
+    if not config["vertexProject"]:
+        raise ProvisionerError("installation config vertexProject is required for bootstrap")
     if config["initialDate"]:
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", config["initialDate"]):
             raise ProvisionerError("installation config initialDate is invalid")
@@ -539,8 +539,14 @@ def _has_bootstrap_entry_point(content: bytes) -> bool:
         index += 1
     visible_source = "".join(visible)
     visible_source = re.sub(
-        r"/(?:\\.|\[[^\]\n]*(?:\\.[^\]\n]*)*\]|[^/\n])+/[a-z]*",
-        lambda match: "".join("\n" if char == "\n" else " " for char in match.group()),
+        r"(^|[({[=,:;!?&|+\-*%^~<>][ \t]*)/(?:\\.|\[[^\]\n]*(?:\\.[^\]\n]*)*\]|[^/\n])+/[a-z]*",
+        lambda match: match.group(1) + " " * (len(match.group()) - len(match.group(1))),
+        visible_source,
+        flags=re.MULTILINE,
+    )
+    visible_source = re.sub(
+        r"(\b(?:if|while|for|catch)\s*\([^\n]*?\)\s*|\b(?:do|else|return|throw|void|typeof|delete|yield|await|new|of|in|instanceof|extends)\s*|}\s*)/(?:\\.|\[[^\]\n]*(?:\\.[^\]\n]*)*\]|[^/\n])+/[a-z]*",
+        lambda match: match.group(1) + " " * (len(match.group()) - len(match.group(1))),
         visible_source,
     )
     for match in re.finditer(r"(?m)^[ \t]*function[ \t]+bootstrapFromSecret[ \t]*\(", visible_source):

@@ -81,9 +81,8 @@ class ProvisionerConfigTests(unittest.TestCase):
                 core.load_config(config_path)
             bad = valid_config()
             bad["vertexProject"] = ""
-            bad["autoVertexFallback"] = True
             private_json(config_path, bad)
-            with self.assertRaisesRegex(core.ProvisionerError, "requires"):
+            with self.assertRaisesRegex(core.ProvisionerError, "required"):
                 core.load_config(config_path)
             valid_short_location = valid_config()
             valid_short_location["vertexLocation"] = "us"
@@ -325,7 +324,7 @@ class ProvisionerBundleTests(unittest.TestCase):
                 core.validate_bundle(copied)
             manifest["executionApi"] = {"access": "MYSELF"}
             (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
-            (copied / "Installer.gs").write_text('// function bootstrapFromSecret(\n"function bootstrapFromSecret("\nconst closes = /}/;\nfunction outer() { function bootstrapFromSecret() {} }\n', encoding="utf-8")
+            (copied / "Installer.gs").write_text('// function bootstrapFromSecret(\n"function bootstrapFromSecret("\nnew /}/.test(\'\');\nfunction outer() { function bootstrapFromSecret() {} }\n', encoding="utf-8")
             with self.assertRaisesRegex(core.ProvisionerError, "bootstrapFromSecret"):
                 core.validate_bundle(copied)
 
