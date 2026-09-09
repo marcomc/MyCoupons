@@ -76,7 +76,9 @@ test('scheduled import resolves state while holding the workflow lock', () => {
   const {ctx} = harness();
   let depth = 0;
   let resolutionDepth = 0;
-  ctx.withLock_ = fn => {
+  const deadlines = [];
+  ctx.withLock_ = (fn, deadlineMs) => {
+    deadlines.push(deadlineMs);
     depth += 1;
     try { return fn(); } finally { depth -= 1; }
   };
@@ -87,6 +89,31 @@ test('scheduled import resolves state while holding the workflow lock', () => {
   ctx.notifyScheduledImport_ = () => {};
   ctx.runScheduledImport();
   assert.equal(resolutionDepth, 1);
+  assert.equal(typeof deadlines[0], 'number');
+});
+
+test('review edits reload configuration after acquiring the lock', () => {
+  const {ctx, config} = harness();
+  const replacement = {...config, spreadsheetId: 'replacement-sheet-id'};
+  let processed = 0;
+  ctx.config_ = () => config;
+  ctx.withLock_ = fn => {
+    ctx.config_ = () => replacement;
+    return fn();
+  };
+  ctx.assertPrivateSpreadsheet_ = () => assert.fail('stale source must be rejected before privacy checks');
+  ctx.processReviewAction_ = () => { processed += 1; };
+  const oldSheet = {getName: () => config.sheetName, getParent: () => ({getId: () => config.spreadsheetId})};
+  ctx.onReviewEdit({value: 'Confirm', range: {getSheet: () => oldSheet, getColumn: () => 25, getRow: () => 2}});
+  assert.equal(processed, 0);
+});
+
+test('review validation ignores the internal dedupe key column', () => {
+  const {ctx} = harness();
+  const row = Array(26).fill('');
+  row[16] = 'sha256-dedupe-key';
+  ctx.candidateSource_ = () => ({spans: []});
+  assert.equal(ctx.validateReviewRow_(row, {}), true);
 });
 
 test('private spreadsheet permission inspection requests owner email fields', () => {

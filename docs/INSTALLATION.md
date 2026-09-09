@@ -15,6 +15,9 @@ the operator-owned Google Cloud project. The Apps Script manifest requests Gmail
 modify, Sheets, read-only Drive, external requests, script triggers, mail,
 identity, and cloud-platform scopes. OAuth consent and Branding must use real,
 published homepage and privacy-policy URLs before an OAuth app is published.
+Before entering those URLs or publishing, inspect the current Google Auth
+Platform Console prerequisites and disabled-control guidance; do not assume an
+older OAuth app or static checklist remains valid.
 
 The default Gemini Developer API route needs a key inserted into the
 `GEMINI_API_KEY` Script Property through a secure operator workflow. Vertex

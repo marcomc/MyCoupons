@@ -3,13 +3,18 @@ const MC_REVIEW_ACTIONS = Object.freeze([EN.actions.confirm, EN.actions.ignore, 
 function onReviewEdit(e) {
   if (!e || !e.range || !e.range.getSheet || !e.value) return;
   const sheet = e.range.getSheet();
-  const c = config_();
-  if (sheet.getName() !== c.sheetName || e.range.getColumn() !== MC.headers.indexOf('Action needed') + 1 ||
-      e.range.getRow() < 2 || MC_REVIEW_ACTIONS.indexOf(String(e.value)) < 0) return;
-  const spreadsheet = sheet.getParent();
-  if (!spreadsheet || typeof spreadsheet.getId !== 'function' || String(spreadsheet.getId()) !== String(c.spreadsheetId)) return;
-  assertPrivateSpreadsheet_(spreadsheet, c);
-  withLock_(function () { processReviewAction_(sheet, e.range.getRow(), String(e.value), c); });
+  const rowNumber = e.range.getRow();
+  const action = String(e.value);
+  if (e.range.getColumn() !== MC.headers.indexOf('Action needed') + 1 || rowNumber < 2 ||
+      MC_REVIEW_ACTIONS.indexOf(action) < 0) return;
+  withLock_(function () {
+    const c = config_();
+    if (sheet.getName() !== c.sheetName) return;
+    const spreadsheet = sheet.getParent();
+    if (!spreadsheet || typeof spreadsheet.getId !== 'function' || String(spreadsheet.getId()) !== String(c.spreadsheetId)) return;
+    assertPrivateSpreadsheet_(spreadsheet, c);
+    processReviewAction_(sheet, rowNumber, action, c);
+  });
 }
 
 function processReviewAction_(sheet, rowNumber, action, c) {
@@ -51,7 +56,7 @@ function getReviewMessage_(messageId) {
 function validateReviewRow_(row, message) {
   if (!Array.isArray(row) || !message) return false;
   const candidate = {merchant: row[1], website: row[2], code: row[3], discountType: row[4], discountValue: row[5],
-    minimumSpend: row[6], validOn: row[7], exclusions: row[8], expiry: row[9], usageLimits: row[10], currency: row[20], notes: row[16]};
+    minimumSpend: row[6], validOn: row[7], exclusions: row[8], expiry: row[9], usageLimits: row[10], currency: row[20]};
   const source = candidateSource_(message);
   return MC.fields.every(function (field) {
     const value = String(candidate[field] || '').trim();

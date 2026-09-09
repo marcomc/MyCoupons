@@ -66,7 +66,7 @@ function runScheduledImport() {
       const before = readMessageJournal_(state.journalSheet);
       const result = runImportWorkflow_(state);
       return scheduledSummary_(state, before, result);
-    });
+    }, deadlineMs);
   } catch (e) {
     summary = {imported: 0, importedIds: [], review: 0, errors: [{messageId: '', code: errorCode_(e)}], links: [], omittedLinks: false};
   }
