@@ -19,10 +19,18 @@ function installMyCoupons(input) {
     const config = hasInput ? validateInstallerInput_(input, false) :
       validateInstallerInput_(config_(), true);
     assertOwner_(config);
+    const previous = props_().getProperty(MC.configKey);
+    if (previous) {
+      let previousConfig;
+      try { previousConfig = validateConfig_(JSON.parse(previous)); } catch (e) { fail_('CONFIG'); }
+      if (config.spreadsheetId && config.spreadsheetId !== previousConfig.spreadsheetId) {
+        assertPrivateSpreadsheet_(openSpreadsheetById_(config.spreadsheetId), config);
+      }
+    }
     const state = ensureSheetState_(config);
     assertPrivateSpreadsheet_(state.spreadsheet, config);
-    const trigger = installDailyImportTrigger();
     const reviewTrigger = installReviewEditTrigger_(state.spreadsheet);
+    const trigger = installDailyImportTrigger();
     return {version: MC_INSTALLER_VERSION, installed: true, resumed: !!config.spreadsheetId,
       spreadsheetId: String(state.spreadsheet.getId()), labelId: String(state.label.id),
       triggerCreated: !!trigger.created, reviewTriggerCreated: !!reviewTrigger.created,
@@ -72,7 +80,11 @@ function getInstallationStatus() {
     const triggers = ScriptApp.getProjectTriggers().filter(function (trigger) {
       return trigger.getHandlerFunction() === MC_SCHEDULED_HANDLER && trigger.getEventType() === ScriptApp.EventType.CLOCK;
     });
-    return {configured: false, spreadsheetId: '', labelId: '', triggerCount: triggers.length, ready: false};
+    const reviewTriggers = ScriptApp.getProjectTriggers().filter(function (trigger) {
+      return trigger.getHandlerFunction() === MC_REVIEW_HANDLER && trigger.getEventType() === ScriptApp.EventType.ON_EDIT;
+    });
+    return {configured: false, spreadsheetId: '', labelId: '', triggerCount: triggers.length,
+      reviewTriggerCount: reviewTriggers.length, ready: false};
   }
   const config = config_();
   const triggers = ownedImportTriggers_();
