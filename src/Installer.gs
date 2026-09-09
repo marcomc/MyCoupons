@@ -1,6 +1,9 @@
 const MC_INSTALLER_VERSION = 1;
 const MC_INSTALLER_LIMITS = Object.freeze({maxConfigUnits: 8000});
 const MC_REVIEW_HANDLER = 'onReviewEdit';
+const MC_INSTALLER_INPUT_KEYS = Object.freeze(['ownerEmail', 'spreadsheetId', 'spreadsheetName', 'sheetName',
+  'labelName', 'locale', 'timeZone', 'initialDate', 'developerProject', 'vertexProject', 'vertexLocation',
+  'model', 'autoVertexFallback', 'fetchRemoteImages']);
 const MC_BOOTSTRAP = Object.freeze({
   secretName: 'mycoupons-bootstrap', version: 1, maxPayloadUnits: 12000,
   maxSecretDataChars: 16384, maxApiKeyUnits: 512
@@ -9,9 +12,9 @@ const MC_BOOTSTRAP = Object.freeze({
 function validateInstallerInput_(input, allowPersistedIdentity) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail_('CONFIG');
   const keys = Object.keys(input);
-  if (keys.some(function (key) { return ['ownerEmail', 'spreadsheetId', 'spreadsheetName', 'sheetName', 'labelName',
-    'locale', 'timeZone', 'initialDate', 'developerProject', 'vertexProject', 'vertexLocation', 'model',
-    'autoVertexFallback', 'fetchRemoteImages'].concat(allowPersistedIdentity ? ['labelId'] : []).indexOf(key) < 0; })) fail_('CONFIG');
+  if (keys.some(function (key) {
+    return MC_INSTALLER_INPUT_KEYS.concat(allowPersistedIdentity ? ['labelId'] : []).indexOf(key) < 0;
+  })) fail_('CONFIG');
   const config = validateConfig_(input);
   if (JSON.stringify(config).length > MC_INSTALLER_LIMITS.maxConfigUnits) fail_('CONFIG');
   return config;
@@ -86,10 +89,11 @@ function bootstrapFromSecret(secretVersion) {
     const persisted = bootstrapPersistedConfig_();
     if (persisted) assertOwner_(persisted);
     const resource = validateBootstrapSecretVersion_(secretVersion, persisted && persisted.vertexProject);
-    const payload = readBootstrapSecret_(resource);
-    const bootstrap = validateBootstrapPayload_(payload);
+    const secret = readBootstrapSecret_(resource);
+    const bootstrap = validateBootstrapPayload_(secret.payload);
     if (resource.project !== bootstrap.config.vertexProject) fail_('RESOURCE');
     if (persisted && bootstrap.config.vertexProject !== persisted.vertexProject) fail_('RESOURCE');
+    assertBootstrapSecretProject_(resource, secret.name, bootstrap.config.vertexProject);
     assertOwner_(bootstrap.config);
     const properties = props_();
     const previousKey = properties.getProperty('GEMINI_API_KEY');
@@ -118,7 +122,7 @@ function validateBootstrapSecretVersion_(value, expectedProject) {
     MC_BOOTSTRAP.secretName + '/versions/([1-9][0-9]*)$');
   const match = pattern.exec(value);
   if (!match || expectedProject && match[1] !== expectedProject) fail_('RESOURCE');
-  return {name: value, project: match[1]};
+  return {name: value, project: match[1], version: match[2]};
 }
 
 function readBootstrapSecret_(resource) {
@@ -131,12 +135,41 @@ function readBootstrapSecret_(resource) {
   if (!response || response.getResponseCode() < 200 || response.getResponseCode() >= 300) fail_('RESOURCE');
   let body;
   try { body = JSON.parse(response.getContentText()); } catch (e) { fail_('RESOURCE'); }
-  if (!body || typeof body !== 'object' || Array.isArray(body) || body.name !== resource.name ||
+  if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.name !== 'string' ||
     !body.payload || typeof body.payload !== 'object' || Array.isArray(body.payload)) fail_('RESOURCE');
+  const canonical = new RegExp('^projects/([1-9][0-9]*)/secrets/' + MC_BOOTSTRAP.secretName +
+    '/versions/' + resource.version + '$').exec(body.name);
+  if (!canonical) fail_('RESOURCE');
   const data = body.payload.data;
+  const checksum = body.payload.dataCrc32c;
   if (typeof data !== 'string' || data.length > MC_BOOTSTRAP.maxSecretDataChars ||
+    typeof checksum !== 'string' || !/^(?:0|[1-9][0-9]{0,9})$/.test(checksum) || Number(checksum) > 4294967295 ||
     !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) fail_('RESOURCE');
-  try { return Utilities.newBlob(Utilities.base64Decode(data)).getDataAsString(); } catch (e) { fail_('RESOURCE'); }
+  let bytes;
+  try { bytes = Utilities.base64Decode(data); } catch (e) { fail_('RESOURCE'); }
+  if (crc32c_(bytes) !== Number(checksum)) fail_('RESOURCE');
+  try { return {name: body.name, payload: Utilities.newBlob(bytes).getDataAsString()}; } catch (e) { fail_('RESOURCE'); }
+}
+
+function assertBootstrapSecretProject_(resource, canonicalName, projectId) {
+  const projectNumber = resolveBootstrapProjectNumber_(projectId);
+  const expected = 'projects/' + projectNumber + '/secrets/' + MC_BOOTSTRAP.secretName + '/versions/' + resource.version;
+  if (canonicalName !== expected) fail_('RESOURCE');
+}
+
+function resolveBootstrapProjectNumber_(projectId) {
+  let response;
+  try {
+    response = UrlFetchApp.fetch('https://cloudresourcemanager.googleapis.com/v1/projects/' + encodeURIComponent(projectId), {
+      method: 'get', headers: {Authorization: 'Bearer ' + ScriptApp.getOAuthToken()}, muteHttpExceptions: true
+    });
+  } catch (e) { fail_('RESOURCE'); }
+  if (!response || response.getResponseCode() < 200 || response.getResponseCode() >= 300) fail_('RESOURCE');
+  let body;
+  try { body = JSON.parse(response.getContentText()); } catch (e) { fail_('RESOURCE'); }
+  if (!body || typeof body !== 'object' || Array.isArray(body) || body.projectId !== projectId ||
+    typeof body.projectNumber !== 'string' || !/^[1-9][0-9]*$/.test(body.projectNumber)) fail_('RESOURCE');
+  return body.projectNumber;
 }
 
 function validateBootstrapPayload_(raw) {
@@ -150,9 +183,24 @@ function validateBootstrapPayload_(raw) {
     }) || payload.version !== MC_BOOTSTRAP.version || typeof payload.geminiApiKey !== 'string' ||
     payload.geminiApiKey.length > MC_BOOTSTRAP.maxApiKeyUnits ||
     !/^AIza[A-Za-z0-9_-]{20,}$/.test(payload.geminiApiKey)) fail_('CONFIG');
+  if (!payload.config || typeof payload.config !== 'object' || Array.isArray(payload.config) ||
+    Object.keys(payload.config).length !== MC_INSTALLER_INPUT_KEYS.length || MC_INSTALLER_INPUT_KEYS.some(function (key) {
+      return !Object.prototype.hasOwnProperty.call(payload.config, key);
+    })) fail_('CONFIG');
   const config = validateInstallerInput_(payload.config, false);
   if (!config.vertexProject) fail_('CONFIG');
   return {config: config, geminiApiKey: payload.geminiApiKey};
+}
+
+function crc32c_(bytes) {
+  let checksum = 0xffffffff;
+  for (let index = 0; index < bytes.length; index++) {
+    checksum ^= Number(bytes[index]) & 0xff;
+    for (let bit = 0; bit < 8; bit++) {
+      checksum = checksum & 1 ? (checksum >>> 1) ^ 0x82f63b78 : checksum >>> 1;
+    }
+  }
+  return (checksum ^ -1) >>> 0;
 }
 
 function bootstrapHasDuplicateJsonKeys_(json) {
