@@ -150,11 +150,15 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
   if (enriched.length !== 1) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   const updated = couponRow_(message, enriched[0], candidate.key);
   const existing = sheet.getRange(rowNumber, 1, 1, updated.length).getValues()[0];
+  const existingFormulas = sheet.getRange(rowNumber, 1, 1, updated.length).getFormulas()[0];
   const merged = existing.slice();
   [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20, 24].forEach(function (column) {
     merged[column] = updated[column];
   });
   sheet.getRange(rowNumber, 1, 1, merged.length).setValues([merged]);
+  existingFormulas.forEach(function (formula, index) {
+    if (formula && [18, 19, 21, 22, 23, 25].indexOf(index) >= 0) sheet.getRange(rowNumber, index + 1).setFormula(formula);
+  });
   candidate.imageEvidence = enriched[0].imageEvidence || {};
   candidate.status = enriched[0].review ? 'review' : 'confirmed';
   completeReviewMessage_(state, sheet, journalSheet, c);
@@ -179,13 +183,18 @@ function completeReviewMessage_(state, sheet, journalSheet, c) {
     try { saveMessageState_(journalSheet, state); } catch (e) { restoreReviewRows_(state, sheet); throw e; }
     return;
   }
-  if (!refreshAndValidateReviewRows_(state, sheet, c)) return;
+  try {
+    if (!refreshAndValidateReviewRows_(state, sheet, c)) { restoreReviewRows_(state, sheet); state.status = 'review'; state.outcome = 'review'; saveMessageState_(journalSheet, state); return; }
+  } catch (e) {
+    restoreReviewRows_(state, sheet); state.status = 'review'; state.outcome = 'review'; state.lastError = errorCode_(e); saveMessageState_(journalSheet, state); return;
+  }
   try {
     if (!state.labelApplied) { modifyReviewMessage_(state.messageId, {addLabelIds: [c.labelId]}); state.labelApplied = true; }
     if (!state.archived) { modifyReviewMessage_(state.messageId, {removeLabelIds: ['INBOX']}); state.archived = true; }
     state.status = 'confirmed'; state.outcome = 'archive'; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
   } catch (e) {
     if (state.labelApplied || state.archived) {
+      restoreReviewRows_(state, sheet);
       state.status = 'failed'; state.outcome = 'review'; state.failureStage = 'mail'; state.lastError = errorCode_(e); state.updatedAt = new Date().toISOString();
       try { saveMessageState_(journalSheet, state); } catch (ignored) {}
       throw e;
