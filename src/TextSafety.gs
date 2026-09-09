@@ -1,7 +1,3 @@
-function digest_(s) {
-  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, s, Utilities.Charset.UTF_8)
-    .map(function (v) { return ('0' + ((v + 256) % 256).toString(16)).slice(-2); }).join('');
-}
 function boundedText_(text, limit) {
   const prefix = text.slice(0, limit);
   return /[\ud800-\udbff]$/.test(prefix) && /[\udc00-\udfff]/.test(text.charAt(limit)) ? prefix.slice(0, -1) : prefix;

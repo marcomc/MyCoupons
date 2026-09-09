@@ -34,7 +34,7 @@ function harness({vendorLast = false} = {}) {
     Gmail: {Users: {getProfile: () => ({emailAddress: owner})}}
   };
   vm.createContext(ctx);
-  const names = ['locales/en', 'Config', 'GeminiRouting', 'Core', 'NumericEvidence', 'HtmlEvidence', 'ImageAcquisition',
+  const names = ['locales/en', 'Config', 'GeminiRouting', 'Digest', 'TextSafety', 'NumericEvidence', 'HtmlEvidence', 'ImageAcquisition',
     'CandidateEvidence', 'AIExtraction', 'GmailIdentity', 'SheetSafety', 'SheetState', 'GmailRead', 'ImportWorkflow', 'ReviewActions', 'Scheduler', 'Installer'];
   if (vendorLast) names.push('vendor/Html');
   else names.unshift('vendor/Html');

@@ -697,7 +697,7 @@ test('references separated by lexical markup are never manufactured after concat
   assert.equal(ctx.htmlText_('CAF&Eacute;20'), 'CAFÉ20');
 });
 
-test('the actual vendored parser loads before or after Core without Node or DOM globals', () => {
+test('the actual vendored parser loads before or after the utility modules without Node or DOM globals', () => {
   for (const vendorLast of [false, true]) {
     const {ctx} = harness({vendorLast});
     for (const name of ['require', 'module', 'exports', 'window', 'document', 'fetch']) assert.equal(ctx[name], undefined);
