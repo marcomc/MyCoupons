@@ -84,7 +84,10 @@ function scheduledSummary_(state, before, result) {
     if (after[messageId].status === 'failed' && (!before[messageId] || before[messageId].lastError !== after[messageId].lastError)) errors.push({messageId: messageId, code: after[messageId].lastError || 'INTERNAL'});
   });
   (result.messages || []).forEach(function (message) {
-    if (message.status === 'failed' && message.error) errors.push({messageId: message.messageId, code: String(message.error)});
+    if (message.status === 'failed' && message.error &&
+        (!before[message.messageId] || before[message.messageId].lastError !== message.error)) {
+      errors.push({messageId: message.messageId, code: String(message.error)});
+    }
   });
   const uniqueErrors = [];
   errors.forEach(function (error) {
@@ -184,6 +187,8 @@ function notifyScheduledImport_(summary) {
 
 function persistPendingNotification_(summary) {
   if (!summary || !Array.isArray(summary.errors)) return;
+  const existing = pendingNotification_();
+  if (existing) summary = mergeNotificationSummaries_(existing, summary);
   const pending = {imported: Number(summary.imported) || 0, importedIds: summary.importedIds || [], review: Number(summary.review) || 0,
     errors: summary.errors, links: summary.links || [], omittedLinks: !!summary.omittedLinks};
   const value = JSON.stringify(pending);

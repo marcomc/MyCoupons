@@ -66,7 +66,7 @@ function withLock_(fn) {
     try { return fn(); } finally { MC_LOCK_DEPTH--; }
   }
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(1000)) fail_('BUSY');
+  if (!lock.tryLock(240000)) fail_('BUSY');
   MC_LOCK_DEPTH = 1;
   try { return fn(); } finally { MC_LOCK_DEPTH = 0; lock.releaseLock(); }
 }
