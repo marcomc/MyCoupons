@@ -263,7 +263,7 @@ function candidateStates_(value) {
 
 function imageEvidence_(value) {
   return value && typeof value === 'object' && !Array.isArray(value) &&
-    Object.keys(value).every(function (field) { return MC.fields.indexOf(field) >= 0 && Number.isInteger(value[field]) && value[field] >= 0; });
+    Object.keys(value).every(function (field) { return MC.fields.indexOf(field) >= 0 && typeof value[field] === 'string' && value[field]; });
 }
 
 function recordWithExactKeys_(value, keys) {

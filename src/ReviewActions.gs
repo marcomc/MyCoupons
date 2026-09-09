@@ -71,17 +71,17 @@ function validateReviewRow_(row, message, displayRow, imageEvidence) {
   if (expiry && !validDate_(expiry)) return false;
   if (!reviewSourceColumnsMatch_(row, message)) return false;
   const candidate = {merchant: row[1], website: row[2], code: row[3], discountType: row[4], discountValue: row[5],
-    minimumSpend: row[6], validOn: row[7], exclusions: row[8], expiry: row[9], usageLimits: row[10], currency: row[20]};
+    minimumSpend: row[6], validOn: row[7], exclusions: row[8], expiry: expiry, usageLimits: row[10], currency: row[20]};
   const source = candidateSource_(message);
   const spans = source.spans.concat([message.subject, message.sender].filter(function (value) { return typeof value === 'string' && value; }));
   if (discountType || discountValue) {
     const pairedImage = imageEvidence && imageEvidence.discountType === imageEvidence.discountValue &&
-      inspectedImageAt_(source.images, imageEvidence.discountType);
+      inspectedImageBySourceId_(source.images, imageEvidence.discountType);
     if (!discountType || !discountValue || !pairedImage && !spans.some(function (span) { return discountPairInSpan_(discountType, discountValue, span); })) return false;
   }
   return MC.fields.filter(function (field) { return field !== 'discountType' && field !== 'discountValue'; }).every(function (field) {
     const value = String(candidate[field] || '').trim();
-    return !value || imageEvidence && inspectedImageAt_(source.images, imageEvidence[field]) ||
+    return !value || imageEvidence && inspectedImageBySourceId_(source.images, imageEvidence[field]) ||
       spans.some(function (span) { return fieldInQuote_(field, value, span); });
   });
 }
@@ -89,7 +89,7 @@ function validateReviewRow_(row, message, displayRow, imageEvidence) {
 function reviewSourceColumnsMatch_(row, message) {
   const date = row[0];
   return date instanceof Date && date.getTime() === message.receivedAtMs &&
-    String(row[11] || '') === message.subject && String(row[12] || '') === message.sender &&
+    String(row[11] || '') === textCell_(message.subject) && String(row[12] || '') === textCell_(message.sender) &&
     String(row[13] || '') === message.link;
 }
 
@@ -150,13 +150,22 @@ function completeReviewMessage_(state, sheet, journalSheet, c) {
     try { saveMessageState_(journalSheet, state); } catch (e) { restoreReviewRows_(state, sheet); throw e; }
     return;
   }
-  if (state.outcome === 'unchanged') { state.status = 'ignored'; saveMessageState_(journalSheet, state); return; }
+  if (state.outcome === 'unchanged') {
+    state.status = 'ignored';
+    try { saveMessageState_(journalSheet, state); } catch (e) { restoreReviewRows_(state, sheet); throw e; }
+    return;
+  }
   if (!state.candidateStates.every(function (item) { return String(sheet.getRange(item.rowNumber, 18).getDisplayValues()[0][0]) === EN.statuses.confirmed; })) return;
   try {
     if (!state.labelApplied) { modifyReviewMessage_(state.messageId, {addLabelIds: [c.labelId]}); state.labelApplied = true; }
     if (!state.archived) { modifyReviewMessage_(state.messageId, {removeLabelIds: ['INBOX']}); state.archived = true; }
     state.status = 'confirmed'; state.outcome = 'archive'; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
   } catch (e) {
+    if (state.labelApplied || state.archived) {
+      state.status = 'confirmed'; state.outcome = 'archive'; state.updatedAt = new Date().toISOString();
+      try { saveMessageState_(journalSheet, state); } catch (ignored) {}
+      throw e;
+    }
     state.candidateStates.forEach(function (item) {
       item.status = 'review';
       setReviewStatus_(sheet, item.rowNumber, EN.statuses.review, EN.actions.confirm);
@@ -164,6 +173,12 @@ function completeReviewMessage_(state, sheet, journalSheet, c) {
     state.status = 'review'; state.outcome = 'review'; state.lastError = errorCode_(e);
     state.failureStage = 'mail'; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
   }
+}
+
+function inspectedImageBySourceId_(images, sourceId) {
+  return typeof sourceId === 'string' && images.some(function (image) {
+    return inspectedImage_(image) && image.sourceId === sourceId;
+  });
 }
 
 function restoreReviewRows_(state, sheet) {

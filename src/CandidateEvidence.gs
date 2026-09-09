@@ -283,7 +283,7 @@ function normalizeCandidate_(raw, message) {
       source.evidenceSpans.some(function (span) { return textEvidenceGrounded_(k, c[k], quote, span); });
     const groundedImage = ev && Number.isInteger(image) && image >= 0 && image < source.images.length &&
       inspectedImageAt_(source.images, image);
-    if (groundedImage) c.imageEvidence[k] = image;
+    if (groundedImage) c.imageEvidence[k] = source.images[image].sourceId;
     if (!groundedText && !groundedImage) { c[k] = ''; c.review = true; }
     // OCR-only evidence is a proposal, not independently verified import authority.
     if (groundedImage && !groundedText) c.review = true;
