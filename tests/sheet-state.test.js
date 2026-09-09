@@ -4,10 +4,12 @@ const {harness} = require('./harness');
 
 function sheetMock(name, rows = []) {
   const values = rows.map(row => row.slice());
+  const validations = [];
   return {
     getName: () => name,
     getLastRow: () => values.length,
     getLastColumn: () => values.reduce((max, row) => Math.max(max, row.length), 0),
+    getMaxRows: () => 1000,
     getDataRange: () => ({getValues: () => values.map(row => row.slice()),
       getDisplayValues: () => values.map(row => row.map(value => String(value ?? '')))}),
     getRange: (row, column, rowCount, columnCount) => ({
@@ -22,9 +24,10 @@ function sheetMock(name, rows = []) {
           while (values[row - 1 + r].length < column + columnCount - 1) values[row - 1 + r].push('');
           for (let c = 0; c < columnCount; c++) values[row - 1 + r][column - 1 + c] = next[r][c];
         }
-      }
+      },
+      setDataValidation: rule => { validations.push({row, column, rowCount, columnCount, rule}); }
     }),
-    _values: values
+    _values: values, _validations: validations
   };
 }
 
@@ -42,6 +45,17 @@ function spreadsheetMock(name, sheets = []) {
   };
 }
 
+function dataValidationBuilder() {
+  return () => {
+    const rule = {};
+    return {requireValueInList: (values, showDropdown) => {
+      rule.values = values; rule.showDropdown = showDropdown; return {setAllowInvalid: allowed => {
+        rule.allowInvalid = allowed; return {build: () => rule};
+      }};
+    }};
+  };
+}
+
 function installServices(ctx, spreadsheet, files, labels) {
   let createdLabels = [];
   ctx.DriveApp = {getFilesByName: () => {
@@ -50,7 +64,8 @@ function installServices(ctx, spreadsheet, files, labels) {
   }};
   ctx.SpreadsheetApp = {
     openById: id => { assert.equal(id, 'sheet-1'); return spreadsheet; },
-    create: () => { throw new Error('must not create'); }
+    create: () => { throw new Error('must not create'); },
+    newDataValidation: dataValidationBuilder()
   };
   ctx.Gmail.Users.Labels = {
     list: () => ({labels: labels.concat(createdLabels)}),
@@ -74,13 +89,15 @@ test('resource setup adopts one owned spreadsheet, creates missing tabs and nest
   assert.equal(JSON.parse(properties.MYCOUPONS_CONFIG).spreadsheetId, 'sheet-1');
   assert.equal(JSON.parse(properties.MYCOUPONS_CONFIG).labelId, 'label-2');
   assert.equal(result.recoveryStart, Date.parse('2026-05-21T22:00:00Z'));
+  assert.deepEqual(JSON.parse(JSON.stringify(result.couponSheet._validations)), [{row: 2, column: 25, rowCount: 999, columnCount: 1,
+    rule: {values: ['Confirm', 'Ignore', 'Retry with AI'], showDropdown: true, allowInvalid: false}}]);
 });
 
 test('missing spreadsheet is created only when exact-name discovery returns no match', () => {
   const {ctx, config} = harness();
   const spreadsheet = spreadsheetMock(config.spreadsheetName, []);
   ctx.DriveApp = {getFilesByName: () => ({hasNext: () => false})};
-  ctx.SpreadsheetApp = {create: () => spreadsheet};
+  ctx.SpreadsheetApp = {create: () => spreadsheet, newDataValidation: dataValidationBuilder()};
   ctx.Gmail.Users.Labels = {list: () => ({labels: [{id: 'label-1', name: config.labelName}]})};
   const result = ctx.ensureSheetState_({...config, spreadsheetId: ''});
   assert.deepEqual(spreadsheet.insertedNames, [config.sheetName, '_MyCoupons Messages']);

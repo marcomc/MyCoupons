@@ -22,6 +22,7 @@ function ensureSheetState_(input, deadlineMs) {
     const recoveryStart = couponSheet ? recoveryStartForSheet_(couponSheet, c) :
       recoveryStart_([], c);
     if (!couponSheet) couponSheet = ensureCouponSheet_(spreadsheet, c.sheetName);
+    ensureReviewActionValidation_(couponSheet);
     const journalSheet = ensureJournalSheet_(spreadsheet);
     const label = resolveGmailLabel_(c);
     const resolvedConfig = persistResourceIdentity_(c, spreadsheet.getId(), label.id);
@@ -144,6 +145,16 @@ function ensureJournalSheet_(spreadsheet) {
 
 function setHeaderRow_(sheet, headers) {
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+}
+
+function ensureReviewActionValidation_(sheet) {
+  if (!sheet || typeof sheet.getMaxRows !== 'function') fail_('RESOURCE');
+  const actionColumn = MC.headers.indexOf('Action needed') + 1;
+  if (actionColumn < 1 || !SpreadsheetApp || typeof SpreadsheetApp.newDataValidation !== 'function') fail_('RESOURCE');
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList([EN.actions.confirm, EN.actions.ignore, EN.actions.retry_ai], true)
+    .setAllowInvalid(false).build();
+  sheet.getRange(2, actionColumn, Math.max(1, sheet.getMaxRows() - 1), 1).setDataValidation(rule);
 }
 
 function assertHeaderRow_(sheet, headers, exactWidth) {
