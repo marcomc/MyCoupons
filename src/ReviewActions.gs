@@ -24,6 +24,7 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   const range = sheet.getRange(rowNumber, 1, 1, MC.headers.length);
   const row = range.getValues()[0];
   const displayRow = range.getDisplayValues()[0];
+  const formulas = range.getFormulas()[0];
   const key = String(row[16] || '');
   const state = key && findMessageStateByDedupeKey_(journalSheet, key);
   if (!state) return reviewFailure_(sheet, rowNumber, 'STATE');
@@ -47,7 +48,7 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   }
   const message = getReviewMessage_(state.messageId);
   if (action === EN.actions.retry_ai) return retryReviewCandidate_(sheet, rowNumber, state, candidate[0], message, journalSheet, c);
-  if (!validateReviewRow_(row, message, displayRow, candidate[0].imageEvidence)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
+  if (!validateReviewRow_(row, message, displayRow, candidate[0].imageEvidence, formulas, c)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   setReviewStatus_(sheet, rowNumber, EN.statuses.confirmed, '');
   candidate[0].status = 'confirmed';
   completeReviewMessage_(state, sheet, journalSheet, c);
@@ -59,8 +60,10 @@ function getReviewMessage_(messageId) {
   return canonicalGmailMessage_(raw);
 }
 
-function validateReviewRow_(row, message, displayRow, imageEvidence) {
+function validateReviewRow_(row, message, displayRow, imageEvidence, formulas, c) {
   if (!Array.isArray(row) || !message) return false;
+  formulas = Array.isArray(formulas) ? formulas : Array(MC.headers.length).fill('');
+  if (formulas.slice(0, 14).concat(formulas.slice(20, 21)).some(function (formula) { return !!formula; })) return false;
   const merchant = reviewSourceValue_(row[1]).trim();
   const code = reviewSourceValue_(row[3]).trim();
   const website = reviewSourceValue_(row[2]).trim();
@@ -68,7 +71,7 @@ function validateReviewRow_(row, message, displayRow, imageEvidence) {
   const discountValue = reviewSourceValue_(row[5]).trim();
   if (!reviewCandidateFieldsValid_(row)) return false;
   if (!merchant || !(code || website || discountType && discountValue)) return false;
-  const expiry = String((displayRow || row)[9] || '').trim();
+  const expiry = row[9] instanceof Date ? Utilities.formatDate(row[9], c.timeZone, 'yyyy-MM-dd') : String((displayRow || row)[9] || '').trim();
   if (expiry && !validDate_(expiry)) return false;
   if (!reviewSourceColumnsMatch_(row, message)) return false;
   const candidate = {merchant: merchant, website: website, code: code, discountType: discountType, discountValue: discountValue,
@@ -89,8 +92,10 @@ function validateReviewRow_(row, message, displayRow, imageEvidence) {
 }
 
 function reviewCandidateFieldsValid_(row) {
+  const columns = {merchant: 1, website: 2, code: 3, discountType: 4, discountValue: 5, minimumSpend: 6,
+    validOn: 7, exclusions: 8, expiry: 9, usageLimits: 10, currency: 20, notes: 16};
   return MC.fields.every(function (field) {
-    const index = MC.fields.indexOf(field) + 1;
+    const index = columns[field];
     const raw = reviewSourceValue_(row[index]);
     const limit = field === 'notes' ? 3500 : 1000;
     if (!wellFormedUtf16_(raw) || raw.length > limit) return false;
@@ -174,14 +179,14 @@ function completeReviewMessage_(state, sheet, journalSheet, c) {
     try { saveMessageState_(journalSheet, state); } catch (e) { restoreReviewRows_(state, sheet); throw e; }
     return;
   }
-  if (!state.candidateStates.every(function (item) { return String(sheet.getRange(item.rowNumber, 18).getDisplayValues()[0][0]) === EN.statuses.confirmed; })) return;
+  if (!refreshAndValidateReviewRows_(state, sheet, c)) return;
   try {
     if (!state.labelApplied) { modifyReviewMessage_(state.messageId, {addLabelIds: [c.labelId]}); state.labelApplied = true; }
     if (!state.archived) { modifyReviewMessage_(state.messageId, {removeLabelIds: ['INBOX']}); state.archived = true; }
     state.status = 'confirmed'; state.outcome = 'archive'; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
   } catch (e) {
     if (state.labelApplied || state.archived) {
-      state.status = 'confirmed'; state.outcome = 'archive'; state.updatedAt = new Date().toISOString();
+      state.status = 'failed'; state.outcome = 'review'; state.failureStage = 'mail'; state.lastError = errorCode_(e); state.updatedAt = new Date().toISOString();
       try { saveMessageState_(journalSheet, state); } catch (ignored) {}
       throw e;
     }
@@ -196,7 +201,7 @@ function completeReviewMessage_(state, sheet, journalSheet, c) {
 
 function reviewFieldImageEvidence_(evidence, field, value, images) {
   const item = evidence && evidence[field];
-  return item && item.value === value && typeof item.sourceId === 'string' && typeof item.digest === 'string' && images.some(function (image) {
+  return item && item.valueDigest === digest_(value) && typeof item.sourceId === 'string' && typeof item.digest === 'string' && images.some(function (image) {
     return inspectedImage_(image) && image.sourceId === item.sourceId && imageEvidenceDigest_(image) === item.digest;
   });
 }
@@ -207,7 +212,22 @@ function imageEvidenceDigest_(image) {
 
 function restoreReviewRows_(state, sheet) {
   state.candidateStates.forEach(function (item) {
-    if (item.status === 'confirmed') { item.status = 'review'; setReviewStatus_(sheet, item.rowNumber, EN.statuses.review, EN.actions.confirm); }
+    if (item.status !== 'review') { item.status = 'review'; setReviewStatus_(sheet, item.rowNumber, EN.statuses.review, EN.actions.confirm); }
+  });
+}
+
+function refreshAndValidateReviewRows_(state, sheet, c) {
+  const message = getReviewMessage_(state.messageId);
+  return state.candidateStates.every(function (item) {
+    const rowNumber = findCouponRowByDedupeKey_(sheet, item.key);
+    if (!rowNumber) return false;
+    item.rowNumber = rowNumber;
+    const index = state.candidateKeys.indexOf(item.key);
+    if (index < 0) return false;
+    state.rowNumbers[index] = rowNumber;
+    const range = sheet.getRange(rowNumber, 1, 1, MC.headers.length);
+    const row = range.getValues()[0];
+    return String(row[17]) === EN.statuses.confirmed && validateReviewRow_(row, message, range.getDisplayValues()[0], item.imageEvidence, range.getFormulas()[0], c);
   });
 }
 
