@@ -21,3 +21,16 @@ test('persisted label identity is accepted only on the resume path', () => {
   assert.throws(() => ctx.validateInstallerInput_(persisted, false), /CONFIG/);
   assert.throws(() => ctx.installMyCoupons(false), /CONFIG/);
 });
+
+test('installation status reports an unconfigured deployment without masking malformed state', () => {
+  const {ctx, properties, config} = harness();
+  delete properties.MYCOUPONS_CONFIG;
+  const status = ctx.getInstallationStatus();
+  assert.equal(status.configured, false);
+  assert.equal(status.spreadsheetId, '');
+  assert.equal(status.labelId, '');
+  assert.equal(status.triggerCount, 0);
+  assert.equal(status.ready, false);
+  properties.MYCOUPONS_CONFIG = JSON.stringify({...config, locale: 'it'});
+  assert.throws(() => ctx.getInstallationStatus(), /CONFIG/);
+});

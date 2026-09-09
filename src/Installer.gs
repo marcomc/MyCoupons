@@ -27,6 +27,9 @@ function installMyCoupons(input) {
 }
 
 function getInstallationStatus() {
+  if (!props_().getProperty(MC.configKey)) {
+    return {configured: false, spreadsheetId: '', labelId: '', triggerCount: 0, ready: false};
+  }
   const config = config_();
   const triggers = ownedImportTriggers_();
   return {configured: true, spreadsheetId: config.spreadsheetId || '', labelId: config.labelId || '',
