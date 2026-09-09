@@ -154,6 +154,22 @@ test('review validation rejects an empty offer even when its fields have no evid
   assert.equal(ctx.validateReviewRow_(Array(26).fill(''), {}), false);
 });
 
+test('review validation rejects a numeric discount range endpoint', () => {
+  const {ctx} = harness();
+  const row = Array(26).fill('');
+  row[1] = 'Merchant'; row[3] = 'CODE'; row[4] = '%'; row[5] = '30';
+  ctx.candidateSource_ = () => ({spans: ['Merchant CODE Save 20-30%']});
+  assert.equal(ctx.validateReviewRow_(row, {}), false);
+});
+
+test('review validation rejects an invalid expiry even when quoted', () => {
+  const {ctx} = harness();
+  const row = Array(26).fill('');
+  row[1] = 'Merchant'; row[3] = 'CODE'; row[9] = 'tomorrow';
+  ctx.candidateSource_ = () => ({spans: ['Merchant CODE tomorrow']});
+  assert.equal(ctx.validateReviewRow_(row, {}), false);
+});
+
 test('daily trigger ownership rejects duplicate active handler triggers', () => {
   const {ctx, properties} = harness();
   properties.MYCOUPONS_TRIGGER_ID = 'trigger-one';

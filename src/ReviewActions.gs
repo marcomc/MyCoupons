@@ -60,6 +60,8 @@ function validateReviewRow_(row, message) {
   const discountType = String(row[4] || '').trim();
   const discountValue = String(row[5] || '').trim();
   if (!merchant || !(code || website || discountType && discountValue)) return false;
+  const expiry = String(row[9] || '').trim();
+  if (expiry && !validDate_(expiry)) return false;
   const candidate = {merchant: row[1], website: row[2], code: row[3], discountType: row[4], discountValue: row[5],
     minimumSpend: row[6], validOn: row[7], exclusions: row[8], expiry: row[9], usageLimits: row[10], currency: row[20]};
   const source = candidateSource_(message);
@@ -74,9 +76,15 @@ function validateReviewRow_(row, message) {
 }
 
 function discountPairInSpan_(type, value, span) {
-  const escapedType = String(type).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const escapedValue = String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp('(?:' + escapedValue + '\\s*' + escapedType + '|' + escapedType + '\\s*' + escapedValue + ')', 'iu').test(span);
+  const values = fieldOccurrences_('discountValue', String(value), span);
+  const types = fieldOccurrences_('discountType', String(type), span);
+  return values.some(function (numeric) {
+    return types.some(function (unit) {
+      const between = numeric.end <= unit.start ? span.slice(numeric.end, unit.start) :
+        unit.end <= numeric.start ? span.slice(unit.end, numeric.start) : null;
+      return between !== null && /^\s*$/u.test(between);
+    });
+  });
 }
 
 function setReviewStatus_(sheet, rowNumber, status, action) {
