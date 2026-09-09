@@ -21,8 +21,10 @@ function installDailyImportTrigger() {
 
 function removeDailyImportTrigger() {
   return withLock_(function () {
-    const c = config_();
-    assertOwner_(c);
+    const raw = props_().getProperty(MC.configKey);
+    if (raw) assertOwner_(config_());
+    else if (String(Gmail.Users.getProfile('me').emailAddress).toLowerCase() !==
+      String(Session.getEffectiveUser().getEmail()).toLowerCase()) fail_('OWNER');
     const triggers = ownedImportTriggers_();
     if (triggers.length > 1) fail_('RESOURCE');
     if (!triggers.length) { props_().deleteProperty(MC_TRIGGER_ID_KEY); return {removed: false}; }
@@ -50,6 +52,7 @@ function runScheduledImport() {
   const deadlineMs = Date.now() + MC.maxRuntimeMs - 15000;
   try {
     const state = ensureSheetState_(null, deadlineMs);
+    assertPrivateSpreadsheet_(state.spreadsheet, state.config);
     state._deadlineMs = deadlineMs;
     summary = withLock_(function () {
       const before = readMessageJournal_(state.journalSheet);

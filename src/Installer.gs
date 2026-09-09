@@ -110,8 +110,10 @@ function removeReviewEditTriggers_() {
 
 function removeMyCouponsAutomation() {
   return withLock_(function () {
-    const c = config_();
-    assertOwner_(c);
+    const raw = props_().getProperty(MC.configKey);
+    if (raw) assertOwner_(config_());
+    else if (String(Gmail.Users.getProfile('me').emailAddress).toLowerCase() !==
+      String(Session.getEffectiveUser().getEmail()).toLowerCase()) fail_('OWNER');
     const scheduled = removeDailyImportTrigger();
     const review = removeReviewEditTriggers_();
     return {scheduledRemoved: !!scheduled.removed, reviewRemoved: review.removed};
