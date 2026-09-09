@@ -277,7 +277,7 @@ function candidateStates_(value, keys, rows) {
 function imageEvidence_(value) {
   return value && typeof value === 'object' && !Array.isArray(value) &&
     Object.keys(value).every(function (field) { return MC.fields.indexOf(field) >= 0 && value[field] &&
-      typeof value[field].sourceId === 'string' && value[field].sourceId && typeof value[field].valueDigest === 'string' && /^[a-f0-9]{64}$/.test(value[field].valueDigest) &&
+      recordWithExactKeys_(value[field], ['sourceId', 'valueDigest', 'digest']) && typeof value[field].sourceId === 'string' && value[field].sourceId && typeof value[field].valueDigest === 'string' && /^[a-f0-9]{64}$/.test(value[field].valueDigest) &&
       typeof value[field].digest === 'string' && /^[a-f0-9]{64}$/.test(value[field].digest); });
 }
 

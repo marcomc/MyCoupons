@@ -130,10 +130,17 @@ function discountPairInSpan_(type, value, span) {
 }
 
 function setReviewStatus_(sheet, rowNumber, status, action) {
-  sheet.getRange(rowNumber, 18).setValues([[status]]);
-  sheet.getRange(rowNumber, 25).setValues([[action]]);
-  const stored = sheet.getRange(rowNumber, 18, 1, 8).getValues()[0];
-  if (String(stored[0]) !== status || String(stored[7]) !== action) fail_('WRITE');
+  const statusRange = sheet.getRange(rowNumber, 18);
+  const actionRange = sheet.getRange(rowNumber, 25);
+  try {
+    actionRange.setValues([[action]]);
+    statusRange.setValues([[status]]);
+    const stored = sheet.getRange(rowNumber, 18, 1, 8).getValues()[0];
+    if (String(stored[0]) !== status || String(stored[7]) !== action) fail_('WRITE');
+  } catch (e) {
+    try { statusRange.setValues([[EN.statuses.review]]); actionRange.setValues([[EN.actions.confirm]]); } catch (ignored) {}
+    throw e;
+  }
 }
 
 function reviewFailure_(sheet, rowNumber, code) {
@@ -165,13 +172,11 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
 }
 
 function retryCandidateMatchesRow_(candidate, row) {
-  const code = String(row[3] || '');
-  const website = String(row[2] || '');
-  const discountType = String(row[4] || '');
-  const discountValue = String(row[5] || '');
-  return !!candidate.merchant && (code ? candidate.code === code :
-    website ? candidate.website === website : !!discountType && !!discountValue &&
-      candidate.discountType === discountType && candidate.discountValue === discountValue);
+  return !!candidate.merchant && [['merchant', 1], ['website', 2], ['code', 3],
+    ['discountType', 4], ['discountValue', 5]].every(function (identity) {
+    const value = String(row[identity[1]] || '');
+    return !value || String(candidate[identity[0]] || '') === value;
+  });
 }
 
 function completeReviewMessage_(state, sheet, journalSheet, c) {

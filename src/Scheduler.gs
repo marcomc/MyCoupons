@@ -33,7 +33,10 @@ function removeDailyImportTrigger() {
     if (raw) assertOwner_(config_());
     else if (String(Gmail.Users.getProfile('me').emailAddress).toLowerCase() !==
       String(Session.getEffectiveUser().getEmail()).toLowerCase()) fail_('OWNER');
-    const triggers = ownedImportTriggers_();
+    const triggers = raw ? ownedImportTriggers_() : ScriptApp.getProjectTriggers().filter(function (trigger) {
+      return trigger && trigger.getHandlerFunction() === MC_SCHEDULED_HANDLER &&
+        trigger.getEventType() === ScriptApp.EventType.CLOCK;
+    });
     if (triggers.length > 1) fail_('RESOURCE');
     if (!triggers.length) { props_().deleteProperty(MC_TRIGGER_ID_KEY); return {removed: false}; }
     ScriptApp.deleteTrigger(triggers[0]);

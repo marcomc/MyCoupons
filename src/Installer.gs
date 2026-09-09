@@ -24,7 +24,7 @@ function installMyCoupons(input) {
     if (previous) {
       try { previousConfig = validateConfig_(JSON.parse(previous)); } catch (e) { fail_('CONFIG'); }
     }
-    if (config.spreadsheetId && (!previousConfig || config.spreadsheetId !== previousConfig.spreadsheetId)) {
+    if (config.spreadsheetId) {
       assertPrivateSpreadsheet_(openSpreadsheetById_(config.spreadsheetId), config);
     } else if (!config.spreadsheetId) {
       const matches = findSpreadsheetsByName_(config.spreadsheetName);
