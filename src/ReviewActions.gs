@@ -167,7 +167,11 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
 function retryCandidateMatchesRow_(candidate, row) {
   const code = String(row[3] || '');
   const website = String(row[2] || '');
-  return !!candidate.merchant && (code ? candidate.code === code : !!website && candidate.website === website);
+  const discountType = String(row[4] || '');
+  const discountValue = String(row[5] || '');
+  return !!candidate.merchant && (code ? candidate.code === code :
+    website ? candidate.website === website : !!discountType && !!discountValue &&
+      candidate.discountType === discountType && candidate.discountValue === discountValue);
 }
 
 function completeReviewMessage_(state, sheet, journalSheet, c) {
@@ -227,14 +231,18 @@ function restoreReviewRows_(state, sheet) {
 
 function refreshAndValidateReviewRows_(state, sheet, c) {
   const message = getReviewMessage_(state.messageId);
-  return state.candidateStates.every(function (item) {
+  const complete = state.candidateStates.every(function (item) {
     const rowNumber = findCouponRowByDedupeKey_(sheet, item.key);
     if (!rowNumber) return false;
     item.rowNumber = rowNumber;
     const index = state.candidateKeys.indexOf(item.key);
     if (index < 0) return false;
     state.rowNumbers[index] = rowNumber;
-    const range = sheet.getRange(rowNumber, 1, 1, MC.headers.length);
+    return true;
+  });
+  if (!complete) return false;
+  return state.candidateStates.every(function (item) {
+    const range = sheet.getRange(item.rowNumber, 1, 1, MC.headers.length);
     const row = range.getValues()[0];
     return String(row[17]) === EN.statuses.confirmed && validateReviewRow_(row, message, range.getDisplayValues()[0], item.imageEvidence, range.getFormulas()[0], c);
   });
