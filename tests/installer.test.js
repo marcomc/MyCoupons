@@ -6,9 +6,9 @@ function bootstrapPayload(config, geminiApiKey = 'AIza12345678901234567890') {
   return JSON.stringify({version: 1, config, geminiApiKey});
 }
 
-function bootstrapSecret(payload) {
+function bootstrapSecret(payload, name = 'projects/vertex-project/secrets/mycoupons-bootstrap/versions/7') {
   return {getResponseCode: () => 200, getContentText: () => JSON.stringify({
-    payload: {data: Buffer.from(payload).toString('base64')}
+    name, payload: {data: Buffer.from(payload).toString('base64')}
   })};
 }
 
@@ -70,6 +70,44 @@ test('bootstrap rejects malformed and foreign resources or payloads without inst
   ctx.UrlFetchApp.fetch = () => bootstrapSecret(bootstrapPayload({...config, vertexProject: 'foreign-project'}));
   assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
   assert.equal(installed, 0);
+});
+
+test('bootstrap rejects a missing or mismatched Secret Manager response identity before mutation', () => {
+  const {ctx, properties, config} = harness();
+  delete properties.MYCOUPONS_CONFIG;
+  const payload = bootstrapPayload({...config, vertexProject: 'vertex-project'});
+  let installed = 0;
+  ctx.beginMyCouponsInstallation = () => { installed += 1; };
+  ctx.UrlFetchApp = {fetch: () => bootstrapSecret(payload, 'projects/vertex-project/secrets/mycoupons-bootstrap/versions/8')};
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
+  assert.equal(properties.GEMINI_API_KEY, undefined);
+  assert.equal(installed, 0);
+  ctx.UrlFetchApp.fetch = () => ({getResponseCode: () => 200, getContentText: () => JSON.stringify({
+    payload: {data: Buffer.from(payload).toString('base64')}
+  })});
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
+  assert.equal(properties.GEMINI_API_KEY, undefined);
+  assert.equal(installed, 0);
+});
+
+test('bootstrap rejects duplicate top-level and configuration keys before mutation', () => {
+  const {ctx, properties, config} = harness();
+  delete properties.MYCOUPONS_CONFIG;
+  const proposed = {...config, vertexProject: 'vertex-project'};
+  const key = 'AIza12345678901234567890';
+  const duplicateTopLevel = '{"version":1,"config":' + JSON.stringify(proposed) +
+    ',"geminiApiKey":"' + key + '","geminiApiKey":"' + key + '"}';
+  const duplicateConfig = '{"version":1,"config":' + JSON.stringify(proposed).replace(
+    '"ownerEmail":"owner@example.com"', '"ownerEmail":"owner@example.com","ownerEmail":"owner@example.com"') +
+    ',"geminiApiKey":"' + key + '"}';
+  let installed = 0;
+  ctx.beginMyCouponsInstallation = () => { installed += 1; };
+  ctx.UrlFetchApp = {fetch: () => bootstrapSecret(duplicateTopLevel)};
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /CONFIG/);
+  ctx.UrlFetchApp.fetch = () => bootstrapSecret(duplicateConfig);
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /CONFIG/);
+  assert.equal(installed, 0);
+  assert.equal(properties.GEMINI_API_KEY, undefined);
 });
 
 test('bootstrap fails closed on an unauthorized caller or Secret Manager HTTP error', () => {

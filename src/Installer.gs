@@ -114,7 +114,9 @@ function bootstrapPersistedConfig_() {
 
 function validateBootstrapSecretVersion_(value, expectedProject) {
   if (typeof value !== 'string') fail_('RESOURCE');
-  const match = /^projects\/([a-z][a-z0-9-]{4,28}[a-z0-9])\/secrets\/mycoupons-bootstrap\/versions\/([1-9][0-9]*)$/.exec(value);
+  const pattern = new RegExp('^projects/([a-z][a-z0-9-]{4,28}[a-z0-9])/secrets/' +
+    MC_BOOTSTRAP.secretName + '/versions/([1-9][0-9]*)$');
+  const match = pattern.exec(value);
   if (!match || expectedProject && match[1] !== expectedProject) fail_('RESOURCE');
   return {name: value, project: match[1]};
 }
@@ -129,14 +131,17 @@ function readBootstrapSecret_(resource) {
   if (!response || response.getResponseCode() < 200 || response.getResponseCode() >= 300) fail_('RESOURCE');
   let body;
   try { body = JSON.parse(response.getContentText()); } catch (e) { fail_('RESOURCE'); }
-  const data = body && body.payload && body.payload.data;
+  if (!body || typeof body !== 'object' || Array.isArray(body) || body.name !== resource.name ||
+    !body.payload || typeof body.payload !== 'object' || Array.isArray(body.payload)) fail_('RESOURCE');
+  const data = body.payload.data;
   if (typeof data !== 'string' || data.length > MC_BOOTSTRAP.maxSecretDataChars ||
     !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) fail_('RESOURCE');
   try { return Utilities.newBlob(Utilities.base64Decode(data)).getDataAsString(); } catch (e) { fail_('RESOURCE'); }
 }
 
 function validateBootstrapPayload_(raw) {
-  if (typeof raw !== 'string' || raw.length > MC_BOOTSTRAP.maxPayloadUnits) fail_('CONFIG');
+  if (typeof raw !== 'string' || raw.length > MC_BOOTSTRAP.maxPayloadUnits ||
+    bootstrapHasDuplicateJsonKeys_(raw)) fail_('CONFIG');
   let payload;
   try { payload = JSON.parse(raw); } catch (e) { fail_('CONFIG'); }
   if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
@@ -148,6 +153,35 @@ function validateBootstrapPayload_(raw) {
   const config = validateInstallerInput_(payload.config, false);
   if (!config.vertexProject) fail_('CONFIG');
   return {config: config, geminiApiKey: payload.geminiApiKey};
+}
+
+function bootstrapHasDuplicateJsonKeys_(json) {
+  const objects = [];
+  function endString(index) {
+    while (index < json.length) {
+      if (json[index] === '\\') index += 2;
+      else if (json[index++] === '"') return index;
+    }
+    return index;
+  }
+  for (let index = 0; index < json.length; index++) {
+    if (json[index] === '"') {
+      const start = index;
+      index = endString(index + 1) - 1;
+      if (/^\s*:/.test(json.slice(index + 1))) {
+        let key;
+        try { key = JSON.parse(json.slice(start, index + 1)); } catch (e) { return true; }
+        const object = objects[objects.length - 1];
+        if (object && object.has(key)) return true;
+        if (object) object.add(key);
+      }
+    } else if (json[index] === '{') {
+      objects.push(new Set());
+    } else if (json[index] === '}') {
+      objects.pop();
+    }
+  }
+  return false;
 }
 
 function bootstrapInstallationResult_(result) {
