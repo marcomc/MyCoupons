@@ -74,7 +74,7 @@ function runScheduledImport() {
   } catch (e) {
     summary = {imported: 0, importedIds: [], review: 0, errors: [{messageId: '', code: errorCode_(e)}], links: [], omittedLinks: false};
   }
-  try { withLock_(function () { notifyScheduledImport_(summary); }); } catch (e) {
+  try { withLock_(function () { notifyScheduledImport_(summary); }, deadlineMs); } catch (e) {
     if (e && e.code === 'BUSY') persistPendingNotification_(summary);
   }
   return summary;

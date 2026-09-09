@@ -27,7 +27,7 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   const key = String(row[16] || '');
   const state = key && findMessageStateByDedupeKey_(journalSheet, key);
   if (!state) return reviewFailure_(sheet, rowNumber, 'STATE');
-  if (!candidateStates_(state.candidateStates)) {
+  if (!candidateStates_(state.candidateStates, state.candidateKeys, state.rowNumbers)) {
     state.candidateStates = state.candidateKeys.map(function (candidateKey, index) {
       return {key: candidateKey, rowNumber: state.rowNumbers[index], status: 'review'};
     });
@@ -66,6 +66,7 @@ function validateReviewRow_(row, message, displayRow, imageEvidence) {
   const website = String(row[2] || '').trim();
   const discountType = String(row[4] || '').trim();
   const discountValue = String(row[5] || '').trim();
+  if (!reviewCandidateFieldsValid_(row)) return false;
   if (!merchant || !(code || website || discountType && discountValue)) return false;
   const expiry = String((displayRow || row)[9] || '').trim();
   if (expiry && !validDate_(expiry)) return false;
@@ -75,14 +76,27 @@ function validateReviewRow_(row, message, displayRow, imageEvidence) {
   const source = candidateSource_(message);
   const spans = source.spans.concat([message.subject, message.sender].filter(function (value) { return typeof value === 'string' && value; }));
   if (discountType || discountValue) {
-    const pairedImage = imageEvidence && imageEvidence.discountType === imageEvidence.discountValue &&
-      inspectedImageBySourceId_(source.images, imageEvidence.discountType);
+    const pairedImage = reviewFieldImageEvidence_(imageEvidence, 'discountType', discountType, source.images) &&
+      reviewFieldImageEvidence_(imageEvidence, 'discountValue', discountValue, source.images) &&
+      imageEvidence.discountType.sourceId === imageEvidence.discountValue.sourceId;
     if (!discountType || !discountValue || !pairedImage && !spans.some(function (span) { return discountPairInSpan_(discountType, discountValue, span); })) return false;
   }
   return MC.fields.filter(function (field) { return field !== 'discountType' && field !== 'discountValue'; }).every(function (field) {
     const value = String(candidate[field] || '').trim();
-    return !value || imageEvidence && inspectedImageBySourceId_(source.images, imageEvidence[field]) ||
+    return !value || reviewFieldImageEvidence_(imageEvidence, field, value, source.images) ||
       spans.some(function (span) { return fieldInQuote_(field, value, span); });
+  });
+}
+
+function reviewCandidateFieldsValid_(row) {
+  return MC.fields.every(function (field) {
+    const index = MC.fields.indexOf(field) + 1;
+    const raw = String(row[index] == null ? '' : row[index]);
+    const limit = field === 'notes' ? 3500 : 1000;
+    if (!wellFormedUtf16_(raw) || raw.length > limit) return false;
+    if (field === 'code' && raw !== raw.trim()) return false;
+    if (field === 'website' && raw && safeUrl_(raw) !== raw) return false;
+    return true;
   });
 }
 
@@ -175,9 +189,10 @@ function completeReviewMessage_(state, sheet, journalSheet, c) {
   }
 }
 
-function inspectedImageBySourceId_(images, sourceId) {
-  return typeof sourceId === 'string' && images.some(function (image) {
-    return inspectedImage_(image) && image.sourceId === sourceId;
+function reviewFieldImageEvidence_(evidence, field, value, images) {
+  const item = evidence && evidence[field];
+  return item && item.value === value && typeof item.sourceId === 'string' && images.some(function (image) {
+    return inspectedImage_(image) && image.sourceId === item.sourceId;
   });
 }
 
