@@ -11,5 +11,13 @@ test('installer input accepts only validated product configuration', () => {
 
 test('installer input rejects oversized bounded settings', () => {
   const {ctx, config} = harness();
-  assert.throws(() => ctx.validateInstallerInput_({...config, spreadsheetName: 'x'.repeat(201)}), /CONFIG/);
+  assert.throws(() => ctx.validateInstallerInput_({...config, model: 'gemini-' + 'x'.repeat(8000)}), /CONFIG/);
+});
+
+test('persisted label identity is accepted only on the resume path', () => {
+  const {ctx, config} = harness();
+  const persisted = {...config, labelId: 'Label_123'};
+  assert.equal(ctx.validateInstallerInput_(persisted, true).labelId, 'Label_123');
+  assert.throws(() => ctx.validateInstallerInput_(persisted, false), /CONFIG/);
+  assert.throws(() => ctx.installMyCoupons(false), /CONFIG/);
 });

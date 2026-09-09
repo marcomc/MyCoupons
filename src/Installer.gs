@@ -1,20 +1,22 @@
 const MC_INSTALLER_VERSION = 1;
-const MC_INSTALLER_LIMITS = Object.freeze({maxConfigBytes: 12000});
+const MC_INSTALLER_LIMITS = Object.freeze({maxConfigUnits: 8000});
 
-function validateInstallerInput_(input) {
+function validateInstallerInput_(input, allowPersistedIdentity) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail_('CONFIG');
   const keys = Object.keys(input);
   if (keys.some(function (key) { return ['ownerEmail', 'spreadsheetId', 'spreadsheetName', 'sheetName', 'labelName',
     'locale', 'timeZone', 'initialDate', 'developerProject', 'vertexProject', 'vertexLocation', 'model',
-    'autoVertexFallback', 'fetchRemoteImages'].indexOf(key) < 0; })) fail_('CONFIG');
+    'autoVertexFallback', 'fetchRemoteImages'].concat(allowPersistedIdentity ? ['labelId'] : []).indexOf(key) < 0; })) fail_('CONFIG');
   const config = validateConfig_(input);
-  if (JSON.stringify(config).length > MC_INSTALLER_LIMITS.maxConfigBytes) fail_('CONFIG');
+  if (JSON.stringify(config).length > MC_INSTALLER_LIMITS.maxConfigUnits) fail_('CONFIG');
   return config;
 }
 
 function installMyCoupons(input) {
+  const hasInput = arguments.length > 0;
   return withLock_(function () {
-    const config = validateInstallerInput_(input || config_());
+    const config = hasInput ? validateInstallerInput_(input, false) :
+      validateInstallerInput_(config_(), true);
     assertOwner_(config);
     const state = ensureSheetState_(config);
     const trigger = installDailyImportTrigger();
