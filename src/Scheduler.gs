@@ -158,23 +158,30 @@ function notifyScheduledImport_(summary) {
   if (!summary || !Number.isSafeInteger(summary.imported) || summary.imported < 0 || typeof summary.omittedLinks !== 'boolean' || !Array.isArray(summary.importedIds) ||
       !summary.importedIds.every(validGmailApiId_) || !Number.isSafeInteger(summary.review) || summary.review < 0 ||
       !Array.isArray(summary.errors) || !summary.errors.every(validNotificationError_) || !Array.isArray(summary.links)) fail_('STATE');
-  const pending = pendingNotification_();
+  let pending = pendingNotification_();
+  const storedFingerprint = pending && pending.fingerprint;
+  if (pending && storedFingerprint && notificationState_() && storedFingerprint === notificationState_().fingerprint) {
+    props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY);
+    pending = null;
+  }
   if (pending) summary = mergeNotificationSummaries_(pending, summary);
   const meaningful = summary.imported > 0 || summary.review > 0 || summary.errors.length > 0;
   if (!meaningful) { props_().deleteProperty(MC_NOTIFICATION_STATE_KEY); props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY); return {sent: false}; }
   const links = summary.links.filter(validNotificationLink_);
   if (links.length !== summary.links.length) fail_('STATE');
-  const boundedLinks = links.filter(function (link, index) {
-    const candidate = links.slice(0, index + 1);
-    return JSON.stringify({imported: summary.imported, importedIds: summary.importedIds, review: summary.review, errors: summary.errors, links: candidate}).length <= 8000;
-  });
+  const boundedLinks = [];
+  for (let index = 0; index < links.length; index++) {
+    const candidate = boundedLinks.concat([links[index]]);
+    if (JSON.stringify({imported: summary.imported, importedIds: summary.importedIds, review: summary.review, errors: summary.errors, links: candidate}).length > 8000) break;
+    boundedLinks.push(links[index]);
+  }
   const omittedLinks = summary.omittedLinks || boundedLinks.length !== links.length;
   const payload = {imported: summary.imported, importedIds: summary.importedIds.sort(), review: summary.review,
     errors: summary.errors.map(function (error) { return {messageId: String(error.messageId || ''), code: String(error.code)}; }).sort(function (a, b) { return (a.messageId + a.code).localeCompare(b.messageId + b.code); }), links: boundedLinks.sort()};
   const fingerprint = digest_(JSON.stringify(payload));
   const previous = notificationState_();
   if (previous && previous.fingerprint === fingerprint) { props_().deleteProperty(MC_PENDING_NOTIFICATION_KEY); return {sent: false}; }
-  const pendingSummary = {imported: summary.imported, importedIds: summary.importedIds, review: summary.review, errors: summary.errors, links: boundedLinks, omittedLinks: omittedLinks};
+  const pendingSummary = {imported: summary.imported, importedIds: summary.importedIds, review: summary.review, errors: summary.errors, links: boundedLinks, omittedLinks: omittedLinks, fingerprint: fingerprint};
   const pendingJson = JSON.stringify(pendingSummary);
   if (pendingJson.length > 8000) fail_('LIMIT');
   props_().setProperty(MC_PENDING_NOTIFICATION_KEY, pendingJson);
