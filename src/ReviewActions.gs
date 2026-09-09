@@ -61,18 +61,18 @@ function getReviewMessage_(messageId) {
 
 function validateReviewRow_(row, message, displayRow, imageEvidence) {
   if (!Array.isArray(row) || !message) return false;
-  const merchant = String(row[1] || '').trim();
-  const code = String(row[3] || '').trim();
-  const website = String(row[2] || '').trim();
-  const discountType = String(row[4] || '').trim();
-  const discountValue = String(row[5] || '').trim();
+  const merchant = reviewSourceValue_(row[1]).trim();
+  const code = reviewSourceValue_(row[3]).trim();
+  const website = reviewSourceValue_(row[2]).trim();
+  const discountType = reviewSourceValue_(row[4]).trim();
+  const discountValue = reviewSourceValue_(row[5]).trim();
   if (!reviewCandidateFieldsValid_(row)) return false;
   if (!merchant || !(code || website || discountType && discountValue)) return false;
   const expiry = String((displayRow || row)[9] || '').trim();
   if (expiry && !validDate_(expiry)) return false;
   if (!reviewSourceColumnsMatch_(row, message)) return false;
-  const candidate = {merchant: row[1], website: row[2], code: row[3], discountType: row[4], discountValue: row[5],
-    minimumSpend: row[6], validOn: row[7], exclusions: row[8], expiry: expiry, usageLimits: row[10], currency: row[20]};
+  const candidate = {merchant: merchant, website: website, code: code, discountType: discountType, discountValue: discountValue,
+    minimumSpend: reviewSourceValue_(row[6]), validOn: reviewSourceValue_(row[7]), exclusions: reviewSourceValue_(row[8]), expiry: expiry, usageLimits: reviewSourceValue_(row[10]), currency: reviewSourceValue_(row[20])};
   const source = candidateSource_(message);
   const spans = source.spans.concat([message.subject, message.sender].filter(function (value) { return typeof value === 'string' && value; }));
   if (discountType || discountValue) {
@@ -91,13 +91,18 @@ function validateReviewRow_(row, message, displayRow, imageEvidence) {
 function reviewCandidateFieldsValid_(row) {
   return MC.fields.every(function (field) {
     const index = MC.fields.indexOf(field) + 1;
-    const raw = String(row[index] == null ? '' : row[index]);
+    const raw = reviewSourceValue_(row[index]);
     const limit = field === 'notes' ? 3500 : 1000;
     if (!wellFormedUtf16_(raw) || raw.length > limit) return false;
     if (field === 'code' && raw !== raw.trim()) return false;
     if (field === 'website' && raw && safeUrl_(raw) !== raw) return false;
     return true;
   });
+}
+
+function reviewSourceValue_(value) {
+  const raw = String(value == null ? '' : value);
+  return /^'[=+@-]/.test(raw) ? raw.slice(1) : raw;
 }
 
 function reviewSourceColumnsMatch_(row, message) {
@@ -191,9 +196,13 @@ function completeReviewMessage_(state, sheet, journalSheet, c) {
 
 function reviewFieldImageEvidence_(evidence, field, value, images) {
   const item = evidence && evidence[field];
-  return item && item.value === value && typeof item.sourceId === 'string' && images.some(function (image) {
-    return inspectedImage_(image) && image.sourceId === item.sourceId;
+  return item && item.value === value && typeof item.sourceId === 'string' && typeof item.digest === 'string' && images.some(function (image) {
+    return inspectedImage_(image) && image.sourceId === item.sourceId && imageEvidenceDigest_(image) === item.digest;
   });
+}
+
+function imageEvidenceDigest_(image) {
+  return image && Array.isArray(image.bytes) ? digest_(Utilities.base64EncodeWebSafe(image.bytes)) : '';
 }
 
 function restoreReviewRows_(state, sheet) {
