@@ -256,8 +256,14 @@ function candidateStates_(value) {
     return item && typeof item === 'object' && !Array.isArray(item) &&
       typeof item.key === 'string' && !!item.key &&
       typeof item.rowNumber === 'number' && Number.isInteger(item.rowNumber) && item.rowNumber > 1 &&
-      ['review', 'confirmed', 'ignored'].indexOf(item.status) >= 0;
+      ['review', 'confirmed', 'ignored'].indexOf(item.status) >= 0 &&
+      (item.imageEvidence === undefined || imageEvidence_(item.imageEvidence));
   });
+}
+
+function imageEvidence_(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).every(function (field) { return MC.fields.indexOf(field) >= 0 && Number.isInteger(value[field]) && value[field] >= 0; });
 }
 
 function recordWithExactKeys_(value, keys) {

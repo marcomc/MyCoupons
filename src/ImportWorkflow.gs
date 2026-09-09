@@ -61,7 +61,7 @@ function processCouponMessage_(state, message) {
       statuses.push(status);
       rows.push(rowNumber);
       if (!journal.candidateStates.some(function (item) { return item.key === key; })) {
-        journal.candidateStates.push({key: key, rowNumber: rowNumber, status: candidate.review ? 'review' : 'confirmed'});
+        journal.candidateStates.push({key: key, rowNumber: rowNumber, status: candidate.review ? 'review' : 'confirmed', imageEvidence: candidate.imageEvidence || {}});
       }
     });
     journal.outcome = messageOutcome_(statuses);

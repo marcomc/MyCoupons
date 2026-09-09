@@ -47,7 +47,7 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   }
   const message = getReviewMessage_(state.messageId);
   if (action === EN.actions.retry_ai) return retryReviewCandidate_(sheet, rowNumber, state, candidate[0], message, journalSheet, c);
-  if (!validateReviewRow_(row, message, displayRow)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
+  if (!validateReviewRow_(row, message, displayRow, candidate[0].imageEvidence)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   setReviewStatus_(sheet, rowNumber, EN.statuses.confirmed, '');
   candidate[0].status = 'confirmed';
   completeReviewMessage_(state, sheet, journalSheet, c);
@@ -59,7 +59,7 @@ function getReviewMessage_(messageId) {
   return canonicalGmailMessage_(raw);
 }
 
-function validateReviewRow_(row, message, displayRow) {
+function validateReviewRow_(row, message, displayRow, imageEvidence) {
   if (!Array.isArray(row) || !message) return false;
   const merchant = String(row[1] || '').trim();
   const code = String(row[3] || '').trim();
@@ -75,11 +75,14 @@ function validateReviewRow_(row, message, displayRow) {
   const source = candidateSource_(message);
   const spans = source.spans.concat([message.subject, message.sender].filter(function (value) { return typeof value === 'string' && value; }));
   if (discountType || discountValue) {
-    if (!discountType || !discountValue || !spans.some(function (span) { return discountPairInSpan_(discountType, discountValue, span); })) return false;
+    const pairedImage = imageEvidence && imageEvidence.discountType === imageEvidence.discountValue &&
+      inspectedImageAt_(source.images, imageEvidence.discountType);
+    if (!discountType || !discountValue || !pairedImage && !spans.some(function (span) { return discountPairInSpan_(discountType, discountValue, span); })) return false;
   }
   return MC.fields.filter(function (field) { return field !== 'discountType' && field !== 'discountValue'; }).every(function (field) {
     const value = String(candidate[field] || '').trim();
-    return !value || spans.some(function (span) { return fieldInQuote_(field, value, span); });
+    return !value || imageEvidence && inspectedImageAt_(source.images, imageEvidence[field]) ||
+      spans.some(function (span) { return fieldInQuote_(field, value, span); });
   });
 }
 
@@ -128,6 +131,7 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
     merged[column] = updated[column];
   });
   sheet.getRange(rowNumber, 1, 1, merged.length).setValues([merged]);
+  candidate.imageEvidence = enriched[0].imageEvidence || {};
   candidate.status = enriched[0].review ? 'review' : 'confirmed';
   completeReviewMessage_(state, sheet, journalSheet, c);
 }
