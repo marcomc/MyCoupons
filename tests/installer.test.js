@@ -140,12 +140,14 @@ test('fresh explicit spreadsheet IDs are privacy-checked before resource setup',
 test('review validation ignores the internal dedupe key column', () => {
   const {ctx} = harness();
   const row = Array(26).fill('');
+  row[0] = new Date('2026-01-01T00:00:00Z');
   row[1] = 'Merchant';
   row[3] = 'CODE';
+  row[11] = 'Subject'; row[12] = 'Sender'; row[13] = 'https://mail.google.com/mail/u/0/#all/abc';
   row[16] = 'sha256-dedupe-key';
   ctx.candidateSource_ = () => ({spans: [{text: 'Merchant CODE'}]});
   ctx.fieldInQuote_ = () => true;
-  assert.equal(ctx.validateReviewRow_(row, {}), true);
+  assert.equal(ctx.validateReviewRow_(row, {receivedAtMs: Date.parse('2026-01-01T00:00:00Z'), subject: 'Subject', sender: 'Sender', link: row[13]}), true);
 });
 
 test('review validation rejects an empty offer even when its fields have no evidence', () => {
