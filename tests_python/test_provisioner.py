@@ -256,6 +256,20 @@ class ProvisionerStateTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "symlink"):
                 core.initialize_state(link, config)
 
+    def test_lock_rejects_a_special_file_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / "state"
+            state_dir.mkdir(mode=0o700)
+            lock_path = state_dir / "install.lock"
+            os.mkfifo(lock_path, 0o600)
+            reader = os.open(lock_path, os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                with self.assertRaisesRegex(core.ProvisionerError, "regular mode-0600"):
+                    with core.InstallationLock(state_dir):
+                        pass
+            finally:
+                os.close(reader)
+
 
 class ProvisionerBundleTests(unittest.TestCase):
     def test_bundle_digest_is_deterministic_and_manifest_contract_is_checked(self) -> None:
@@ -292,6 +306,8 @@ class ProvisionerBundleTests(unittest.TestCase):
             (copied / "Injected.html").write_text("<p>changed</p>\n", encoding="utf-8")
             html_digest = core.validate_bundle(copied)
             self.assertNotEqual(gs_digest, html_digest)
+            with self.assertRaisesRegex(core.ProvisionerError, "path is not valid Unicode"):
+                core._bundle_digest({"invalid-\udcff.gs": b"const invalid = true;\n"})
             original_loads = core.json.loads
 
             def replace_manifest_after_capture(payload: str, **kwargs: object) -> object:
@@ -306,7 +322,7 @@ class ProvisionerBundleTests(unittest.TestCase):
                 core.validate_bundle(copied)
             manifest["executionApi"] = {"access": "MYSELF"}
             (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
-            (copied / "Installer.gs").unlink()
+            (copied / "Installer.gs").write_text('// function bootstrapFromSecret(\n"function bootstrapFromSecret("\n', encoding="utf-8")
             with self.assertRaisesRegex(core.ProvisionerError, "bootstrapFromSecret"):
                 core.validate_bundle(copied)
 

@@ -367,9 +367,17 @@ class InstallationLock:
         lock_path = self.state_dir / LOCK_FILE
         _assert_not_symlink(lock_path)
         try:
-            self.descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            self.descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+            lock_stat = os.fstat(self.descriptor)
+            if not stat.S_ISREG(lock_stat.st_mode) or not _is_private_mode(lock_stat.st_mode, 0o600):
+                raise ProvisionerError("installation lock must be a regular mode-0600 file")
             os.fchmod(self.descriptor, 0o600)
             fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except ProvisionerError:
+            if self.descriptor is not None:
+                os.close(self.descriptor)
+                self.descriptor = None
+            raise
         except (OSError, BlockingIOError) as exc:
             if self.descriptor is not None:
                 os.close(self.descriptor)
@@ -473,6 +481,73 @@ def _iter_bundle_files(source_dir: Path) -> Iterable[Path]:
     yield from sorted(bundle_files)
 
 
+def _has_bootstrap_entry_point(content: bytes) -> bool:
+    """Recognize the required top-level declaration without accepting comments or strings."""
+    try:
+        source = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    visible: list[str] = []
+    index = 0
+    quote: str | None = None
+    block_comment = False
+    line_comment = False
+    while index < len(source):
+        char = source[index]
+        next_char = source[index + 1] if index + 1 < len(source) else ""
+        if line_comment:
+            if char == "\n":
+                line_comment = False
+                visible.append(char)
+            else:
+                visible.append(" ")
+        elif block_comment:
+            if char == "*" and next_char == "/":
+                block_comment = False
+                visible.extend((" ", " "))
+                index += 1
+            else:
+                visible.append("\n" if char == "\n" else " ")
+        elif quote is not None:
+            if char == "\\":
+                visible.extend((" ", " "))
+                index += 1
+            elif char == quote:
+                quote = None
+                visible.append(" ")
+            else:
+                visible.append("\n" if char == "\n" else " ")
+        elif char == "/" and next_char == "/":
+            line_comment = True
+            visible.extend((" ", " "))
+            index += 1
+        elif char == "/" and next_char == "*":
+            block_comment = True
+            visible.extend((" ", " "))
+            index += 1
+        elif char in {"'", '"', "`"}:
+            quote = char
+            visible.append(" ")
+        else:
+            visible.append(char)
+        index += 1
+    return re.search(r"(?m)^[ \t]*function[ \t]+bootstrapFromSecret[ \t]*\(", "".join(visible)) is not None
+
+
+def _bundle_digest(captured: Mapping[str, bytes]) -> str:
+    digest = hashlib.sha256()
+    for name, content in sorted(captured.items()):
+        try:
+            relative = name.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ProvisionerError("Apps Script source bundle path is not valid Unicode") from exc
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
 def validate_bundle(source_dir: Path) -> str:
     """Validate the checked-in Apps Script manifest and hash all source files."""
     source_dir = Path(os.path.abspath(os.fspath(source_dir.expanduser())))
@@ -536,16 +611,9 @@ def validate_bundle(source_dir: Path) -> str:
     if found_services != expected_services:
         raise ProvisionerError("Apps Script manifest service contract is invalid")
     installer_source = captured.get("Installer.gs")
-    if installer_source is None or not re.search(rb"\bfunction\s+bootstrapFromSecret\s*\(", installer_source):
+    if installer_source is None or not _has_bootstrap_entry_point(installer_source):
         raise ProvisionerError("Apps Script source bundle is missing the bootstrapFromSecret entry point")
-    digest = hashlib.sha256()
-    for name, content in sorted(captured.items()):
-        relative = name.encode("utf-8")
-        digest.update(len(relative).to_bytes(4, "big"))
-        digest.update(relative)
-        digest.update(len(content).to_bytes(8, "big"))
-        digest.update(content)
-    return digest.hexdigest()
+    return _bundle_digest(captured)
 
 
 def oauth_authorization_command() -> str:
