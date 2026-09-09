@@ -67,8 +67,9 @@ function runScheduledImport() {
   const deadlineMs = Date.now() + MC.maxRuntimeMs - 15000;
   try {
     summary = withLock_(function () {
-      const state = ensureSheetState_(null, deadlineMs);
-      assertPrivateSpreadsheet_(state.spreadsheet, state.config);
+      const config = config_();
+      assertPrivateSpreadsheet_(openSpreadsheetById_(config.spreadsheetId), config);
+      const state = ensureSheetState_(config, deadlineMs);
       state._deadlineMs = deadlineMs;
       const before = readMessageJournal_(state.journalSheet);
       const result = runImportWorkflow_(state);

@@ -264,7 +264,8 @@ function validMessageState_(state) {
 
 function candidateStates_(value, keys, rows) {
   return Array.isArray(value) && value.length === keys.length && keys.length === rows.length && value.every(function (item) {
-    return item && typeof item === 'object' && !Array.isArray(item) &&
+    return recordWithExactKeys_(item, item && item.imageEvidence === undefined ?
+      ['key', 'rowNumber', 'status'] : ['key', 'rowNumber', 'status', 'imageEvidence']) &&
       typeof item.key === 'string' && !!item.key &&
       typeof item.rowNumber === 'number' && Number.isInteger(item.rowNumber) && item.rowNumber > 1 &&
       ['review', 'confirmed', 'ignored'].indexOf(item.status) >= 0 &&

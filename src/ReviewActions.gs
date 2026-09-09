@@ -155,6 +155,12 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
   const row = sheet.getRange(rowNumber, 1, 1, MC.headers.length).getDisplayValues()[0];
   const enriched = candidates.filter(function (item) { return retryCandidateMatchesRow_(item, row); });
   if (enriched.length !== 1) return reviewFailure_(sheet, rowNumber, 'REVIEW');
+  if (candidates.some(function (item) {
+    return !state.candidateStates.some(function (known) {
+      const knownRow = sheet.getRange(known.rowNumber, 1, 1, MC.headers.length).getDisplayValues()[0];
+      return retryCandidateMatchesRow_(item, knownRow);
+    });
+  })) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   const updated = couponRow_(message, enriched[0], candidate.key);
   const existing = sheet.getRange(rowNumber, 1, 1, updated.length).getValues()[0];
   const existingFormulas = sheet.getRange(rowNumber, 1, 1, updated.length).getFormulas()[0];

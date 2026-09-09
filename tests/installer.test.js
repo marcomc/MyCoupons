@@ -97,6 +97,8 @@ test('scheduled import resolves state while holding the workflow lock', () => {
     depth += 1;
     try { return fn(); } finally { depth -= 1; }
   };
+  ctx.openSpreadsheetById_ = id => ({getId: () => id});
+  ctx.assertPrivateSpreadsheet_ = () => {};
   ctx.ensureSheetState_ = () => {
     resolutionDepth = depth;
     throw new Error('STATE');
