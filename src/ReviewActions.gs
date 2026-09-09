@@ -63,10 +63,20 @@ function validateReviewRow_(row, message) {
   const candidate = {merchant: row[1], website: row[2], code: row[3], discountType: row[4], discountValue: row[5],
     minimumSpend: row[6], validOn: row[7], exclusions: row[8], expiry: row[9], usageLimits: row[10], currency: row[20]};
   const source = candidateSource_(message);
-  return MC.fields.every(function (field) {
+  const spans = source.spans.concat([message.subject, message.sender].filter(function (value) { return typeof value === 'string' && value; }));
+  if (discountType || discountValue) {
+    if (!discountType || !discountValue || !spans.some(function (span) { return discountPairInSpan_(discountType, discountValue, span); })) return false;
+  }
+  return MC.fields.filter(function (field) { return field !== 'discountType' && field !== 'discountValue'; }).every(function (field) {
     const value = String(candidate[field] || '').trim();
-    return !value || source.spans.some(function (span) { return fieldInQuote_(field, value, span); });
+    return !value || spans.some(function (span) { return fieldInQuote_(field, value, span); });
   });
+}
+
+function discountPairInSpan_(type, value, span) {
+  const escapedType = String(type).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedValue = String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp('(?:' + escapedValue + '\\s*' + escapedType + '|' + escapedType + '\\s*' + escapedValue + ')', 'iu').test(span);
 }
 
 function setReviewStatus_(sheet, rowNumber, status, action) {
@@ -85,11 +95,17 @@ function reviewFailure_(sheet, rowNumber, code) {
 function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, journalSheet, c) {
   let candidates;
   try { candidates = extractCouponCandidates_(message); } catch (e) { return reviewFailure_(sheet, rowNumber, errorCode_(e)); }
-  const same = candidates.filter(function (item) { return candidateDedupeKey_(message, item, state.candidateKeys.indexOf(candidate.key)) === candidate.key; });
-  if (same.length !== 1 || candidates.length !== state.candidateStates.length) return reviewFailure_(sheet, rowNumber, 'REVIEW');
-  const updated = couponRow_(message, same[0], candidate.key);
-  sheet.getRange(rowNumber, 1, 1, updated.length).setValues([updated]);
-  candidate.status = same[0].review ? 'review' : 'confirmed';
+  const index = state.candidateKeys.indexOf(candidate.key);
+  if (index < 0 || candidates.length !== state.candidateStates.length || !candidates[index]) return reviewFailure_(sheet, rowNumber, 'REVIEW');
+  const enriched = candidates[index];
+  const updated = couponRow_(message, enriched, candidate.key);
+  const existing = sheet.getRange(rowNumber, 1, 1, updated.length).getValues()[0];
+  const merged = existing.slice();
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20, 24].forEach(function (column) {
+    merged[column] = updated[column];
+  });
+  sheet.getRange(rowNumber, 1, 1, merged.length).setValues([merged]);
+  candidate.status = enriched.review ? 'review' : 'confirmed';
   completeReviewMessage_(state, sheet, journalSheet, c);
 }
 
