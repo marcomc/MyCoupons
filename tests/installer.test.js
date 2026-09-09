@@ -50,6 +50,45 @@ test('failed replacement installation restores the prior active configuration', 
   assert.equal(properties.MYCOUPONS_CONFIG, previous);
 });
 
+test('failed replacement trigger creation restores the prior review trigger', () => {
+  const {ctx, properties, config} = harness();
+  const previous = {...config, spreadsheetId: 'old-sheet-id'};
+  const replacement = {...config, spreadsheetId: 'new-sheet-id', model: 'gemini-replacement'};
+  properties.MYCOUPONS_CONFIG = JSON.stringify(previous);
+  const triggerSources = [];
+  ctx.openSpreadsheetById_ = id => ({getId: () => id});
+  ctx.assertPrivateSpreadsheet_ = () => {};
+  ctx.ensureSheetState_ = input => {
+    properties.MYCOUPONS_CONFIG = JSON.stringify({...input, labelId: 'Label_123'});
+    return {spreadsheet: {getId: () => input.spreadsheetId}, label: {id: 'Label_123'}};
+  };
+  ctx.installReviewEditTrigger_ = spreadsheet => {
+    triggerSources.push(spreadsheet.getId());
+    if (triggerSources.length === 1) throw new Error('TRIGGER');
+    return {created: true};
+  };
+  assert.throws(() => ctx.installMyCoupons(replacement), /TRIGGER/);
+  assert.deepEqual(triggerSources, ['new-sheet-id', 'old-sheet-id']);
+  assert.equal(properties.MYCOUPONS_CONFIG, JSON.stringify(previous));
+});
+
+test('scheduled import resolves state while holding the workflow lock', () => {
+  const {ctx} = harness();
+  let depth = 0;
+  let resolutionDepth = 0;
+  ctx.withLock_ = fn => {
+    depth += 1;
+    try { return fn(); } finally { depth -= 1; }
+  };
+  ctx.ensureSheetState_ = () => {
+    resolutionDepth = depth;
+    throw new Error('STATE');
+  };
+  ctx.notifyScheduledImport_ = () => {};
+  ctx.runScheduledImport();
+  assert.equal(resolutionDepth, 1);
+});
+
 test('private spreadsheet permission inspection requests owner email fields', () => {
   const {ctx, config} = harness();
   let options;

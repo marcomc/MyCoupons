@@ -32,9 +32,11 @@ function installMyCoupons(input) {
       if (matches.length === 1) assertPrivateSpreadsheet_(openSpreadsheetById_(matches[0]), config);
     }
     let reviewTrigger;
+    let replacingReviewTrigger = false;
     try {
       const state = ensureSheetState_(config);
       assertPrivateSpreadsheet_(state.spreadsheet, config);
+      replacingReviewTrigger = !!previousConfig && String(previousConfig.spreadsheetId) !== String(state.spreadsheet.getId());
       reviewTrigger = installReviewEditTrigger_(state.spreadsheet);
       const trigger = installDailyImportTrigger();
       return {version: MC_INSTALLER_VERSION, installed: true, resumed: !!config.spreadsheetId,
@@ -44,7 +46,7 @@ function installMyCoupons(input) {
     } catch (e) {
       if (previous === null) props_().deleteProperty(MC.configKey);
       else props_().setProperty(MC.configKey, previous);
-      if (previousConfig && reviewTrigger && reviewTrigger.created) {
+      if (previousConfig && replacingReviewTrigger) {
         try { installReviewEditTrigger_(openSpreadsheetById_(previousConfig.spreadsheetId)); } catch (ignored) {}
       } else if (!previousConfig && reviewTrigger && reviewTrigger.created) {
         try { removeReviewEditTriggers_(); } catch (ignored) {}

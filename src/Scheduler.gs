@@ -59,10 +59,10 @@ function runScheduledImport() {
   let summary;
   const deadlineMs = Date.now() + MC.maxRuntimeMs - 15000;
   try {
-    const state = ensureSheetState_(null, deadlineMs);
-    assertPrivateSpreadsheet_(state.spreadsheet, state.config);
-    state._deadlineMs = deadlineMs;
     summary = withLock_(function () {
+      const state = ensureSheetState_(null, deadlineMs);
+      assertPrivateSpreadsheet_(state.spreadsheet, state.config);
+      state._deadlineMs = deadlineMs;
       const before = readMessageJournal_(state.journalSheet);
       const result = runImportWorkflow_(state);
       return scheduledSummary_(state, before, result);
