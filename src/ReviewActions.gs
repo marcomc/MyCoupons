@@ -36,18 +36,14 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   if (action === EN.actions.ignore) {
     setReviewStatus_(sheet, rowNumber, EN.statuses.ignored, '');
     candidate[0].status = 'ignored';
-    state.outcome = messageOutcome_(state.candidateStates.map(function (item) { return {status: item.status}; }));
-    state.status = state.outcome === 'review' ? 'review' : 'ignored'; state.updatedAt = new Date().toISOString();
-    saveMessageState_(journalSheet, state); return;
+    return completeReviewMessage_(state, sheet, journalSheet, c);
   }
   const message = getReviewMessage_(state.messageId);
-  if (action === EN.actions.retry_ai) return retryReviewCandidate_(sheet, rowNumber, state, candidate[0], message, journalSheet);
+  if (action === EN.actions.retry_ai) return retryReviewCandidate_(sheet, rowNumber, state, candidate[0], message, journalSheet, c);
   if (!validateReviewRow_(row, message)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   setReviewStatus_(sheet, rowNumber, EN.statuses.confirmed, '');
   candidate[0].status = 'confirmed';
-  state.status = 'review'; state.outcome = 'partial'; state.updatedAt = new Date().toISOString();
-  saveMessageState_(journalSheet, state);
-  finalizeMessageIfReady_(state, sheet, journalSheet, c);
+  completeReviewMessage_(state, sheet, journalSheet, c);
 }
 
 function getReviewMessage_(messageId) {
@@ -58,6 +54,12 @@ function getReviewMessage_(messageId) {
 
 function validateReviewRow_(row, message) {
   if (!Array.isArray(row) || !message) return false;
+  const merchant = String(row[1] || '').trim();
+  const code = String(row[3] || '').trim();
+  const website = String(row[2] || '').trim();
+  const discountType = String(row[4] || '').trim();
+  const discountValue = String(row[5] || '').trim();
+  if (!merchant || !(code || website || discountType && discountValue)) return false;
   const candidate = {merchant: row[1], website: row[2], code: row[3], discountType: row[4], discountValue: row[5],
     minimumSpend: row[6], validOn: row[7], exclusions: row[8], expiry: row[9], usageLimits: row[10], currency: row[20]};
   const source = candidateSource_(message);
@@ -80,25 +82,35 @@ function reviewFailure_(sheet, rowNumber, code) {
   return {status: 'failed', code: code};
 }
 
-function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, journalSheet) {
+function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, journalSheet, c) {
   let candidates;
   try { candidates = extractCouponCandidates_(message); } catch (e) { return reviewFailure_(sheet, rowNumber, errorCode_(e)); }
   const same = candidates.filter(function (item) { return candidateDedupeKey_(message, item, state.candidateKeys.indexOf(candidate.key)) === candidate.key; });
   if (same.length !== 1 || candidates.length !== state.candidateStates.length) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   const updated = couponRow_(message, same[0], candidate.key);
   sheet.getRange(rowNumber, 1, 1, updated.length).setValues([updated]);
-  candidate.status = 'review'; state.status = 'review'; state.outcome = 'review'; state.updatedAt = new Date().toISOString();
-  saveMessageState_(journalSheet, state);
+  candidate.status = same[0].review ? 'review' : 'confirmed';
+  completeReviewMessage_(state, sheet, journalSheet, c);
 }
 
-function finalizeMessageIfReady_(state, sheet, journalSheet, c) {
-  if (state.candidateStates.length === 0 || state.candidateStates.some(function (item) { return item.status !== 'confirmed'; })) return;
+function completeReviewMessage_(state, sheet, journalSheet, c) {
+  state.outcome = messageOutcome_(state.candidateStates.map(function (item) { return {status: item.status}; }));
+  state.updatedAt = new Date().toISOString();
+  if (state.outcome === 'review') { state.status = 'review'; saveMessageState_(journalSheet, state); return; }
+  if (state.outcome === 'unchanged') { state.status = 'ignored'; saveMessageState_(journalSheet, state); return; }
   if (!state.candidateStates.every(function (item) { return String(sheet.getRange(item.rowNumber, 18).getDisplayValues()[0][0]) === EN.statuses.confirmed; })) return;
   try {
     if (!state.labelApplied) { modifyReviewMessage_(state.messageId, {addLabelIds: [c.labelId]}); state.labelApplied = true; }
     if (!state.archived) { modifyReviewMessage_(state.messageId, {removeLabelIds: ['INBOX']}); state.archived = true; }
     state.status = 'confirmed'; state.outcome = 'archive'; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
-  } catch (e) { state.status = 'review'; state.lastError = errorCode_(e); state.failureStage = 'mail'; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state); }
+  } catch (e) {
+    state.candidateStates.forEach(function (item) {
+      item.status = 'review';
+      setReviewStatus_(sheet, item.rowNumber, EN.statuses.review, EN.actions.confirm);
+    });
+    state.status = 'review'; state.outcome = 'review'; state.lastError = errorCode_(e);
+    state.failureStage = 'mail'; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
+  }
 }
 
 function modifyReviewMessage_(messageId, body) {

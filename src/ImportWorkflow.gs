@@ -33,6 +33,7 @@ function processCouponMessage_(state, message) {
   saveMessageState_(state.journalSheet, journal);
   try {
     if (!Array.isArray(journal.candidateStates)) journal.candidateStates = [];
+    journal.version = 2;
     const candidates = deterministicCandidates_(message).map(function (candidate) {
       const normalized = {}; MC.fields.forEach(function (field) { normalized[field] = ''; });
       normalized.code = candidate.code; normalized.notes = candidate.notes;
@@ -64,7 +65,6 @@ function processCouponMessage_(state, message) {
       }
     });
     journal.outcome = messageOutcome_(statuses);
-    delete journal.candidateStates;
     journal.status = journal.outcome === 'archive' ? 'confirmed' : 'review';
     if (journal.outcome === 'empty') journal.status = 'failed';
     journal.failureStage = ''; journal.updatedAt = new Date().toISOString();

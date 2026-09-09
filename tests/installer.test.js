@@ -140,9 +140,28 @@ test('fresh explicit spreadsheet IDs are privacy-checked before resource setup',
 test('review validation ignores the internal dedupe key column', () => {
   const {ctx} = harness();
   const row = Array(26).fill('');
+  row[1] = 'Merchant';
+  row[3] = 'CODE';
   row[16] = 'sha256-dedupe-key';
-  ctx.candidateSource_ = () => ({spans: []});
+  ctx.candidateSource_ = () => ({spans: [{text: 'Merchant CODE'}]});
+  ctx.fieldInQuote_ = () => true;
   assert.equal(ctx.validateReviewRow_(row, {}), true);
+});
+
+test('review validation rejects an empty offer even when its fields have no evidence', () => {
+  const {ctx} = harness();
+  ctx.candidateSource_ = () => ({spans: []});
+  assert.equal(ctx.validateReviewRow_(Array(26).fill(''), {}), false);
+});
+
+test('daily trigger ownership rejects duplicate active handler triggers', () => {
+  const {ctx, properties} = harness();
+  properties.MYCOUPONS_TRIGGER_ID = 'trigger-one';
+  ctx.ScriptApp.getProjectTriggers = () => [
+    {getHandlerFunction: () => 'runScheduledImport', getEventType: () => 'CLOCK', getUniqueId: () => 'trigger-one'},
+    {getHandlerFunction: () => 'runScheduledImport', getEventType: () => 'CLOCK', getUniqueId: () => 'trigger-two'}
+  ];
+  assert.throws(() => ctx.ownedImportTriggers_(), /RESOURCE/);
 });
 
 test('private spreadsheet permission inspection requests owner email fields', () => {
