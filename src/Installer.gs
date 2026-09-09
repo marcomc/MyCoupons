@@ -46,10 +46,11 @@ function installMyCoupons(input) {
     } catch (e) {
       if (previous === null) props_().deleteProperty(MC.configKey);
       else props_().setProperty(MC.configKey, previous);
+      if (reviewTrigger && reviewTrigger.created && reviewTrigger.trigger) {
+        try { ScriptApp.deleteTrigger(reviewTrigger.trigger); } catch (ignored) {}
+      }
       if (previousConfig && replacingReviewTrigger) {
         try { installReviewEditTrigger_(openSpreadsheetById_(previousConfig.spreadsheetId)); } catch (ignored) {}
-      } else if (!previousConfig && reviewTrigger && reviewTrigger.created) {
-        try { removeReviewEditTriggers_(); } catch (ignored) {}
       }
       throw e;
     }

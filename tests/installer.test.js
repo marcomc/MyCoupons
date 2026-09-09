@@ -50,6 +50,19 @@ test('failed replacement installation restores the prior active configuration', 
   assert.equal(properties.MYCOUPONS_CONFIG, previous);
 });
 
+test('failed resumed installation removes a newly created review trigger', () => {
+  const {ctx, config} = harness();
+  const reviewTrigger = {id: 'new-review-trigger'};
+  const removed = [];
+  ctx.assertPrivateSpreadsheet_ = () => {};
+  ctx.ensureSheetState_ = input => ({spreadsheet: {getId: () => input.spreadsheetId}, label: {id: 'Label_123'}});
+  ctx.installReviewEditTrigger_ = () => ({created: true, trigger: reviewTrigger});
+  ctx.installDailyImportTrigger = () => { throw new Error('TRIGGER'); };
+  ctx.ScriptApp.deleteTrigger = trigger => { removed.push(trigger); };
+  assert.throws(() => ctx.installMyCoupons(), /TRIGGER/);
+  assert.deepEqual(removed, [reviewTrigger]);
+});
+
 test('failed replacement trigger creation restores the prior review trigger', () => {
   const {ctx, properties, config} = harness();
   const previous = {...config, spreadsheetId: 'old-sheet-id'};
