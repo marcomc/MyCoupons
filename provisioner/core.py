@@ -231,6 +231,12 @@ def _read_json_file(path: Path, *, maximum_bytes: int) -> Any:
 
 def load_config(path: Path) -> dict[str, Any]:
     """Load a private local config and validate the Apps Script installer shape."""
+    path = Path(os.path.abspath(os.fspath(path.expanduser())))
+    _assert_not_symlink(path)
+    try:
+        path = path.resolve(strict=True)
+    except OSError as exc:
+        raise ProvisionerError("private provisioning file cannot be resolved") from exc
     config = _read_json_file(path, maximum_bytes=MAX_CONFIG_BYTES)
     if not isinstance(config, dict):
         raise ProvisionerError("installation config must be a JSON object")
@@ -476,7 +482,7 @@ def _iter_bundle_files(source_dir: Path) -> Iterable[Path]:
             path = directory / child_name
             if path.is_symlink():
                 raise ProvisionerError("Apps Script source bundle cannot contain symlinks")
-            if path.is_file() and path.suffix in {".gs", ".html", ".json"}:
+            if path.is_file() and path.suffix in {".gs", ".html", ".js", ".json"}:
                 bundle_files.append(path)
     yield from sorted(bundle_files)
 
@@ -531,7 +537,17 @@ def _has_bootstrap_entry_point(content: bytes) -> bool:
         else:
             visible.append(char)
         index += 1
-    return re.search(r"(?m)^[ \t]*function[ \t]+bootstrapFromSecret[ \t]*\(", "".join(visible)) is not None
+    visible_source = "".join(visible)
+    visible_source = re.sub(
+        r"/(?:\\.|\[[^\]\n]*(?:\\.[^\]\n]*)*\]|[^/\n])+/[a-z]*",
+        lambda match: "".join("\n" if char == "\n" else " " for char in match.group()),
+        visible_source,
+    )
+    for match in re.finditer(r"(?m)^[ \t]*function[ \t]+bootstrapFromSecret[ \t]*\(", visible_source):
+        prefix = visible_source[: match.start()]
+        if prefix.count("{") == prefix.count("}"):
+            return True
+    return False
 
 
 def _bundle_digest(captured: Mapping[str, bytes]) -> str:
@@ -712,7 +728,7 @@ def authenticated_identity_preflight(expected_owner: str, project_id: str) -> di
     ):
         raise ProvisionerError("read-only authentication preflight returned unexpected accounts")
     active = [entry for entry in accounts if entry["status"] == "ACTIVE"]
-    if len(active) != 1 or active[0]["account"].casefold() != expected_owner.casefold():
+    if len(active) != 1 or active[0]["account"].lower() != expected_owner.lower():
         raise ProvisionerError("active gcloud identity is absent, ambiguous, or does not match ownerEmail")
     project = _run_json((gcloud, "projects", "describe", project_id, "--format=json", "--quiet"))
     if not isinstance(project, dict) or project.get("projectId") != project_id:

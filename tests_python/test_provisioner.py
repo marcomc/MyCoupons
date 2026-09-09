@@ -303,6 +303,9 @@ class ProvisionerBundleTests(unittest.TestCase):
             (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
             self.assertNotEqual(first, core.validate_bundle(copied))
             gs_digest = core.validate_bundle(copied)
+            (copied / "Injected.js").write_text("const changedJs = true;\n", encoding="utf-8")
+            self.assertNotEqual(gs_digest, core.validate_bundle(copied))
+            (copied / "Injected.js").unlink()
             (copied / "Injected.html").write_text("<p>changed</p>\n", encoding="utf-8")
             html_digest = core.validate_bundle(copied)
             self.assertNotEqual(gs_digest, html_digest)
@@ -322,7 +325,7 @@ class ProvisionerBundleTests(unittest.TestCase):
                 core.validate_bundle(copied)
             manifest["executionApi"] = {"access": "MYSELF"}
             (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
-            (copied / "Installer.gs").write_text('// function bootstrapFromSecret(\n"function bootstrapFromSecret("\n', encoding="utf-8")
+            (copied / "Installer.gs").write_text('// function bootstrapFromSecret(\n"function bootstrapFromSecret("\nconst closes = /}/;\nfunction outer() { function bootstrapFromSecret() {} }\n', encoding="utf-8")
             with self.assertRaisesRegex(core.ProvisionerError, "bootstrapFromSecret"):
                 core.validate_bundle(copied)
 
@@ -399,6 +402,11 @@ class ProvisionerCommandTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(core.ProvisionerError, "unexpected accounts"):
                 core.authenticated_identity_preflight("owner@example.com", "vertex-project")
+        with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+            "provisioner.core._run_json", return_value=[{"account": "owner@strasse.de", "status": "ACTIVE"}]
+        ):
+            with self.assertRaisesRegex(core.ProvisionerError, "does not match"):
+                core.authenticated_identity_preflight("owner@ſtrasse.de", "vertex-project")
 
     def test_preflight_command_output_is_bounded_and_redacted(self) -> None:
         invalid_json = (sys.executable, "-c", "import sys; sys.stdout.write('not json'); sys.stderr.write('secret=never-show')")

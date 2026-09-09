@@ -29,7 +29,7 @@ cannot be silently redirected through broad-permission paths.
 Local state defaults to `${XDG_STATE_HOME:-$HOME/.local/state}/mycoupons`.
 The directory is created mode 0700; its state, key, and lock files are mode
 0600. The CLI refuses symlinked config, state, source-root, and bundle-entry
-inputs; it canonicalizes an ancestor alias before reading a source bundle.
+inputs; it canonicalizes an ancestor alias before reading a config or source bundle.
 It also rejects permissive state/config files, malformed JSON, unexpected
 config keys, and a config whose digest differs from existing local state.
 State updates are atomically written and signed with a random local identity
@@ -90,7 +90,7 @@ The validated manifest contract matches the current Apps Script source:
   email identity, and cloud-platform application scopes.
 - Gmail v1 and Drive v3 advanced services.
 
-The digest includes deployable `.gs`, `.html`, and `.json` files only. Manifest
+The digest includes deployable `.gs`, `.html`, `.js`, and `.json` files only. Manifest
 validation and digesting consume the same captured bytes; a file that changes
 while it is being read fails validation. Vendor license files remain part of
 repository provenance but are not Apps Script deployment inputs.
