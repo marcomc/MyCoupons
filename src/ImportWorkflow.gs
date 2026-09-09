@@ -100,7 +100,7 @@ function couponRow_(message, candidate, key) {
   row[12] = textCell_(message.sender); row[13] = message.link;
   row[14] = candidate.confidence; row[15] = candidate.review ? EN.yes : '';
   row[16] = key; row[17] = candidate.review ? EN.statuses.review : EN.statuses.confirmed;
-  row[24] = candidate.review ? EN.actions.confirm : '';
+  row[24] = '';
   return row;
 }
 

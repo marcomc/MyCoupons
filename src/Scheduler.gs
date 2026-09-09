@@ -50,6 +50,10 @@ function ownedImportTriggers_() {
   const id = props_().getProperty(MC_TRIGGER_ID_KEY);
   if (id && !/^[A-Za-z0-9_-]{1,200}$/.test(id)) fail_('STATE');
   if (!id) return triggers.length ? fail_('RESOURCE') : [];
+  if (!triggers.length) {
+    props_().deleteProperty(MC_TRIGGER_ID_KEY);
+    return [];
+  }
   if (triggers.length !== 1 || typeof triggers[0].getUniqueId !== 'function' ||
       String(triggers[0].getUniqueId()) !== id) fail_('RESOURCE');
   return triggers;
