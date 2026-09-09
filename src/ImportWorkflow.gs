@@ -33,6 +33,7 @@ function processCouponMessage_(state, message) {
   saveMessageState_(state.journalSheet, journal);
   try {
     if (!Array.isArray(journal.candidateStates)) journal.candidateStates = [];
+    journal.version = 2;
     const candidates = deterministicCandidates_(message).map(function (candidate) {
       const normalized = {}; MC.fields.forEach(function (field) { normalized[field] = ''; });
       normalized.code = candidate.code; normalized.notes = candidate.notes;
@@ -60,11 +61,10 @@ function processCouponMessage_(state, message) {
       statuses.push(status);
       rows.push(rowNumber);
       if (!journal.candidateStates.some(function (item) { return item.key === key; })) {
-        journal.candidateStates.push({key: key, rowNumber: rowNumber, status: candidate.review ? 'review' : 'confirmed'});
+        journal.candidateStates.push({key: key, rowNumber: rowNumber, status: candidate.review ? 'review' : 'confirmed', imageEvidence: candidate.imageEvidence || {}});
       }
     });
     journal.outcome = messageOutcome_(statuses);
-    delete journal.candidateStates;
     journal.status = journal.outcome === 'archive' ? 'confirmed' : 'review';
     if (journal.outcome === 'empty') journal.status = 'failed';
     journal.failureStage = ''; journal.updatedAt = new Date().toISOString();
@@ -100,7 +100,7 @@ function couponRow_(message, candidate, key) {
   row[12] = textCell_(message.sender); row[13] = message.link;
   row[14] = candidate.confidence; row[15] = candidate.review ? EN.yes : '';
   row[16] = key; row[17] = candidate.review ? EN.statuses.review : EN.statuses.confirmed;
-  row[24] = candidate.review ? EN.actions.confirm : '';
+  row[24] = '';
   return row;
 }
 

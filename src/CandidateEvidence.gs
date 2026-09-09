@@ -252,6 +252,7 @@ function normalizeCandidate_(raw, message) {
     if (ownValue_(ev, 'image') !== undefined && (ownValue_(ev, 'image') < 0 || ownValue_(ev, 'image') >= source.images.length || !inspectedImageAt_(source.images, ownValue_(ev, 'image')))) fail_('AI');
   });
   const c = {};
+  c.imageEvidence = {};
   let truncated = false;
   let invalidNumericValue = false;
   MC.fields.forEach(function (k) {
@@ -282,6 +283,7 @@ function normalizeCandidate_(raw, message) {
       source.evidenceSpans.some(function (span) { return textEvidenceGrounded_(k, c[k], quote, span); });
     const groundedImage = ev && Number.isInteger(image) && image >= 0 && image < source.images.length &&
       inspectedImageAt_(source.images, image);
+    if (groundedImage) c.imageEvidence[k] = {sourceId: source.images[image].sourceId, valueDigest: digest_(c[k]), digest: imageEvidenceDigest_(source.images[image])};
     if (!groundedText && !groundedImage) { c[k] = ''; c.review = true; }
     // OCR-only evidence is a proposal, not independently verified import authority.
     if (groundedImage && !groundedText) c.review = true;

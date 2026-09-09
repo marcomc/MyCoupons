@@ -22,6 +22,7 @@ function ensureSheetState_(input, deadlineMs) {
     const recoveryStart = couponSheet ? recoveryStartForSheet_(couponSheet, c) :
       recoveryStart_([], c);
     if (!couponSheet) couponSheet = ensureCouponSheet_(spreadsheet, c.sheetName);
+    ensureReviewActionValidation_(couponSheet);
     const journalSheet = ensureJournalSheet_(spreadsheet);
     const label = resolveGmailLabel_(c);
     const resolvedConfig = persistResourceIdentity_(c, spreadsheet.getId(), label.id);
@@ -146,6 +147,16 @@ function setHeaderRow_(sheet, headers) {
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
 }
 
+function ensureReviewActionValidation_(sheet) {
+  if (!sheet || typeof sheet.getMaxRows !== 'function') fail_('RESOURCE');
+  const actionColumn = MC.headers.indexOf('Action needed') + 1;
+  if (actionColumn < 1 || !SpreadsheetApp || typeof SpreadsheetApp.newDataValidation !== 'function') fail_('RESOURCE');
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList([EN.actions.confirm, EN.actions.ignore, EN.actions.retry_ai], true)
+    .setAllowInvalid(false).build();
+  sheet.getRange(2, actionColumn, Math.max(1, sheet.getMaxRows() - 1), 1).setDataValidation(rule);
+}
+
 function assertHeaderRow_(sheet, headers, exactWidth) {
   if (exactWidth && sheet.getLastColumn() !== headers.length ||
     !exactWidth && sheet.getLastColumn() < headers.length) fail_('RESOURCE');
@@ -242,7 +253,7 @@ function validMessageState_(state) {
     MC_MESSAGE_STATE_STATUSES.indexOf(state.status) < 0 ||
     !nonNegativeInteger_(state.attempts) || !nonNegativeInteger_(state.retryCount) ||
     !stringArray_(state.dedupeKeys) || !stringArray_(state.candidateKeys) ||
-    (state.version === 2 && !isLegacy && !candidateStates_(state.candidateStates)) ||
+    (state.version === 2 && !isLegacy && !candidateStates_(state.candidateStates, state.candidateKeys, state.rowNumbers)) ||
     !nonNegativeIntegerArray_(state.rowNumbers) ||
     !stringValue_(state.lastAttemptAt) || !stringValue_(state.nextRetryAt) ||
     !stringValue_(state.lastError) || !stringValue_(state.failureStage) ||
@@ -251,13 +262,24 @@ function validMessageState_(state) {
   return true;
 }
 
-function candidateStates_(value) {
-  return Array.isArray(value) && value.every(function (item) {
-    return item && typeof item === 'object' && !Array.isArray(item) &&
+function candidateStates_(value, keys, rows) {
+  return Array.isArray(value) && value.length === keys.length && keys.length === rows.length && value.every(function (item) {
+    return recordWithExactKeys_(item, item && item.imageEvidence === undefined ?
+      ['key', 'rowNumber', 'status'] : ['key', 'rowNumber', 'status', 'imageEvidence']) &&
       typeof item.key === 'string' && !!item.key &&
       typeof item.rowNumber === 'number' && Number.isInteger(item.rowNumber) && item.rowNumber > 1 &&
-      ['review', 'confirmed', 'ignored'].indexOf(item.status) >= 0;
+      ['review', 'confirmed', 'ignored'].indexOf(item.status) >= 0 &&
+      (item.imageEvidence === undefined || imageEvidence_(item.imageEvidence)) &&
+      keys.indexOf(item.key) >= 0 && rows[keys.indexOf(item.key)] === item.rowNumber &&
+      value.filter(function (other) { return other.key === item.key; }).length === 1;
   });
+}
+
+function imageEvidence_(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).every(function (field) { return MC.fields.indexOf(field) >= 0 && value[field] &&
+      recordWithExactKeys_(value[field], ['sourceId', 'valueDigest', 'digest']) && typeof value[field].sourceId === 'string' && value[field].sourceId && typeof value[field].valueDigest === 'string' && /^[a-f0-9]{64}$/.test(value[field].valueDigest) &&
+      typeof value[field].digest === 'string' && /^[a-f0-9]{64}$/.test(value[field].digest); });
 }
 
 function recordWithExactKeys_(value, keys) {

@@ -11,19 +11,32 @@ function installDailyImportTrigger() {
     const triggers = ownedImportTriggers_();
     if (triggers.length > 1) fail_('RESOURCE');
     if (triggers.length === 1) return {created: false, trigger: triggers[0]};
-    const trigger = ScriptApp.newTrigger(MC_SCHEDULED_HANDLER).timeBased().atHour(8)
-      .everyDays(1).inTimezone(c.timeZone).create();
-    if (!trigger || trigger.getHandlerFunction() !== MC_SCHEDULED_HANDLER || typeof trigger.getUniqueId !== 'function') fail_('RESOURCE');
-    props_().setProperty(MC_TRIGGER_ID_KEY, String(trigger.getUniqueId()));
-    return {created: true, trigger: trigger};
+    let trigger;
+    try {
+      trigger = ScriptApp.newTrigger(MC_SCHEDULED_HANDLER).timeBased().atHour(8)
+        .everyDays(1).inTimezone(c.timeZone).create();
+      if (!trigger || trigger.getHandlerFunction() !== MC_SCHEDULED_HANDLER || typeof trigger.getUniqueId !== 'function') fail_('RESOURCE');
+      props_().setProperty(MC_TRIGGER_ID_KEY, String(trigger.getUniqueId()));
+      return {created: true, trigger: trigger};
+    } catch (e) {
+      if (trigger) {
+        try { ScriptApp.deleteTrigger(trigger); } catch (ignored) {}
+      }
+      throw e;
+    }
   });
 }
 
 function removeDailyImportTrigger() {
   return withLock_(function () {
-    const c = config_();
-    assertOwner_(c);
-    const triggers = ownedImportTriggers_();
+    const raw = props_().getProperty(MC.configKey);
+    if (raw) assertOwner_(config_());
+    else if (String(Gmail.Users.getProfile('me').emailAddress).toLowerCase() !==
+      String(Session.getEffectiveUser().getEmail()).toLowerCase()) fail_('OWNER');
+    const triggers = raw ? ownedImportTriggers_() : ScriptApp.getProjectTriggers().filter(function (trigger) {
+      return trigger && trigger.getHandlerFunction() === MC_SCHEDULED_HANDLER &&
+        trigger.getEventType() === ScriptApp.EventType.CLOCK;
+    });
     if (triggers.length > 1) fail_('RESOURCE');
     if (!triggers.length) { props_().deleteProperty(MC_TRIGGER_ID_KEY); return {removed: false}; }
     ScriptApp.deleteTrigger(triggers[0]);
@@ -40,26 +53,32 @@ function ownedImportTriggers_() {
   const id = props_().getProperty(MC_TRIGGER_ID_KEY);
   if (id && !/^[A-Za-z0-9_-]{1,200}$/.test(id)) fail_('STATE');
   if (!id) return triggers.length ? fail_('RESOURCE') : [];
-  return triggers.filter(function (trigger) {
-    return typeof trigger.getUniqueId === 'function' && String(trigger.getUniqueId()) === id;
-  });
+  if (!triggers.length) {
+    props_().deleteProperty(MC_TRIGGER_ID_KEY);
+    return [];
+  }
+  if (triggers.length !== 1 || typeof triggers[0].getUniqueId !== 'function' ||
+      String(triggers[0].getUniqueId()) !== id) fail_('RESOURCE');
+  return triggers;
 }
 
 function runScheduledImport() {
   let summary;
   const deadlineMs = Date.now() + MC.maxRuntimeMs - 15000;
   try {
-    const state = ensureSheetState_(null, deadlineMs);
-    state._deadlineMs = deadlineMs;
     summary = withLock_(function () {
+      const config = config_();
+      assertPrivateSpreadsheet_(openSpreadsheetById_(config.spreadsheetId), config);
+      const state = ensureSheetState_(config, deadlineMs);
+      state._deadlineMs = deadlineMs;
       const before = readMessageJournal_(state.journalSheet);
       const result = runImportWorkflow_(state);
       return scheduledSummary_(state, before, result);
-    });
+    }, deadlineMs);
   } catch (e) {
     summary = {imported: 0, importedIds: [], review: 0, errors: [{messageId: '', code: errorCode_(e)}], links: [], omittedLinks: false};
   }
-  try { withLock_(function () { notifyScheduledImport_(summary); }); } catch (e) {
+  try { withLock_(function () { notifyScheduledImport_(summary); }, deadlineMs); } catch (e) {
     if (e && e.code === 'BUSY') persistPendingNotification_(summary);
   }
   return summary;
