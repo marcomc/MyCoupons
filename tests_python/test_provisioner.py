@@ -94,6 +94,23 @@ class ProvisionerConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "spreadsheetId"):
                 core.load_config(config_path)
 
+    def test_config_uses_ecmascript_whitespace_and_safe_tilde_expansion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path = Path(temporary) / "config.json"
+            for key in ("spreadsheetName", "sheetName", "labelName"):
+                invalid = valid_config()
+                invalid[key] = "\ufeff"
+                private_json(config_path, invalid)
+                with self.assertRaisesRegex(core.ProvisionerError, key):
+                    core.load_config(config_path)
+            invalid = valid_config()
+            invalid["labelName"] = "valid/\ufeff"
+            private_json(config_path, invalid)
+            with self.assertRaisesRegex(core.ProvisionerError, "labelName"):
+                core.load_config(config_path)
+        with self.assertRaisesRegex(core.ProvisionerError, "cannot be resolved"):
+            core.load_config(Path("~missing-user/config.json"))
+
     def test_config_size_limit_is_checked_before_an_unbounded_read(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             config_path = Path(temporary) / "config.json"
@@ -319,6 +336,44 @@ class ProvisionerBundleTests(unittest.TestCase):
 
             with mock.patch("provisioner.core.json.loads", side_effect=replace_manifest_after_capture):
                 self.assertEqual(html_digest, core.validate_bundle(copied))
+            outside = Path(temporary) / "outside.gs"
+            outside.write_text("const escaped = true;\n", encoding="utf-8")
+            original_iter = core._iter_bundle_files
+
+            def replace_listed_file(source_dir: Path):
+                for listed_path in original_iter(source_dir):
+                    if listed_path.name == "Injected.html":
+                        listed_path.unlink()
+                        listed_path.symlink_to(outside)
+                    yield listed_path
+
+            with mock.patch("provisioner.core._iter_bundle_files", side_effect=replace_listed_file):
+                with self.assertRaisesRegex(core.ProvisionerError, "cannot be read"):
+                    core.validate_bundle(copied)
+            (copied / "Injected.html").unlink()
+            (copied / "Injected.html").write_text("<p>changed</p>\n", encoding="utf-8")
+            manifest["executionApi"] = {"access": "MYSELF"}
+            (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
+            nested_directory = copied / "inside"
+            nested_directory.mkdir()
+            nested_file = nested_directory / "payload.gs"
+            nested_file.write_text("const inside = true;\n", encoding="utf-8")
+            outside_directory = Path(temporary) / "outside-directory"
+            outside_directory.mkdir()
+            (outside_directory / "payload.gs").write_text("const outside = true;\n", encoding="utf-8")
+
+            def replace_listed_directory(source_dir: Path):
+                for listed_path in original_iter(source_dir):
+                    if listed_path.name == "payload.gs":
+                        nested_directory.rename(copied / "inside-original")
+                        nested_directory.symlink_to(outside_directory, target_is_directory=True)
+                    yield listed_path
+
+            with mock.patch("provisioner.core._iter_bundle_files", side_effect=replace_listed_directory):
+                with self.assertRaisesRegex(core.ProvisionerError, "cannot be read"):
+                    core.validate_bundle(copied)
+            nested_directory.unlink()
+            (copied / "inside-original").rename(nested_directory)
             (copied / "appsscript.json").write_text('{"exceptionLogging":NaN}', encoding="utf-8")
             with self.assertRaisesRegex(core.ProvisionerError, "malformed"):
                 core.validate_bundle(copied)

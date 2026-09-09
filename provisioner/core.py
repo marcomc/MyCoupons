@@ -74,6 +74,7 @@ PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 MODEL_RE = re.compile(r"^gemini-[a-z0-9._-]+$")
 VERTEX_LOCATION_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+ECMASCRIPT_TRIM_CHARS = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -123,6 +124,13 @@ def _assert_well_formed_unicode(value: Any) -> None:
 
 def _utf16_units(value: str) -> int:
     return len(value.encode("utf-16-le")) // 2
+
+
+def _expand_absolute_path(path: Path, *, error_message: str) -> Path:
+    try:
+        return Path(os.path.abspath(os.fspath(path.expanduser())))
+    except RuntimeError as exc:
+        raise ProvisionerError(error_message) from exc
 
 
 def _assert_private_directory(path: Path) -> None:
@@ -177,7 +185,7 @@ def _assert_outside_worktree(path: Path) -> None:
 
 def ensure_state_dir(path: Path) -> Path:
     """Create or validate a local state directory without following symlinks."""
-    path = Path(os.path.abspath(os.fspath(path.expanduser())))
+    path = _expand_absolute_path(path, error_message="provisioning directory cannot be resolved")
     _assert_not_symlink(path)
     path = path.resolve(strict=False)
     _assert_outside_worktree(path)
@@ -231,7 +239,7 @@ def _read_json_file(path: Path, *, maximum_bytes: int) -> Any:
 
 def load_config(path: Path) -> dict[str, Any]:
     """Load a private local config and validate the Apps Script installer shape."""
-    path = Path(os.path.abspath(os.fspath(path.expanduser())))
+    path = _expand_absolute_path(path, error_message="private provisioning file cannot be resolved")
     _assert_not_symlink(path)
     try:
         path = path.resolve(strict=True)
@@ -255,11 +263,11 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ProvisionerError("installation config model or vertexLocation is invalid")
     for key, limit in (("spreadsheetName", 200), ("sheetName", 100), ("labelName", 200)):
         value = config[key]
-        if not value.strip() or _utf16_units(value) > limit or any(ord(char) < 32 for char in value):
+        if not value.strip(ECMASCRIPT_TRIM_CHARS) or _utf16_units(value) > limit or any(ord(char) < 32 for char in value):
             raise ProvisionerError(f"installation config {key} is invalid")
     if re.search(r"[\[\]*?:/\\]", config["sheetName"]) or config["sheetName"].casefold() == "_mycoupons messages":
         raise ProvisionerError("installation config sheetName is reserved or invalid")
-    if any(not part.strip() for part in config["labelName"].split("/")):
+    if any(not part.strip(ECMASCRIPT_TRIM_CHARS) for part in config["labelName"].split("/")):
         raise ProvisionerError("installation config labelName is invalid")
     for key in ("developerProject", "vertexProject"):
         if config[key] and not PROJECT_ID_RE.fullmatch(config[key]):
@@ -570,28 +578,87 @@ def _bundle_digest(captured: Mapping[str, bytes]) -> str:
     return digest.hexdigest()
 
 
+def _open_bundle_root(source_dir: Path) -> int:
+    descriptor = -1
+    try:
+        descriptor = os.open(source_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ProvisionerError("Apps Script source directory must be a real directory")
+        return descriptor
+    except OSError as exc:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise ProvisionerError("Apps Script source directory cannot be read") from exc
+    except Exception:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+
+
+def _read_bundle_file(root_descriptor: int, relative: Path) -> bytes:
+    descriptor = -1
+    directories: list[int] = []
+    try:
+        if relative.is_absolute() or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+            raise ProvisionerError("Apps Script source bundle path is invalid")
+        parent_descriptor = root_descriptor
+        for component in relative.parts[:-1]:
+            directory_descriptor = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=parent_descriptor,
+            )
+            if not stat.S_ISDIR(os.fstat(directory_descriptor).st_mode):
+                os.close(directory_descriptor)
+                raise ProvisionerError("Apps Script source bundle cannot contain non-directory paths")
+            directories.append(directory_descriptor)
+            parent_descriptor = directory_descriptor
+        descriptor = os.open(
+            relative.name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=parent_descriptor,
+        )
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ProvisionerError("Apps Script source bundle cannot contain non-regular files")
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = -1
+            content = handle.read()
+            after = os.fstat(handle.fileno())
+    except OSError as exc:
+        raise ProvisionerError("Apps Script source bundle cannot be read") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        for directory_descriptor in reversed(directories):
+            os.close(directory_descriptor)
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    ):
+        raise ProvisionerError("Apps Script source bundle changed during validation")
+    return content
+
+
 def validate_bundle(source_dir: Path) -> str:
     """Validate the checked-in Apps Script manifest and hash all source files."""
-    source_dir = Path(os.path.abspath(os.fspath(source_dir.expanduser())))
+    source_dir = _expand_absolute_path(source_dir, error_message="Apps Script source directory cannot be resolved")
     _assert_not_symlink(source_dir)
     try:
         source_dir = source_dir.resolve(strict=True)
     except OSError as exc:
         raise ProvisionerError("Apps Script source directory cannot be resolved") from exc
     captured: dict[str, bytes] = {}
-    for path in _iter_bundle_files(source_dir):
-        relative = path.relative_to(source_dir).as_posix()
-        try:
-            before = path.stat()
-            content = path.read_bytes()
-            after = path.stat()
-        except OSError as exc:
-            raise ProvisionerError("Apps Script source bundle cannot be read") from exc
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
-        ):
-            raise ProvisionerError("Apps Script source bundle changed during validation")
-        captured[relative] = content
+    root_descriptor = _open_bundle_root(source_dir)
+    try:
+        for path in _iter_bundle_files(source_dir):
+            relative_path = path.relative_to(source_dir)
+            relative = relative_path.as_posix()
+            captured[relative] = _read_bundle_file(root_descriptor, relative_path)
+    finally:
+        os.close(root_descriptor)
     manifest_content = captured.get("appsscript.json")
     if manifest_content is None:
         raise ProvisionerError("Apps Script manifest is missing")
