@@ -2,6 +2,38 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {harness} = require('./harness');
 
+function bootstrapPayload(config, geminiApiKey = 'AIza12345678901234567890') {
+  return JSON.stringify({version: 1, config, geminiApiKey});
+}
+
+function crc32c(bytes) {
+  let checksum = 0xffffffff;
+  for (const byte of bytes) {
+    checksum ^= byte;
+    for (let bit = 0; bit < 8; bit++) checksum = checksum & 1 ? (checksum >>> 1) ^ 0x82f63b78 : checksum >>> 1;
+  }
+  return (checksum ^ -1) >>> 0;
+}
+
+function bootstrapSecret(payload, {name = 'projects/123456789/secrets/mycoupons-bootstrap/versions/7', checksum} = {}) {
+  const bytes = Buffer.from(payload);
+  return {getResponseCode: () => 200, getContentText: () => JSON.stringify({
+    name, payload: {data: bytes.toString('base64'), dataCrc32c: checksum == null ? String(crc32c(bytes)) : checksum}
+  })};
+}
+
+function bootstrapFetch(payload, {projectId = 'vertex-project', projectNumber = '123456789'} = {}) {
+  return url => {
+    if (url.startsWith('https://secretmanager.googleapis.com/')) {
+      return bootstrapSecret(payload, {name: 'projects/' + projectNumber + '/secrets/mycoupons-bootstrap/versions/7'});
+    }
+    if (url === 'https://cloudresourcemanager.googleapis.com/v1/projects/' + projectId) {
+      return {getResponseCode: () => 200, getContentText: () => JSON.stringify({projectId, projectNumber})};
+    }
+    assert.fail('unexpected bootstrap request: ' + url);
+  };
+}
+
 test('installer input accepts only validated product configuration', () => {
   const {ctx, config} = harness();
   assert.equal(ctx.validateInstallerInput_(config).ownerEmail, 'owner@example.com');
@@ -20,6 +52,194 @@ test('persisted label identity is accepted only on the resume path', () => {
   assert.equal(ctx.validateInstallerInput_(persisted, true).labelId, 'Label_123');
   assert.throws(() => ctx.validateInstallerInput_(persisted, false), /CONFIG/);
   assert.throws(() => ctx.installMyCoupons(false), /CONFIG/);
+});
+
+test('owner-only bootstrap reads the exact temporary secret and returns no secret data', () => {
+  const {ctx, properties, config} = harness();
+  delete properties.MYCOUPONS_CONFIG;
+  const proposed = {...config, vertexProject: 'vertex-project'};
+  const requests = [];
+  ctx.UrlFetchApp = {fetch: (url, options) => {
+    requests.push({url, options});
+    return bootstrapFetch(bootstrapPayload(proposed))(url);
+  }};
+  ctx.beginMyCouponsInstallation = input => {
+    assert.equal(JSON.stringify(input), JSON.stringify(proposed));
+    return {version: 1, installed: true, resumed: false, spreadsheetId: 'sheet-id', labelId: 'Label_123',
+      triggerCreated: true, reviewTriggerCreated: true, locale: 'en', timeZone: 'Europe/Rome', geminiApiKey: 'never-return'};
+  };
+  const result = ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7');
+  assert.equal(properties.GEMINI_API_KEY, 'AIza12345678901234567890');
+  assert.equal(JSON.stringify(result), JSON.stringify({version: 1, installed: true, resumed: false, spreadsheetId: 'sheet-id', labelId: 'Label_123',
+    triggerCreated: true, reviewTriggerCreated: true, locale: 'en', timeZone: 'Europe/Rome'}));
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].url, 'https://secretmanager.googleapis.com/v1/projects/vertex-project/secrets/mycoupons-bootstrap/versions/7:access');
+  assert.equal(requests[0].options.headers.Authorization, 'Bearer oauth-token');
+  assert.equal(requests[1].url, 'https://cloudresourcemanager.googleapis.com/v1/projects/vertex-project');
+  assert.equal(requests[1].options.headers.Authorization, 'Bearer oauth-token');
+});
+
+test('bootstrap rejects malformed and foreign resources or payloads without installing', () => {
+  const {ctx, config} = harness();
+  let requested = 0;
+  let installed = 0;
+  ctx.UrlFetchApp = {fetch: () => { requested += 1; return bootstrapSecret('{"version":1}'); }};
+  ctx.beginMyCouponsInstallation = () => { installed += 1; };
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/other/versions/7'), /RESOURCE/);
+  assert.equal(requested, 0);
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/latest'), /RESOURCE/);
+  assert.equal(requested, 0);
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /CONFIG/);
+  assert.equal(installed, 0);
+  ctx.UrlFetchApp.fetch = () => bootstrapSecret(bootstrapPayload({...config, vertexProject: 'foreign-project'}));
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
+  assert.equal(installed, 0);
+});
+
+test('bootstrap rejects a missing or mismatched Secret Manager response identity before mutation', () => {
+  const {ctx, properties, config} = harness();
+  delete properties.MYCOUPONS_CONFIG;
+  const payload = bootstrapPayload({...config, vertexProject: 'vertex-project'});
+  let installed = 0;
+  ctx.beginMyCouponsInstallation = () => { installed += 1; };
+  ctx.UrlFetchApp = {fetch: () => bootstrapSecret(payload, {name: 'projects/123456789/secrets/mycoupons-bootstrap/versions/8'})};
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
+  assert.equal(properties.GEMINI_API_KEY, undefined);
+  assert.equal(installed, 0);
+  ctx.UrlFetchApp.fetch = () => ({getResponseCode: () => 200, getContentText: () => JSON.stringify({
+    payload: {data: Buffer.from(payload).toString('base64'), dataCrc32c: '0'}
+  })});
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
+  assert.equal(properties.GEMINI_API_KEY, undefined);
+  assert.equal(installed, 0);
+});
+
+test('bootstrap rejects a canonical Secret Manager project number that differs from the resolved project', () => {
+  const {ctx, properties, config} = harness();
+  delete properties.MYCOUPONS_CONFIG;
+  const payload = bootstrapPayload({...config, vertexProject: 'vertex-project'});
+  let installed = 0;
+  ctx.beginMyCouponsInstallation = () => { installed += 1; };
+  ctx.UrlFetchApp = {fetch: url => {
+    if (url.startsWith('https://secretmanager.googleapis.com/')) {
+      return bootstrapSecret(payload, {name: 'projects/999999999/secrets/mycoupons-bootstrap/versions/7'});
+    }
+    if (url === 'https://cloudresourcemanager.googleapis.com/v1/projects/vertex-project') {
+      return {getResponseCode: () => 200, getContentText: () => JSON.stringify({
+        projectId: 'vertex-project', projectNumber: '123456789'
+      })};
+    }
+    assert.fail('unexpected bootstrap request: ' + url);
+  }};
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
+  assert.equal(installed, 0);
+  assert.equal(properties.GEMINI_API_KEY, undefined);
+  assert.equal(properties.MYCOUPONS_CONFIG, undefined);
+});
+
+test('bootstrap requires every non-persisted installer configuration field', () => {
+  const {ctx, properties, config} = harness();
+  delete properties.MYCOUPONS_CONFIG;
+  const incomplete = {...config, vertexProject: 'vertex-project'};
+  delete incomplete.model;
+  let installed = 0;
+  ctx.beginMyCouponsInstallation = () => { installed += 1; };
+  ctx.UrlFetchApp = {fetch: () => bootstrapSecret(bootstrapPayload(incomplete))};
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /CONFIG/);
+  assert.equal(installed, 0);
+  assert.equal(properties.GEMINI_API_KEY, undefined);
+});
+
+test('bootstrap verifies Secret Manager dataCrc32c before parsing or mutation', () => {
+  const {ctx, properties, config} = harness();
+  delete properties.MYCOUPONS_CONFIG;
+  const payload = bootstrapPayload({...config, vertexProject: 'vertex-project'});
+  let installed = 0;
+  ctx.beginMyCouponsInstallation = () => { installed += 1; };
+  ctx.UrlFetchApp = {fetch: () => bootstrapSecret(payload, {checksum: '0'})};
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
+  assert.equal(installed, 0);
+  assert.equal(properties.GEMINI_API_KEY, undefined);
+});
+
+test('bootstrap rejects duplicate top-level and configuration keys before mutation', () => {
+  const {ctx, properties, config} = harness();
+  delete properties.MYCOUPONS_CONFIG;
+  const proposed = {...config, vertexProject: 'vertex-project'};
+  const key = 'AIza12345678901234567890';
+  const duplicateTopLevel = '{"version":1,"config":' + JSON.stringify(proposed) +
+    ',"geminiApiKey":"' + key + '","geminiApiKey":"' + key + '"}';
+  const duplicateConfig = '{"version":1,"config":' + JSON.stringify(proposed).replace(
+    '"ownerEmail":"owner@example.com"', '"ownerEmail":"owner@example.com","ownerEmail":"owner@example.com"') +
+    ',"geminiApiKey":"' + key + '"}';
+  let installed = 0;
+  ctx.beginMyCouponsInstallation = () => { installed += 1; };
+  ctx.UrlFetchApp = {fetch: () => bootstrapSecret(duplicateTopLevel)};
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /CONFIG/);
+  ctx.UrlFetchApp.fetch = () => bootstrapSecret(duplicateConfig);
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /CONFIG/);
+  assert.equal(installed, 0);
+  assert.equal(properties.GEMINI_API_KEY, undefined);
+});
+
+test('bootstrap fails closed on an unauthorized caller or Secret Manager HTTP error', () => {
+  const {ctx, properties, config} = harness();
+  const persisted = {...config, vertexProject: 'vertex-project'};
+  properties.MYCOUPONS_CONFIG = JSON.stringify(persisted);
+  let requested = 0;
+  ctx.UrlFetchApp = {fetch: () => { requested += 1; return {getResponseCode: () => 403, getContentText: () => 'sensitive body'}; }};
+  ctx.Session.getEffectiveUser = () => ({getEmail: () => 'other@example.com'});
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /OWNER/);
+  assert.equal(requested, 0);
+  ctx.Session.getEffectiveUser = () => ({getEmail: () => persisted.ownerEmail});
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
+  assert.equal(requested, 1);
+});
+
+test('bootstrap never reads a version outside the persisted Vertex project', () => {
+  const {ctx, properties, config} = harness();
+  properties.MYCOUPONS_CONFIG = JSON.stringify({...config, vertexProject: 'vertex-project'});
+  let requested = 0;
+  ctx.UrlFetchApp = {fetch: () => { requested += 1; return bootstrapSecret('{}'); }};
+  assert.throws(() => ctx.bootstrapFromSecret('projects/foreign-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
+  assert.equal(requested, 0);
+});
+
+test('bootstrap restores the prior key and leaves secret data out of errors when installation fails', () => {
+  const {ctx, properties, config} = harness();
+  delete properties.MYCOUPONS_CONFIG;
+  const secret = 'AIza12345678901234567890';
+  const prior = 'AIza98765432109876543210';
+  properties.GEMINI_API_KEY = prior;
+  ctx.UrlFetchApp = {fetch: bootstrapFetch(bootstrapPayload({...config, vertexProject: 'vertex-project'}, secret))};
+  ctx.beginMyCouponsInstallation = () => { throw new Error('INSTALL_FAILED'); };
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), error => {
+    assert.equal(error.message, 'INSTALL_FAILED');
+    assert.equal(error.message.includes(secret), false);
+    return true;
+  });
+  assert.equal(properties.GEMINI_API_KEY, prior);
+});
+
+test('bootstrap restores the prior configuration and key when transactional installation fails', () => {
+  const {ctx, properties, config} = harness();
+  const previous = {...config, vertexProject: 'vertex-project'};
+  const replacement = {...previous, model: 'gemini-replacement'};
+  const priorKey = 'AIza98765432109876543210';
+  properties.MYCOUPONS_CONFIG = JSON.stringify(previous);
+  properties.GEMINI_API_KEY = priorKey;
+  ctx.UrlFetchApp = {fetch: bootstrapFetch(bootstrapPayload(replacement))};
+  ctx.openSpreadsheetById_ = id => ({getId: () => id});
+  ctx.assertPrivateSpreadsheet_ = () => {};
+  ctx.ensureSheetState_ = input => {
+    properties.MYCOUPONS_CONFIG = JSON.stringify({...input, labelId: 'Label_123'});
+    return {spreadsheet: {getId: () => input.spreadsheetId}, label: {id: 'Label_123'}};
+  };
+  ctx.installReviewEditTrigger_ = () => ({created: false});
+  ctx.installDailyImportTrigger = () => { throw new Error('TRIGGER'); };
+  assert.throws(() => ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7'), /TRIGGER/);
+  assert.equal(properties.MYCOUPONS_CONFIG, JSON.stringify(previous));
+  assert.equal(properties.GEMINI_API_KEY, priorKey);
 });
 
 test('installation status reports an unconfigured deployment without masking malformed state', () => {

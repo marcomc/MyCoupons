@@ -5,6 +5,7 @@
 - [Prerequisites](#prerequisites)
 - [Local preparation](#local-preparation)
 - [Apps Script setup](#apps-script-setup)
+- [Secret Manager bootstrap](#secret-manager-bootstrap)
 - [Recovery](#recovery)
 - [Live validation](#live-validation)
 
@@ -47,14 +48,36 @@ and the installable `onReviewEdit` trigger; it rejects ambiguous matches and
 non-private sharing, and preserves existing headers and rows. Store secrets
 only in Script Properties.
 
-The Apps Script editor does not pass arguments to functions. For first setup,
-deploy the owner-only Execution API deployment, authenticate as the owner, and
-invoke `beginMyCouponsInstallation` with a JSON request containing the same
-non-secret fields as `config/example.json`. Alternatively, use an
-operator-owned wrapper that stores the object temporarily in the
-`MYCOUPONS_BOOTSTRAP_CONFIG` Script Property and invokes the no-argument
-`beginMyCouponsInstallationFromBootstrapProperty` function. Delete the property
-after setup; do not commit the wrapper or private file.
+The Apps Script editor does not pass arguments to functions. For direct manual
+setup, deploy the owner-only Execution API deployment, authenticate as the
+owner, and invoke `beginMyCouponsInstallation` with the non-secret fields from
+`config/example.json`.
+
+## Secret Manager bootstrap
+
+The future operator CLI uses the owner-only Execution API function
+`bootstrapFromSecret(secretVersion)`. It writes one immutable, numeric Secret
+Manager version named
+`projects/VERTEX_PROJECT/secrets/mycoupons-bootstrap/versions/NUMBER`; aliases
+such as `latest`, other secret names, and other projects are rejected. The
+resource project must match the persisted configuration when present, otherwise
+the proposed `config.vertexProject` in the secret payload.
+
+The UTF-8 JSON secret payload has exactly these fields:
+
+```json
+{"version":1,"config":{...},"geminiApiKey":"AIza..."}
+```
+
+`config` must be the complete current `beginMyCouponsInstallation` input and
+must specify `vertexProject`. The endpoint fetches the version with its own
+Apps Script OAuth token, verifies the exact payload and owner, writes only the
+Gemini key to Script Properties, then invokes the normal transactional
+installer. It returns only the non-secret installation result. On failure it
+restores the prior key and the installer restores its prior configuration; it
+does not return or log the key or Secret Manager response. The CLI disables the
+temporary version only after a successful call. Do not use
+`MYCOUPONS_BOOTSTRAP_CONFIG` for secret-bearing data.
 
 ## Recovery
 
