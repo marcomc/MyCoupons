@@ -11,11 +11,19 @@ function installDailyImportTrigger() {
     const triggers = ownedImportTriggers_();
     if (triggers.length > 1) fail_('RESOURCE');
     if (triggers.length === 1) return {created: false, trigger: triggers[0]};
-    const trigger = ScriptApp.newTrigger(MC_SCHEDULED_HANDLER).timeBased().atHour(8)
-      .everyDays(1).inTimezone(c.timeZone).create();
-    if (!trigger || trigger.getHandlerFunction() !== MC_SCHEDULED_HANDLER || typeof trigger.getUniqueId !== 'function') fail_('RESOURCE');
-    props_().setProperty(MC_TRIGGER_ID_KEY, String(trigger.getUniqueId()));
-    return {created: true, trigger: trigger};
+    let trigger;
+    try {
+      trigger = ScriptApp.newTrigger(MC_SCHEDULED_HANDLER).timeBased().atHour(8)
+        .everyDays(1).inTimezone(c.timeZone).create();
+      if (!trigger || trigger.getHandlerFunction() !== MC_SCHEDULED_HANDLER || typeof trigger.getUniqueId !== 'function') fail_('RESOURCE');
+      props_().setProperty(MC_TRIGGER_ID_KEY, String(trigger.getUniqueId()));
+      return {created: true, trigger: trigger};
+    } catch (e) {
+      if (trigger) {
+        try { ScriptApp.deleteTrigger(trigger); } catch (ignored) {}
+      }
+      throw e;
+    }
   });
 }
 

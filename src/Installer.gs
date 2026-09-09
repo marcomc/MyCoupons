@@ -20,8 +20,8 @@ function installMyCoupons(input) {
       validateInstallerInput_(config_(), true);
     assertOwner_(config);
     const previous = props_().getProperty(MC.configKey);
+    let previousConfig = null;
     if (previous) {
-      let previousConfig;
       try { previousConfig = validateConfig_(JSON.parse(previous)); } catch (e) { fail_('CONFIG'); }
       if (config.spreadsheetId && config.spreadsheetId !== previousConfig.spreadsheetId) {
         assertPrivateSpreadsheet_(openSpreadsheetById_(config.spreadsheetId), config);
@@ -31,14 +31,26 @@ function installMyCoupons(input) {
       if (matches.length > 1) fail_('RESOURCE');
       if (matches.length === 1) assertPrivateSpreadsheet_(openSpreadsheetById_(matches[0]), config);
     }
-    const state = ensureSheetState_(config);
-    assertPrivateSpreadsheet_(state.spreadsheet, config);
-    const reviewTrigger = installReviewEditTrigger_(state.spreadsheet);
-    const trigger = installDailyImportTrigger();
-    return {version: MC_INSTALLER_VERSION, installed: true, resumed: !!config.spreadsheetId,
-      spreadsheetId: String(state.spreadsheet.getId()), labelId: String(state.label.id),
-      triggerCreated: !!trigger.created, reviewTriggerCreated: !!reviewTrigger.created,
-      locale: config.locale, timeZone: config.timeZone};
+    let reviewTrigger;
+    try {
+      const state = ensureSheetState_(config);
+      assertPrivateSpreadsheet_(state.spreadsheet, config);
+      reviewTrigger = installReviewEditTrigger_(state.spreadsheet);
+      const trigger = installDailyImportTrigger();
+      return {version: MC_INSTALLER_VERSION, installed: true, resumed: !!config.spreadsheetId,
+        spreadsheetId: String(state.spreadsheet.getId()), labelId: String(state.label.id),
+        triggerCreated: !!trigger.created, reviewTriggerCreated: !!reviewTrigger.created,
+        locale: config.locale, timeZone: config.timeZone};
+    } catch (e) {
+      if (previous === null) props_().deleteProperty(MC.configKey);
+      else props_().setProperty(MC.configKey, previous);
+      if (previousConfig && reviewTrigger && reviewTrigger.created) {
+        try { installReviewEditTrigger_(openSpreadsheetById_(previousConfig.spreadsheetId)); } catch (ignored) {}
+      } else if (!previousConfig && reviewTrigger && reviewTrigger.created) {
+        try { removeReviewEditTriggers_(); } catch (ignored) {}
+      }
+      throw e;
+    }
   });
 }
 
@@ -46,8 +58,7 @@ function beginMyCouponsInstallation(input) {
   return withLock_(function () {
     const config = validateInstallerInput_(input, false);
     assertOwner_(config);
-    props_().setProperty(MC.configKey, JSON.stringify(config));
-    return installMyCoupons();
+    return installMyCoupons(config);
   });
 }
 
@@ -73,7 +84,10 @@ function assertPrivateSpreadsheet_(spreadsheet, config) {
   if (typeof Drive !== 'undefined' && Drive.Permissions && Drive.Permissions.list) {
     let token = '';
     do {
-      const response = Drive.Permissions.list(String(spreadsheet.getId()), {pageToken: token || undefined});
+      const response = Drive.Permissions.list(String(spreadsheet.getId()), {
+        pageToken: token || undefined,
+        fields: 'nextPageToken,permissions(type,role,emailAddress)'
+      });
       (response.permissions || []).forEach(function (permission) {
         if (permission.type !== 'user' || String(permission.role).toLowerCase() !== 'owner' ||
             String(permission.emailAddress || '').toLowerCase() !== String(config.ownerEmail).toLowerCase()) fail_('RESOURCE');

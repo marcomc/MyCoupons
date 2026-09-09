@@ -6,7 +6,9 @@ function onReviewEdit(e) {
   const c = config_();
   if (sheet.getName() !== c.sheetName || e.range.getColumn() !== MC.headers.indexOf('Action needed') + 1 ||
       e.range.getRow() < 2 || MC_REVIEW_ACTIONS.indexOf(String(e.value)) < 0) return;
-  assertPrivateSpreadsheet_(sheet.getParent(), c);
+  const spreadsheet = sheet.getParent();
+  if (!spreadsheet || typeof spreadsheet.getId !== 'function' || String(spreadsheet.getId()) !== String(c.spreadsheetId)) return;
+  assertPrivateSpreadsheet_(spreadsheet, c);
   withLock_(function () { processReviewAction_(sheet, e.range.getRow(), String(e.value), c); });
 }
 
