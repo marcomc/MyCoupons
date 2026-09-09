@@ -189,7 +189,9 @@ npm test
 `installDailyImportTrigger()` installs or reuses one daily clock trigger at
 approximately 08:00 in `Europe/Rome`; Apps Script may apply scheduling jitter.
 `removeDailyImportTrigger()` removes only that owned trigger and refuses to
-choose between duplicates. `runScheduledImport()` serializes the import,
+choose between duplicates. When its stored trigger ID is missing, configured
+automation removal can recover exactly one matching scheduled trigger; duplicate
+matches remain ambiguous. `runScheduledImport()` serializes the import,
 notifies the configured owner only for new imports, newly created review rows,
 or changed errors. Script Properties store a bounded fingerprint/timestamp
 after delivery, plus a bounded pending summary containing validated IDs and

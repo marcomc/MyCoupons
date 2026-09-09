@@ -199,6 +199,44 @@ test('daily trigger ownership rejects duplicate active handler triggers', () => 
   assert.throws(() => ctx.ownedImportTriggers_(), /RESOURCE/);
 });
 
+test('automation removal recovers one scheduled trigger after its stored ID is lost', () => {
+  const {ctx, properties} = harness();
+  const trigger = {getHandlerFunction: () => 'runScheduledImport', getEventType: () => 'CLOCK'};
+  const removed = [];
+  delete properties.MYCOUPONS_TRIGGER_ID;
+  ctx.ScriptApp.getProjectTriggers = () => [trigger];
+  ctx.ScriptApp.deleteTrigger = value => { removed.push(value); };
+  const result = ctx.removeMyCouponsAutomation();
+  assert.equal(result.scheduledRemoved, true);
+  assert.equal(result.reviewRemoved, 0);
+  assert.deepEqual(removed, [trigger]);
+});
+
+test('automation removal keeps missing-ID scheduled trigger duplicates ambiguous', () => {
+  const {ctx, properties} = harness();
+  const first = {getHandlerFunction: () => 'runScheduledImport', getEventType: () => 'CLOCK'};
+  const second = {getHandlerFunction: () => 'runScheduledImport', getEventType: () => 'CLOCK'};
+  const removed = [];
+  delete properties.MYCOUPONS_TRIGGER_ID;
+  ctx.ScriptApp.getProjectTriggers = () => [first, second];
+  ctx.ScriptApp.deleteTrigger = value => { removed.push(value); };
+  assert.throws(() => ctx.removeMyCouponsAutomation(), /RESOURCE/);
+  assert.deepEqual(removed, []);
+});
+
+test('automation removal retains owner enforcement during missing-ID recovery', () => {
+  const {ctx, properties} = harness();
+  const trigger = {getHandlerFunction: () => 'runScheduledImport', getEventType: () => 'CLOCK'};
+  const removed = [];
+  delete properties.MYCOUPONS_TRIGGER_ID;
+  ctx.Session.getEffectiveUser = () => ({getEmail: () => 'other@example.com'});
+  ctx.Gmail.Users.getProfile = () => ({emailAddress: 'other@example.com'});
+  ctx.ScriptApp.getProjectTriggers = () => [trigger];
+  ctx.ScriptApp.deleteTrigger = value => { removed.push(value); };
+  assert.throws(() => ctx.removeMyCouponsAutomation(), /OWNER/);
+  assert.deepEqual(removed, []);
+});
+
 test('private spreadsheet permission inspection requests owner email fields', () => {
   const {ctx, config} = harness();
   let options;
