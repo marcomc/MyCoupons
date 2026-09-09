@@ -118,16 +118,6 @@ def _utf16_units(value: str) -> int:
     return len(value.encode("utf-16-le")) // 2
 
 
-def _assert_regular_private_file(path: Path) -> None:
-    _assert_not_symlink(path)
-    try:
-        file_stat = path.stat()
-    except OSError as exc:
-        raise ProvisionerError("private provisioning file cannot be inspected") from exc
-    if not stat.S_ISREG(file_stat.st_mode) or not _is_private_mode(file_stat.st_mode, 0o600):
-        raise ProvisionerError("private provisioning file must be a regular mode-0600 file")
-
-
 def _assert_private_directory(path: Path) -> None:
     _assert_not_symlink(path)
     try:
@@ -181,6 +171,8 @@ def _assert_outside_worktree(path: Path) -> None:
 def ensure_state_dir(path: Path) -> Path:
     """Create or validate a local state directory without following symlinks."""
     path = Path(os.path.abspath(os.fspath(path.expanduser())))
+    _assert_not_symlink(path)
+    path = path.resolve(strict=False)
     _assert_outside_worktree(path)
     _assert_existing_parents_safe(path)
     if path.exists():
@@ -194,14 +186,30 @@ def ensure_state_dir(path: Path) -> Path:
     return path
 
 
-def _read_json_file(path: Path, *, maximum_bytes: int) -> Any:
-    _assert_regular_private_file(path)
+def _read_private_bytes(path: Path, *, maximum_bytes: int) -> bytes:
+    descriptor = -1
     try:
-        raw = path.read_bytes()
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode) or not _is_private_mode(file_stat.st_mode, 0o600):
+            raise ProvisionerError("private provisioning file must be a regular mode-0600 file")
+        if file_stat.st_size > maximum_bytes:
+            raise ProvisionerError("private provisioning file is too large")
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = -1
+            raw = handle.read(maximum_bytes + 1)
     except OSError as exc:
         raise ProvisionerError("unable to read private provisioning file") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if len(raw) > maximum_bytes:
         raise ProvisionerError("private provisioning file is too large")
+    return raw
+
+
+def _read_json_file(path: Path, *, maximum_bytes: int) -> Any:
+    raw = _read_private_bytes(path, maximum_bytes=maximum_bytes)
     try:
         result = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_object)
         _assert_well_formed_unicode(result)
@@ -248,7 +256,7 @@ def load_config(path: Path) -> dict[str, Any]:
             datetime.date.fromisoformat(config["initialDate"])
         except ValueError as exc:
             raise ProvisionerError("installation config initialDate is invalid") from exc
-    if config["spreadsheetId"] and not re.fullmatch(r"[\w-]+", config["spreadsheetId"]):
+    if config["spreadsheetId"] and not re.fullmatch(r"[A-Za-z0-9_-]+", config["spreadsheetId"]):
         raise ProvisionerError("installation config spreadsheetId is invalid")
     return config
 
@@ -290,13 +298,12 @@ def _write_private_atomic(path: Path, content: bytes) -> None:
 def _load_or_create_identity_key(state_dir: Path) -> bytes:
     key_path = state_dir / IDENTITY_FILE
     if key_path.exists():
-        _assert_regular_private_file(key_path)
-        key = key_path.read_bytes()
+        key = _read_private_bytes(key_path, maximum_bytes=32)
         if len(key) != 32:
             raise ProvisionerError("installation identity key is malformed")
         return key
     _write_private_atomic(key_path, secrets.token_bytes(32))
-    return key_path.read_bytes()
+    return _read_private_bytes(key_path, maximum_bytes=32)
 
 
 def _identity_proof(key: bytes, state: Mapping[str, Any]) -> str:
@@ -369,26 +376,30 @@ class InstallationLock:
 def initialize_state(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any]:
     """Create resumable state or safely resume the exact same installation."""
     state_dir = ensure_state_dir(state_dir)
-    digest = config_digest(config)
     with InstallationLock(state_dir):
-        key = _load_or_create_identity_key(state_dir)
-        state_path = state_dir / STATE_FILE
-        if state_path.exists():
-            state = _validate_state(_read_json_file(state_path, maximum_bytes=4096), key)
-            if state["configDigest"] != digest:
-                raise ProvisionerError("installation config does not match persisted installation identity")
-            return state
-        installation_id = str(uuid.uuid4())
-        state: dict[str, Any] = {
-            "version": STATE_VERSION,
-            "installationId": installation_id,
-            "configDigest": digest,
-            "phase": "initialized",
-            "bundleDigest": None,
-        }
-        state["identityProof"] = _identity_proof(key, state)
-        _write_private_atomic(state_path, _canonical_json(state))
+        return _initialize_state_locked(state_dir, config)
+
+
+def _initialize_state_locked(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any]:
+    digest = config_digest(config)
+    key = _load_or_create_identity_key(state_dir)
+    state_path = state_dir / STATE_FILE
+    if state_path.exists():
+        state = _validate_state(_read_json_file(state_path, maximum_bytes=4096), key)
+        if state["configDigest"] != digest:
+            raise ProvisionerError("installation config does not match persisted installation identity")
         return state
+    installation_id = str(uuid.uuid4())
+    state: dict[str, Any] = {
+        "version": STATE_VERSION,
+        "installationId": installation_id,
+        "configDigest": digest,
+        "phase": "initialized",
+        "bundleDigest": None,
+    }
+    state["identityProof"] = _identity_proof(key, state)
+    _write_private_atomic(state_path, _canonical_json(state))
+    return state
 
 
 def mark_bundle_validated(state_dir: Path, config: Mapping[str, Any], digest: str) -> dict[str, Any]:
@@ -396,17 +407,30 @@ def mark_bundle_validated(state_dir: Path, config: Mapping[str, Any], digest: st
         raise ProvisionerError("bundle digest is invalid")
     state_dir = ensure_state_dir(state_dir)
     with InstallationLock(state_dir):
-        key = _load_or_create_identity_key(state_dir)
-        state_path = state_dir / STATE_FILE
-        state = _validate_state(_read_json_file(state_path, maximum_bytes=4096), key)
-        if state["configDigest"] != config_digest(config):
-            raise ProvisionerError("installation config does not match persisted installation identity")
-        state = dict(state)
-        state["phase"] = "bundle-validated"
-        state["bundleDigest"] = digest
-        state["identityProof"] = _identity_proof(key, state)
-        _write_private_atomic(state_path, _canonical_json(state))
-        return state
+        return _mark_bundle_validated_locked(state_dir, config, digest)
+
+
+def _mark_bundle_validated_locked(state_dir: Path, config: Mapping[str, Any], digest: str) -> dict[str, Any]:
+    key = _load_or_create_identity_key(state_dir)
+    state_path = state_dir / STATE_FILE
+    state = _validate_state(_read_json_file(state_path, maximum_bytes=4096), key)
+    if state["configDigest"] != config_digest(config):
+        raise ProvisionerError("installation config does not match persisted installation identity")
+    state = dict(state)
+    state["phase"] = "bundle-validated"
+    state["bundleDigest"] = digest
+    state["identityProof"] = _identity_proof(key, state)
+    _write_private_atomic(state_path, _canonical_json(state))
+    return state
+
+
+def validate_and_mark_bundle(state_dir: Path, config: Mapping[str, Any], source_dir: Path) -> tuple[str, dict[str, Any]]:
+    """Validate and persist one source digest under a single installation lock."""
+    state_dir = ensure_state_dir(state_dir)
+    with InstallationLock(state_dir):
+        digest = validate_bundle(source_dir)
+        _initialize_state_locked(state_dir, config)
+        return digest, _mark_bundle_validated_locked(state_dir, config, digest)
 
 
 def _iter_bundle_files(source_dir: Path) -> Iterable[Path]:
@@ -459,7 +483,7 @@ def validate_bundle(source_dir: Path) -> str:
     scopes = manifest.get("oauthScopes")
     if not isinstance(scopes, list) or len(scopes) != len(expected_scopes) or not all(isinstance(scope, str) for scope in scopes):
         raise ProvisionerError("Apps Script manifest OAuth scope contract is invalid")
-    if manifest.get("executionApi") != {"access": "MYSELF"} or set(scopes) != expected_scopes:
+    if "webapp" in manifest or manifest.get("executionApi") != {"access": "MYSELF"} or set(scopes) != expected_scopes:
         raise ProvisionerError("Apps Script manifest access or OAuth scope contract is invalid")
     dependencies = manifest.get("dependencies")
     services = dependencies.get("enabledAdvancedServices") if isinstance(dependencies, dict) else None
@@ -535,9 +559,12 @@ def authenticated_identity_preflight(expected_owner: str, project_id: str) -> di
     if gcloud is None:
         raise ProvisionerError("gcloud is required for authentication preflight")
     accounts = _run_json((gcloud, "auth", "list", "--format=json", "--quiet"))
-    if not isinstance(accounts, list):
+    if not isinstance(accounts, list) or any(
+        not isinstance(entry, dict) or not isinstance(entry.get("account"), str) or not isinstance(entry.get("status"), str)
+        for entry in accounts
+    ):
         raise ProvisionerError("read-only authentication preflight returned unexpected accounts")
-    active = [entry for entry in accounts if isinstance(entry, dict) and entry.get("status") == "ACTIVE" and isinstance(entry.get("account"), str)]
+    active = [entry for entry in accounts if entry["status"] == "ACTIVE"]
     if len(active) != 1 or active[0]["account"].casefold() != expected_owner.casefold():
         raise ProvisionerError("active gcloud identity is absent, ambiguous, or does not match ownerEmail")
     project = _run_json((gcloud, "projects", "describe", project_id, "--format=json", "--quiet"))

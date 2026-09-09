@@ -15,9 +15,8 @@ from .core import (
     discover_tools,
     initialize_state,
     load_config,
-    mark_bundle_validated,
     oauth_authorization_command,
-    validate_bundle,
+    validate_and_mark_bundle,
 )
 
 
@@ -63,9 +62,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             _emit({"installationId": state["installationId"], "phase": state["phase"], "resumed": existed})
             return 0
         if args.command == "validate-bundle":
-            digest = validate_bundle(args.source_dir)
-            state = initialize_state(args.state_dir, config)
-            state = mark_bundle_validated(args.state_dir, config, digest)
+            digest, state = validate_and_mark_bundle(args.state_dir, config, args.source_dir)
             _emit({"bundleDigest": digest, "installationId": state["installationId"], "phase": state["phase"]})
             return 0
         if args.command == "preflight-identity":

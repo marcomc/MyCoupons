@@ -89,6 +89,19 @@ class ProvisionerConfigTests(unittest.TestCase):
             valid_short_location["vertexLocation"] = "us"
             private_json(config_path, valid_short_location)
             self.assertEqual(core.load_config(config_path)["vertexLocation"], "us")
+            invalid_identifier = valid_config()
+            invalid_identifier["spreadsheetId"] = "café"
+            private_json(config_path, invalid_identifier)
+            with self.assertRaisesRegex(core.ProvisionerError, "spreadsheetId"):
+                core.load_config(config_path)
+
+    def test_config_size_limit_is_checked_before_an_unbounded_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path = Path(temporary) / "config.json"
+            config_path.write_bytes(b"{" + b"x" * (core.MAX_CONFIG_BYTES + 1) + b"}")
+            config_path.chmod(0o600)
+            with self.assertRaisesRegex(core.ProvisionerError, "too large"):
+                core.load_config(config_path)
 
 
 class ProvisionerStateTests(unittest.TestCase):
@@ -106,6 +119,11 @@ class ProvisionerStateTests(unittest.TestCase):
                     core.ensure_state_dir(worktree / "private-state-forbidden")
             finally:
                 os.chdir(original)
+        with tempfile.TemporaryDirectory() as temporary:
+            linked_root = Path(temporary) / "linked-root"
+            linked_root.symlink_to(ROOT / "src", target_is_directory=True)
+            with self.assertRaisesRegex(core.ProvisionerError, "outside the Git worktree"):
+                core.ensure_state_dir(linked_root / "locales" / "private-state-forbidden")
 
     def test_state_creates_missing_private_parents(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -155,6 +173,20 @@ class ProvisionerStateTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "not bound"):
                 core.initialize_state(state_dir, config)
 
+    def test_identity_key_uses_a_bounded_private_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_path = root / "config.json"
+            private_json(config_path, valid_config())
+            config = core.load_config(config_path)
+            state_dir = root / "state"
+            core.initialize_state(state_dir, config)
+            key_path = state_dir / "identity.key"
+            key_path.write_bytes(b"x" * 33)
+            key_path.chmod(0o600)
+            with self.assertRaisesRegex(core.ProvisionerError, "too large"):
+                core.initialize_state(state_dir, config)
+
     def test_state_rejects_symlink_and_nonblocking_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -191,6 +223,12 @@ class ProvisionerBundleTests(unittest.TestCase):
             (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(core.ProvisionerError, "access"):
                 core.validate_bundle(copied)
+            manifest["executionApi"] = {"access": "MYSELF"}
+            manifest["webapp"] = {"access": "ANYONE_ANONYMOUS"}
+            (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(core.ProvisionerError, "access"):
+                core.validate_bundle(copied)
+            del manifest["webapp"]
             (copied / "Injected.gs").write_text("const changed = true;\n", encoding="utf-8")
             manifest["executionApi"] = {"access": "MYSELF"}
             (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -208,6 +246,25 @@ class ProvisionerBundleTests(unittest.TestCase):
 
             with mock.patch("provisioner.core.json.loads", side_effect=replace_manifest_after_capture):
                 self.assertEqual(html_digest, core.validate_bundle(copied))
+
+    def test_bundle_validation_holds_the_installation_lock_until_state_is_written(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_path = root / "config.json"
+            private_json(config_path, valid_config())
+            config = core.load_config(config_path)
+            state_dir = root / "state"
+            original_validate = core.validate_bundle
+
+            def validate_while_locked(source_dir: Path) -> str:
+                with self.assertRaisesRegex(core.ProvisionerError, "already running"):
+                    with core.InstallationLock(state_dir):
+                        pass
+                return original_validate(source_dir)
+
+            with mock.patch("provisioner.core.validate_bundle", side_effect=validate_while_locked):
+                digest, state = core.validate_and_mark_bundle(state_dir, config, ROOT / "src")
+            self.assertEqual(state["bundleDigest"], digest)
 
 
 def shutil_copytree(source: Path, target: Path) -> None:
@@ -258,6 +315,12 @@ class ProvisionerCommandTests(unittest.TestCase):
             "provisioner.core.subprocess.run", return_value=subprocess.CompletedProcess(("gcloud",), 0, '[{"account":"one","account":"two"}]', "")
         ):
             with self.assertRaisesRegex(core.ProvisionerError, "unexpected output"):
+                core.authenticated_identity_preflight("owner@example.com", "vertex-project")
+        malformed_active = '[{"account":"owner@example.com","status":"ACTIVE"},{"status":"ACTIVE"}]'
+        with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+            "provisioner.core.subprocess.run", return_value=subprocess.CompletedProcess(("gcloud",), 0, malformed_active, "")
+        ):
+            with self.assertRaisesRegex(core.ProvisionerError, "unexpected accounts"):
                 core.authenticated_identity_preflight("owner@example.com", "vertex-project")
 
     def test_cli_rejects_secret_like_config_output(self) -> None:
