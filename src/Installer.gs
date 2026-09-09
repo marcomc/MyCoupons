@@ -1,6 +1,10 @@
 const MC_INSTALLER_VERSION = 1;
 const MC_INSTALLER_LIMITS = Object.freeze({maxConfigUnits: 8000});
 const MC_REVIEW_HANDLER = 'onReviewEdit';
+const MC_BOOTSTRAP = Object.freeze({
+  secretName: 'mycoupons-bootstrap', version: 1, maxPayloadUnits: 12000,
+  maxSecretDataChars: 16384, maxApiKeyUnits: 512
+});
 
 function validateInstallerInput_(input, allowPersistedIdentity) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail_('CONFIG');
@@ -73,6 +77,84 @@ function beginMyCouponsInstallationFromBootstrapProperty() {
   const result = beginMyCouponsInstallation(input);
   props_().deleteProperty('MYCOUPONS_BOOTSTRAP_CONFIG');
   return result;
+}
+
+// This function is intended only for an Execution API deployment with access MYSELF.
+// It deliberately accepts one exact Secret Manager version, never a secret name or alias.
+function bootstrapFromSecret(secretVersion) {
+  return withLock_(function () {
+    const persisted = bootstrapPersistedConfig_();
+    if (persisted) assertOwner_(persisted);
+    const resource = validateBootstrapSecretVersion_(secretVersion, persisted && persisted.vertexProject);
+    const payload = readBootstrapSecret_(resource);
+    const bootstrap = validateBootstrapPayload_(payload);
+    if (resource.project !== bootstrap.config.vertexProject) fail_('RESOURCE');
+    if (persisted && bootstrap.config.vertexProject !== persisted.vertexProject) fail_('RESOURCE');
+    assertOwner_(bootstrap.config);
+    const properties = props_();
+    const previousKey = properties.getProperty('GEMINI_API_KEY');
+    try {
+      properties.setProperty('GEMINI_API_KEY', bootstrap.geminiApiKey);
+      return bootstrapInstallationResult_(beginMyCouponsInstallation(bootstrap.config));
+    } catch (e) {
+      if (previousKey === null) properties.deleteProperty('GEMINI_API_KEY');
+      else properties.setProperty('GEMINI_API_KEY', previousKey);
+      throw e;
+    }
+  });
+}
+
+function bootstrapPersistedConfig_() {
+  const raw = props_().getProperty(MC.configKey);
+  if (!raw) return null;
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch (e) { fail_('CONFIG'); }
+  return validateInstallerInput_(parsed, true);
+}
+
+function validateBootstrapSecretVersion_(value, expectedProject) {
+  if (typeof value !== 'string') fail_('RESOURCE');
+  const match = /^projects\/([a-z][a-z0-9-]{4,28}[a-z0-9])\/secrets\/mycoupons-bootstrap\/versions\/([1-9][0-9]*)$/.exec(value);
+  if (!match || expectedProject && match[1] !== expectedProject) fail_('RESOURCE');
+  return {name: value, project: match[1]};
+}
+
+function readBootstrapSecret_(resource) {
+  let response;
+  try {
+    response = UrlFetchApp.fetch('https://secretmanager.googleapis.com/v1/' + resource.name + ':access', {
+      method: 'get', headers: {Authorization: 'Bearer ' + ScriptApp.getOAuthToken()}, muteHttpExceptions: true
+    });
+  } catch (e) { fail_('RESOURCE'); }
+  if (!response || response.getResponseCode() < 200 || response.getResponseCode() >= 300) fail_('RESOURCE');
+  let body;
+  try { body = JSON.parse(response.getContentText()); } catch (e) { fail_('RESOURCE'); }
+  const data = body && body.payload && body.payload.data;
+  if (typeof data !== 'string' || data.length > MC_BOOTSTRAP.maxSecretDataChars ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) fail_('RESOURCE');
+  try { return Utilities.newBlob(Utilities.base64Decode(data)).getDataAsString(); } catch (e) { fail_('RESOURCE'); }
+}
+
+function validateBootstrapPayload_(raw) {
+  if (typeof raw !== 'string' || raw.length > MC_BOOTSTRAP.maxPayloadUnits) fail_('CONFIG');
+  let payload;
+  try { payload = JSON.parse(raw); } catch (e) { fail_('CONFIG'); }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+    Object.keys(payload).length !== 3 || Object.keys(payload).some(function (key) {
+      return ['version', 'config', 'geminiApiKey'].indexOf(key) < 0;
+    }) || payload.version !== MC_BOOTSTRAP.version || typeof payload.geminiApiKey !== 'string' ||
+    payload.geminiApiKey.length > MC_BOOTSTRAP.maxApiKeyUnits ||
+    !/^AIza[A-Za-z0-9_-]{20,}$/.test(payload.geminiApiKey)) fail_('CONFIG');
+  const config = validateInstallerInput_(payload.config, false);
+  if (!config.vertexProject) fail_('CONFIG');
+  return {config: config, geminiApiKey: payload.geminiApiKey};
+}
+
+function bootstrapInstallationResult_(result) {
+  if (!result || typeof result !== 'object') fail_('INTERNAL');
+  return {version: result.version, installed: result.installed, resumed: result.resumed,
+    spreadsheetId: result.spreadsheetId, labelId: result.labelId, triggerCreated: result.triggerCreated,
+    reviewTriggerCreated: result.reviewTriggerCreated, locale: result.locale, timeZone: result.timeZone};
 }
 
 function assertPrivateSpreadsheet_(spreadsheet, config) {
