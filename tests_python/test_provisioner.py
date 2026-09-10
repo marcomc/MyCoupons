@@ -58,6 +58,18 @@ def valid_cloud_config() -> dict[str, object]:
 
 
 class ProvisionerConfigTests(unittest.TestCase):
+    def test_public_provisioning_template_loads_with_the_complete_cloud_shape(self) -> None:
+        template = ROOT / "config" / "provisioner.example.json"
+        with tempfile.TemporaryDirectory() as temporary:
+            copied = Path(temporary) / "config.json"
+            configured = json.loads(template.read_text(encoding="utf-8"))
+            configured["vertexProject"] = "vertex-project"
+            private_json(copied, configured)
+            loaded = core.load_config(copied)
+        self.assertEqual(set(loaded), core.CONFIG_KEYS)
+        self.assertEqual(loaded["vertexBillingAccount"], "")
+        self.assertEqual(loaded["cloudInstallationId"], "")
+
     def test_config_requires_private_file_and_exact_installer_shape(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             config_path = Path(temporary) / "config.json"

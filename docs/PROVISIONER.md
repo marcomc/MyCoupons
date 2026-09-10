@@ -12,20 +12,25 @@
 
 ## Scope
 
-`python3 -m provisioner.cli` is a standard-library-only local foundation for
-the later provisioning workflow. This increment is deliberately read-only
-toward Google: it does not deploy Apps Script, call the bootstrap endpoint,
-create or alter Cloud resources, access Secret Manager, or read credentials.
+`python3 -m provisioner.cli` is a standard-library-only local provisioner. Its
+`provision-cloud` command creates or adopts the two labelled Cloud projects,
+links the eligible Vertex project to its configured billing account, and enables
+the documented services. It does not deploy Apps Script, call the bootstrap
+endpoint, create an API key or OAuth client, access Secret Manager, or read
+credentials.
 
 Do not use a shared global `clasp` profile. Later deployment work must instead
 use an installation-owned, private authorization location.
 
 ## Private local inputs and state
 
-Copy [`config/example.json`](../config/example.json) outside the repository,
-complete all fields, and set file mode 0600. The file is non-secret but the CLI
-uses a private-file policy so that an installation's identity and configuration
-cannot be silently redirected through broad-permission paths.
+Copy [`config/example.json`](../config/example.json) outside the repository for
+Apps Script-only preparation, or copy
+[`config/provisioner.example.json`](../config/provisioner.example.json) for
+Cloud provisioning. Complete all fields and set file mode 0600. The file is
+non-secret but the CLI uses a private-file policy so that an installation's
+identity and configuration cannot be silently redirected through
+broad-permission paths.
 
 Local state defaults to `${XDG_STATE_HOME:-$HOME/.local/state}/mycoupons`.
 The directory is created mode 0700; its state, key, and lock files are mode
