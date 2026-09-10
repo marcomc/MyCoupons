@@ -2009,7 +2009,7 @@ def _role_can_access_secret_versions(gcloud: str, role: str, owner: str) -> bool
     if not isinstance(permissions, list) or any(not isinstance(permission, str) for permission in permissions):
         raise ProvisionerError("Cloud role access inspection returned invalid data")
     return bool(
-        {"secretmanager.versions.access", "secretmanager.secrets.setIamPolicy", "resourcemanager.projects.setIamPolicy", "*"}
+        {"secretmanager.versions.access", "secretmanager.secrets.setIamPolicy", "resourcemanager.projects.setIamPolicy", "resourcemanager.folders.setIamPolicy", "resourcemanager.organizations.setIamPolicy", "*"}
         & set(permissions)
     )
 
@@ -2370,8 +2370,12 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             installation_label=config["cloudInstallationId"], role="vertex", expected_owner=owner,
             persisted=state["cloud"]["vertex"],
         )
+        _ensure_service(
+            gcloud, config["vertexProject"], "drive.googleapis.com",
+            installation_label=config["cloudInstallationId"], role="vertex", expected_owner=owner,
+            persisted=state["cloud"]["vertex"],
+        )
         _ensure_service(gcloud, config["vertexProject"], "cloudresourcemanager.googleapis.com", installation_label=config["cloudInstallationId"], role="vertex", expected_owner=owner, persisted=state["cloud"]["vertex"])
-        _verify_execution_api_access(access_token, script_id)
         if bootstrap["status"] in {"staging", "replacement-staging"}:
             # An interrupted `versions add` has no durable new-version ID.
             # Reconcile every dedicated-secret version before making this
@@ -2381,6 +2385,7 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             state["bootstrap"] = {"secretVersion": None, "status": "not-started"}
             state = _persist_state_locked(state_dir, state, key)
             bootstrap = state["bootstrap"]
+        _verify_execution_api_access(access_token, script_id)
         if bootstrap["status"] in {"staged", "verified"}:
             _ensure_bootstrap_secret(gcloud, config, owner, project_number)
             secret_version = bootstrap["secretVersion"]

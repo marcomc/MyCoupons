@@ -1291,11 +1291,12 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
 
     def test_project_secret_accessor_rejects_foreign_iam_escalation_role(self) -> None:
         policy = {"bindings": [{"role": "projects/vertex-project/roles/iam-mutator", "members": ["user:other@example.com"]}]}
-        with mock.patch(
-            "provisioner.core._cloud_json", return_value={"includedPermissions": ["resourcemanager.projects.setIamPolicy"]}
-        ):
-            with self.assertRaisesRegex(core.ProvisionerError, "unsafe inherited"):
-                core._assert_owner_only_project_secret_accessor("/safe/gcloud", policy, "owner@example.com")
+        for permission in ("resourcemanager.projects.setIamPolicy", "resourcemanager.folders.setIamPolicy", "resourcemanager.organizations.setIamPolicy"):
+            with self.subTest(permission=permission), mock.patch(
+                "provisioner.core._cloud_json", return_value={"includedPermissions": [permission]}
+            ):
+                with self.assertRaisesRegex(core.ProvisionerError, "unsafe inherited"):
+                    core._assert_owner_only_project_secret_accessor("/safe/gcloud", policy, "owner@example.com")
 
     def test_project_secret_accessor_allows_policy_without_bindings(self) -> None:
         core._assert_owner_only_project_secret_accessor(
