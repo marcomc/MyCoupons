@@ -1003,7 +1003,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 lambda: events.append("cleared"),
             )
         self.assertEqual((script_id, provenance), ("script-1", "created"))
-        self.assertEqual(events, ["intent", ("created", "script-1")])
+        self.assertEqual(events, ["intent", "posted", ("created", "script-1")])
 
     def test_script_create_transport_failure_marks_only_an_ambiguous_attempt_posted(self) -> None:
         state = {
@@ -1076,7 +1076,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 lambda value: events.append(("created", value)), lambda: events.append("cleared"),
             )
         self.assertEqual(result, ("script-1", "created"))
-        self.assertEqual(events, ["cleared", "intent", ("created", "script-1")])
+        self.assertEqual(events, ["cleared", "intent", "posted", ("created", "script-1")])
 
     def _deployment(self, script_id: str = "script-1", deployment_id: str = "deployment-1", version: int = 1) -> dict[str, object]:
         return {
@@ -1304,6 +1304,37 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "unsafe inherited"):
                 core._ensure_bootstrap_secret("/safe/gcloud", config, "owner@example.com", "654321")
         self.assertEqual(events, ["ownership-check", "disable-enabled-versions", "ancestor-check"])
+
+    def test_staged_bootstrap_verifies_secret_ownership_before_exact_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            version = "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1"
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": "a" * 64,
+                    "versionNumber": 1,
+                    "deploymentId": "deployment-1",
+                }
+                state["bootstrap"] = {"secretVersion": version, "status": "staged"}
+                state["phase"] = "apps-script-ready"
+                core._persist_state_locked(state_dir, state, key)
+            events: list[str] = []
+            with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+                "provisioner.core._require_active_gcloud_owner", return_value="owner@example.com"
+            ), mock.patch(
+                "provisioner.core._assert_bootstrap_secret_owned", side_effect=lambda *_args, **_kwargs: events.append("ownership-check")
+            ), mock.patch(
+                "provisioner.core._disable_bootstrap_secret_version", side_effect=core.ProvisionerError("stop after cleanup")
+            ):
+                with self.assertRaisesRegex(core.ProvisionerError, "stop after cleanup"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", None)
+            self.assertEqual(events, ["ownership-check"])
 
     def test_project_secret_accessor_rejects_foreign_inherited_access(self) -> None:
         with mock.patch("provisioner.core._role_can_access_secret_versions", return_value=True):

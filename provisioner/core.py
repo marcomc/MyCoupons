@@ -1750,30 +1750,28 @@ def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapp
     if len(files) == 1:
         return _assert_private_owner_script(files[0], owner_email), "created" if state["phase"] in {"apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted"} else "adopted"
     if state["phase"] == "apps-script-creation-intent":
-        # The durable intent precedes the non-idempotent request.  No project
-        # is ambiguous until a POST can have reached the service.
+        # The pre-send intent is safe to clear: it is persisted before the
+        # may-have-been-sent state, so a process exit here cannot duplicate a
+        # project on retry.
         clear_creation_intent()
     elif state["phase"] in {"apps-script-creation-pending", "apps-script-creation-posted"}:
         raise ProvisionerError("Apps Script project creation is pending Drive visibility")
     persist_creation_intent()
+    # Persist an ambiguous outcome before the non-idempotent request can reach
+    # Apps Script.  A retry now waits for Drive reconciliation instead of
+    # issuing another create request.
+    persist_creation_posted()
     try:
         created = _apps_script_json(access_token, "POST", "https://script.googleapis.com/v1/projects", {"title": APPS_SCRIPT_TITLE})
     except AppsScriptHttpError as exc:
         if 400 <= exc.status < 500:
             clear_creation_intent()
-        else:
-            # A server error can follow remote acceptance of a non-idempotent
-            # create request, so wait for Drive visibility instead of retrying.
-            persist_creation_posted()
         raise
     except ProvisionerError:
-        # A transport failure can follow a remote project creation.  Preserve
-        # that ambiguity rather than issuing a second create request.
-        persist_creation_posted()
+        # The request was already recorded as potentially accepted.
         raise
     script_id = created.get("scriptId") if isinstance(created, dict) else None
     if not isinstance(script_id, str) or not APPS_SCRIPT_ID_RE.fullmatch(script_id):
-        persist_creation_posted()
         raise ProvisionerError("Apps Script project creation returned invalid data")
     # A successful create response is the durable creation boundary.  Record
     # its opaque ID before any Drive metadata request so retries cannot create
@@ -2264,6 +2262,8 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
                 raise ProvisionerError("gcloud is required for secure bootstrap")
             owner = _require_active_gcloud_owner(gcloud, config["ownerEmail"])
             status = state["bootstrap"]["status"]
+            if status in {"staged", "verified"}:
+                _assert_bootstrap_secret_owned(gcloud, config, owner, vertex["projectNumber"], create=False)
             if status == "staged":
                 _disable_bootstrap_secret_version(gcloud, config, owner, vertex["projectNumber"], state["bootstrap"]["secretVersion"])
             elif status in {"staging", "replacement-staging"}:
