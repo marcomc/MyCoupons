@@ -79,6 +79,25 @@ test('owner-only bootstrap reads the exact temporary secret and returns no secre
   assert.equal(requests[1].options.headers.Authorization, 'Bearer oauth-token');
 });
 
+test('bootstrap resumes persisted configuration through the no-argument installation path', () => {
+  const {ctx, properties, config} = harness();
+  const persisted = {...config, vertexProject: 'vertex-project', labelId: 'Label_123'};
+  properties.MYCOUPONS_CONFIG = JSON.stringify(persisted);
+  ctx.UrlFetchApp = {fetch: bootstrapFetch(bootstrapPayload({...config, vertexProject: 'vertex-project'}))};
+  let resumed = 0;
+  ctx.installMyCoupons = (...args) => {
+    assert.deepEqual(args, []);
+    resumed += 1;
+    return {version: 1, installed: true, resumed: true, spreadsheetId: 'sheet-id', labelId: 'Label_123',
+      triggerCreated: false, reviewTriggerCreated: false, locale: 'en', timeZone: 'Europe/Rome'};
+  };
+  ctx.beginMyCouponsInstallation = () => assert.fail('persisted configuration must not be revalidated as new input');
+  const result = ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7');
+  assert.equal(resumed, 1);
+  assert.equal(JSON.stringify(result), JSON.stringify({version: 1, installed: true, resumed: true, spreadsheetId: 'sheet-id', labelId: 'Label_123',
+    triggerCreated: false, reviewTriggerCreated: false, locale: 'en', timeZone: 'Europe/Rome'}));
+});
+
 test('bootstrap rejects malformed and foreign resources or payloads without installing', () => {
   const {ctx, config} = harness();
   let requested = 0;

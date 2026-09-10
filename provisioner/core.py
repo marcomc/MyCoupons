@@ -538,7 +538,7 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
         raise ProvisionerError("installation state has an invalid bootstrap record")
     if isinstance(bootstrap["status"], str) and bootstrap["status"] in {"not-started", "staging"} and bootstrap["secretVersion"] is None:
         pass
-    elif isinstance(bootstrap["status"], str) and bootstrap["status"] in {"staged", "verified", "complete"} and isinstance(bootstrap["secretVersion"], str) and re.fullmatch(
+    elif isinstance(bootstrap["status"], str) and bootstrap["status"] in {"replacement-staging", "staged", "verified", "complete"} and isinstance(bootstrap["secretVersion"], str) and re.fullmatch(
         rf"projects/(?:{PROJECT_ID_RE.pattern[1:-1]}|{PROJECT_NUMBER_RE.pattern[1:-1]})/secrets/{BOOTSTRAP_SECRET_NAME}/versions/[1-9][0-9]*", bootstrap["secretVersion"]
     ):
         pass
@@ -2334,12 +2334,15 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             if bootstrap["status"] == "staged" and _bootstrap_secret_version_state(gcloud, config, owner, project_number, secret_version) != "ENABLED":
                 if payload is None:
                     raise ProvisionerError("bootstrap payload is required until bootstrap completes")
+                state = dict(state)
+                state["bootstrap"] = {"secretVersion": secret_version, "status": "replacement-staging"}
+                state = _persist_state_locked(state_dir, state, key)
                 secret_version = _stage_bootstrap_secret(gcloud, config, owner, project_number, payload)
                 state = dict(state)
                 state["bootstrap"] = {"secretVersion": secret_version, "status": "staged"}
                 state = _persist_state_locked(state_dir, state, key)
         else:
-            if bootstrap["status"] == "staging":
+            if bootstrap["status"] in {"staging", "replacement-staging"}:
                 # No resource ID was durably bound before the interrupted
                 # mutation, so accepting an arbitrary enabled version is unsafe.
                 raise ProvisionerError("interrupted bootstrap staging requires operator cleanup")

@@ -1422,3 +1422,55 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             ):
                 completed = core.deploy_apps_script(state_dir, config, ROOT / "src", auth, None)
             self.assertEqual(completed["phase"], "bootstrap-complete")
+
+    def test_replacement_bootstrap_staging_persists_intent_before_version_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            auth = root / "auth.json"
+            private_json(auth, {"tokens": {"default": {"access_token": "private-token"}}})
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            digest = core.validate_bundle(ROOT / "src")
+            old_version = "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1"
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {"scriptId": "script-1", "provenance": "adopted", "bundleDigest": digest, "versionNumber": 1, "deploymentId": "deployment-1"}
+                state["bootstrap"] = {"secretVersion": old_version, "status": "staged"}
+                state["phase"] = "apps-script-ready"
+                core._persist_state_locked(state_dir, state, key)
+
+            def abort_after_reading_intent(*_args: object, **_kwargs: object) -> str:
+                key = core._load_or_create_identity_key(state_dir)
+                staged = core._load_state_locked(state_dir, key)
+                self.assertEqual(staged["bootstrap"], {"secretVersion": old_version, "status": "replacement-staging"})
+                raise core.ProvisionerError("simulated response loss")
+
+            with mock.patch("provisioner.core._require_isolated_clasp_owner", return_value="private-token"), mock.patch(
+                "provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")
+            ), mock.patch("provisioner.core._drive_script_metadata", return_value=self._owner_metadata()), mock.patch(
+                "provisioner.core._assert_private_owner_script"
+            ), mock.patch(
+                "provisioner.core._deployment_list", return_value=[self._deployment()]
+            ), mock.patch("provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
+                "provisioner.core._ensure_owner_only_deployment", return_value=("deployment-1", 1)
+            ), mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+                "provisioner.core._require_active_gcloud_owner", return_value="owner@example.com"
+            ), mock.patch("provisioner.core._revalidate_project_before_mutation"), mock.patch(
+                "provisioner.core._ensure_service"
+            ), mock.patch("provisioner.core._verify_execution_api_access"), mock.patch(
+                "provisioner.core._bootstrap_secret_version_state", return_value="DISABLED"
+            ), mock.patch("provisioner.core._ensure_bootstrap_secret"), mock.patch(
+                "provisioner.core._stage_bootstrap_secret", side_effect=abort_after_reading_intent
+            ):
+                with self.assertRaisesRegex(core.ProvisionerError, "simulated response loss"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
+                with self.assertRaisesRegex(core.ProvisionerError, "requires operator cleanup"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
+
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                persisted = core._load_state_locked(state_dir, key)
+            self.assertEqual(persisted["bootstrap"], {"secretVersion": old_version, "status": "replacement-staging"})

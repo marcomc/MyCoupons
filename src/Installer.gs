@@ -107,8 +107,10 @@ function bootstrapFromSecret(secretVersion) {
     const previousKey = properties.getProperty('GEMINI_API_KEY');
     try {
       properties.setProperty('GEMINI_API_KEY', bootstrap.geminiApiKey);
-      const installConfig = persisted || bootstrap.config;
-      return bootstrapInstallationResult_(beginMyCouponsInstallation(installConfig));
+      // Persisted configuration includes the opaque label identity, which is
+      // accepted only by the no-argument resume path.
+      const result = persisted ? installMyCoupons() : beginMyCouponsInstallation(bootstrap.config);
+      return bootstrapInstallationResult_(result);
     } catch (e) {
       if (previousKey === null) properties.deleteProperty('GEMINI_API_KEY');
       else properties.setProperty('GEMINI_API_KEY', previousKey);
