@@ -270,6 +270,15 @@ class ProvisionerStateTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "does not match"):
                 core.initialize_state(state_dir, changed_cloud_config)
 
+            existing_developer = valid_config()
+            existing_developer["developerProject"] = "developer-project"
+            state_dir = root / "existing-developer-state"
+            core.initialize_state(state_dir, existing_developer)
+            core.mark_bundle_validated(state_dir, existing_developer, "b" * 64)
+            upgraded_existing = dict(existing_developer)
+            upgraded_existing.update({"vertexBillingAccount": "ABCDEF-123456-ABCDEF", "cloudInstallationId": "installation-demo"})
+            self.assertEqual(core.initialize_state(state_dir, upgraded_existing)["configDigest"], core.config_digest(upgraded_existing))
+
     def test_state_resume_status_is_decided_under_the_installation_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

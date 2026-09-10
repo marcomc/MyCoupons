@@ -365,6 +365,13 @@ def _precloud_config_digest(config: Mapping[str, Any]) -> str:
     """Identify the installation before its one allowed Cloud-only upgrade."""
     precloud = dict(config)
     precloud.update({key: CONFIG_DEFAULTS[key] for key in CLOUD_CONFIG_KEYS})
+    return config_digest(precloud)
+
+
+def _empty_developer_precloud_config_digest(config: Mapping[str, Any]) -> str:
+    """Support the initial assignment of a developer project during Cloud upgrade."""
+    precloud = dict(config)
+    precloud.update({key: CONFIG_DEFAULTS[key] for key in CLOUD_CONFIG_KEYS})
     precloud["developerProject"] = CONFIG_DEFAULTS["developerProject"]
     return config_digest(precloud)
 
@@ -581,6 +588,7 @@ def _initialize_state_locked(state_dir: Path, config: Mapping[str, Any]) -> dict
                 and state["configDigest"] in {
                     _legacy_installer_config_digest(config),
                     _precloud_config_digest(config),
+                    _empty_developer_precloud_config_digest(config),
                 }
             ):
                 state = dict(state)
