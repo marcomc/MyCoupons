@@ -126,7 +126,11 @@ function validateBootstrapSecretVersion_(value, expectedProject) {
   const pattern = new RegExp('^projects/((?:[a-z][a-z0-9-]{4,28}[a-z0-9])|(?:[1-9][0-9]*))/secrets/' +
     MC_BOOTSTRAP.secretName + '/versions/([1-9][0-9]*)$');
   const match = pattern.exec(value);
-  if (!match || expectedProject && /^[a-z]/.test(match[1]) && match[1] !== expectedProject) fail_('RESOURCE');
+  if (!match) fail_('RESOURCE');
+  if (expectedProject) {
+    const expectedNumber = resolveBootstrapProjectNumber_(expectedProject);
+    if (match[1] !== expectedProject && match[1] !== expectedNumber) fail_('RESOURCE');
+  }
   return {name: value, project: match[1], version: match[2]};
 }
 

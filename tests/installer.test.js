@@ -199,10 +199,13 @@ test('bootstrap fails closed on an unauthorized caller or Secret Manager HTTP er
 test('bootstrap never reads a version outside the persisted Vertex project', () => {
   const {ctx, properties, config} = harness();
   properties.MYCOUPONS_CONFIG = JSON.stringify({...config, vertexProject: 'vertex-project'});
-  let requested = 0;
-  ctx.UrlFetchApp = {fetch: () => { requested += 1; return bootstrapSecret('{}'); }};
+  let secretRequested = 0;
+  ctx.UrlFetchApp = {fetch: (url) => {
+    if (url.includes('secretmanager.googleapis.com')) secretRequested += 1;
+    return bootstrapSecret('{}');
+  }};
   assert.throws(() => ctx.bootstrapFromSecret('projects/foreign-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
-  assert.equal(requested, 0);
+  assert.equal(secretRequested, 0);
 });
 
 test('bootstrap restores the prior key and leaves secret data out of errors when installation fails', () => {

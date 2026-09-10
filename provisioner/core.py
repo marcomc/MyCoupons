@@ -10,6 +10,7 @@ import dataclasses
 import datetime
 import hashlib
 import hmac
+import http.client
 import json
 import math
 import os
@@ -195,7 +196,7 @@ def _assert_private_directory(path: Path) -> None:
     _assert_not_symlink(path)
     try:
         directory_stat = path.stat()
-    except OSError as exc:
+    except (OSError, http.client.HTTPException) as exc:
         raise ProvisionerError("provisioning directory cannot be inspected") from exc
     if not stat.S_ISDIR(directory_stat.st_mode) or not _is_private_mode(directory_stat.st_mode, 0o700):
         raise ProvisionerError("provisioning directory must be mode 0700 and not group/world accessible")
