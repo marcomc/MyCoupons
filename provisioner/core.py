@@ -536,9 +536,9 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
     bootstrap = state["bootstrap"]
     if not isinstance(bootstrap, dict) or set(bootstrap) != {"secretVersion", "status"}:
         raise ProvisionerError("installation state has an invalid bootstrap record")
-    if bootstrap["status"] in {"not-started", "staging"} and bootstrap["secretVersion"] is None:
+    if isinstance(bootstrap["status"], str) and bootstrap["status"] in {"not-started", "staging"} and bootstrap["secretVersion"] is None:
         pass
-    elif bootstrap["status"] in {"staged", "verified", "complete"} and isinstance(bootstrap["secretVersion"], str) and re.fullmatch(
+    elif isinstance(bootstrap["status"], str) and bootstrap["status"] in {"staged", "verified", "complete"} and isinstance(bootstrap["secretVersion"], str) and re.fullmatch(
         rf"projects/(?:{PROJECT_ID_RE.pattern[1:-1]}|{PROJECT_NUMBER_RE.pattern[1:-1]})/secrets/{BOOTSTRAP_SECRET_NAME}/versions/[1-9][0-9]*", bootstrap["secretVersion"]
     ):
         pass
@@ -1848,12 +1848,16 @@ def _apps_script_list(access_token: str, resource: str, key: str) -> list[Any]:
 
 def _deployment_list(access_token: str, script_id: str) -> list[Any]:
     deployments = _apps_script_list(access_token, f"https://script.googleapis.com/v1/projects/{script_id}/deployments", "deployments")
+    executable_count = 0
     for deployment in deployments:
         # Every script has an automatic mutable HEAD deployment.  It has no
         # immutable version number and cannot satisfy the deployment contract.
         if isinstance(deployment, dict) and deployment.get("deploymentId") == "HEAD":
             continue
         _validate_owner_only_deployment(deployment, script_id)
+        executable_count += 1
+    if executable_count > 1:
+        raise ProvisionerError("Apps Script deployment recovery is ambiguous")
     return deployments
 
 
@@ -2320,8 +2324,11 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             installation_label=config["cloudInstallationId"], role="vertex", expected_owner=owner,
             persisted=state["cloud"]["vertex"],
         )
+        _ensure_service(gcloud, config["vertexProject"], "cloudresourcemanager.googleapis.com", installation_label=config["cloudInstallationId"], role="vertex", expected_owner=owner, persisted=state["cloud"]["vertex"])
         _verify_execution_api_access(access_token, script_id)
         if bootstrap["status"] in {"staged", "verified"}:
+            if bootstrap["status"] == "staged" and _bootstrap_secret_version_state(gcloud, config, owner, project_number, bootstrap["secretVersion"]) == "ENABLED":
+                _disable_bootstrap_secret_version(gcloud, config, owner, project_number, bootstrap["secretVersion"])
             _ensure_bootstrap_secret(gcloud, config, owner, project_number)
             secret_version = bootstrap["secretVersion"]
             if bootstrap["status"] == "staged" and _bootstrap_secret_version_state(gcloud, config, owner, project_number, secret_version) != "ENABLED":

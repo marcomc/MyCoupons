@@ -99,7 +99,7 @@ function bootstrapFromSecret(secretVersion) {
     const bootstrap = validateBootstrapPayload_(secret.payload);
     if (persisted && bootstrap.config.vertexProject !== persisted.vertexProject) fail_('RESOURCE');
     if (persisted && MC_INSTALLER_INPUT_KEYS.some(function (key) {
-      return key !== 'spreadsheetId' && persisted[key] !== bootstrap.config[key];
+      return persisted[key] !== bootstrap.config[key] && !(key === 'spreadsheetId' && bootstrap.config.spreadsheetId === '');
     })) fail_('RESOURCE');
     assertBootstrapSecretProject_(resource, secret.name, bootstrap.config.vertexProject);
     assertOwner_(bootstrap.config);
@@ -107,7 +107,7 @@ function bootstrapFromSecret(secretVersion) {
     const previousKey = properties.getProperty('GEMINI_API_KEY');
     try {
       properties.setProperty('GEMINI_API_KEY', bootstrap.geminiApiKey);
-      const installConfig = persisted ? Object.assign({}, bootstrap.config, {spreadsheetId: persisted.spreadsheetId}) : bootstrap.config;
+      const installConfig = persisted || bootstrap.config;
       return bootstrapInstallationResult_(beginMyCouponsInstallation(installConfig));
     } catch (e) {
       if (previousKey === null) properties.deleteProperty('GEMINI_API_KEY');
