@@ -2198,6 +2198,21 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
     state_dir = ensure_state_dir(state_dir)
     with InstallationLock(state_dir):
         state = _initialize_state_locked(state_dir, config)
+        key = _load_or_create_identity_key(state_dir)
+        if state["bootstrap"]["status"] == "verified":
+            vertex = state["cloud"].get("vertex")
+            if not isinstance(vertex, dict) or vertex.get("projectId") != config["vertexProject"] or not isinstance(vertex.get("projectNumber"), str):
+                raise ProvisionerError("persisted Vertex project identity does not match the installation")
+            gcloud = discover_tools(("gcloud",))["gcloud"]
+            if gcloud is None:
+                raise ProvisionerError("gcloud is required for secure bootstrap")
+            owner = _require_active_gcloud_owner(gcloud, config["ownerEmail"])
+            secret_version = state["bootstrap"]["secretVersion"]
+            _disable_bootstrap_secret_version(gcloud, config, owner, vertex["projectNumber"], secret_version)
+            state = dict(state)
+            state["bootstrap"] = {"secretVersion": secret_version, "status": "complete"}
+            state["phase"] = "bootstrap-complete"
+            return _persist_state_locked(state_dir, state, key)
         _require_cloud_ready_state(state, config)
         digest, files = _deployment_bundle(source_dir)
         # Reject every private input before any Apps Script or Cloud mutation.
@@ -2208,7 +2223,6 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         else:
             payload = _validate_bootstrap_payload(bootstrap_payload, config)
         state = _mark_bundle_validated_locked(state_dir, config, digest)
-        key = _load_or_create_identity_key(state_dir)
         access_token = _require_isolated_clasp_owner(clasp_auth, config["ownerEmail"])
         created_this_run = False
         def persist_creation_intent() -> None:
