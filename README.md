@@ -8,6 +8,7 @@ Private Gmail-to-Google-Sheets coupon importer built with Google Apps Script.
 - [Sheet state](#sheet-state)
 - [Core behavior](#core-behavior)
 - [Gemini routing](#gemini-routing)
+- [Local provisioner foundation](#local-provisioner-foundation)
 - [Local validation](#local-validation)
 - [Public information pages](#public-information-pages)
 
@@ -175,6 +176,18 @@ file for private settings. The coupon tab cannot use the reserved internal title
 units. The manifest declares the intended owner-only Apps
 Script runtime; no permissions are granted merely by checking out these files.
 
+## Local provisioner foundation
+
+`python3 -m provisioner.cli` supplies a local-only, resumable foundation for a
+future operator provisioner. It validates a complete private installation
+config, creates mode-0700 local state outside Git, binds that state to its
+installation identity, performs deterministic source-bundle validation, and
+can make harmless authenticated identity/project reads. It does not create,
+update, delete, deploy, invoke, or retrieve Google secrets.
+
+See [the provisioner guide](docs/PROVISIONER.md) for the implemented commands
+and deferred steps.
+
 ## Local validation
 
 Requires Node.js 22 or later. Run the currently available checks:
@@ -182,6 +195,13 @@ Requires Node.js 22 or later. Run the currently available checks:
 ```sh
 npm run check
 npm test
+```
+
+The local provisioner test suite uses only Python's standard library:
+
+```sh
+python3 -m unittest discover -s tests_python -v
+python3 -m compileall -q provisioner tests_python
 ```
 
 ## Scheduled imports and notifications
