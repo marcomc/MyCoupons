@@ -178,12 +178,20 @@ Script runtime; no permissions are granted merely by checking out these files.
 
 ## Local provisioner foundation
 
-`python3 -m provisioner.cli` supplies a local-only, resumable foundation for a
-future operator provisioner. It validates a complete private installation
-config, creates mode-0700 local state outside Git, binds that state to its
-installation identity, performs deterministic source-bundle validation, and
-can make harmless authenticated identity/project reads. It does not create,
-update, delete, deploy, invoke, or retrieve Google secrets.
+`python3 -m provisioner.cli` supplies a local, resumable operator provisioner.
+It validates complete private installation config, creates mode-0700 state
+outside Git, binds that state to its installation identity, validates a source
+bundle, and can make harmless authenticated identity/project reads. Its
+`provision-cloud` action creates or adopts only explicitly labelled,
+owner-verified Gemini Developer API and Vertex fallback projects. The Developer
+project must be unbilled; the Vertex project may be linked only from unlinked
+state to the configured Generic Billing Account. It then reconciles the limited
+required APIs without printing identifiers, raw diagnostics, credentials, or
+command output.
+
+It does not create API keys, OAuth clients, secrets, Apps Script projects, or
+deployments. See the provisioner guide for the label/adoption and retry
+contract.
 
 See [the provisioner guide](docs/PROVISIONER.md) for the implemented commands
 and deferred steps.

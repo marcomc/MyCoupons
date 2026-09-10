@@ -1,0 +1,18 @@
+{
+  "ownerEmail": "owner@example.com",
+  "spreadsheetId": "",
+  "spreadsheetName": "My Coupons",
+  "sheetName": "Coupon Manager",
+  "labelName": "Coupon Code Discount",
+  "locale": "en",
+  "timeZone": "Europe/Rome",
+  "initialDate": "",
+  "developerProject": "",
+  "vertexProject": "",
+  "vertexBillingAccount": "",
+  "cloudInstallationId": "",
+  "vertexLocation": "global",
+  "model": "gemini-flash-latest",
+  "autoVertexFallback": false,
+  "fetchRemoteImages": true
+}

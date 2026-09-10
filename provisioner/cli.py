@@ -16,6 +16,7 @@ from .core import (
     initialize_state_with_status,
     load_config,
     oauth_authorization_command,
+    provision_cloud,
     validate_and_mark_bundle,
 )
 
@@ -39,6 +40,8 @@ def _parser() -> argparse.ArgumentParser:
     preflight = subcommands.add_parser("preflight-identity", help="perform harmless authenticated identity and project reads")
     preflight.add_argument("--config", type=Path, required=True)
     preflight.add_argument("--project-id", required=True, help="Cloud project to inspect without mutation")
+    cloud = subcommands.add_parser("provision-cloud", help="create or adopt the labelled Cloud projects and reconcile required services")
+    cloud.add_argument("--config", type=Path, required=True)
     return parser
 
 
@@ -67,6 +70,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "preflight-identity":
             _emit(authenticated_identity_preflight(config["ownerEmail"], args.project_id))
+            return 0
+        if args.command == "provision-cloud":
+            state = provision_cloud(args.state_dir, config)
+            _emit({"cloudReady": state["phase"] == "cloud-ready", "phase": state["phase"]})
             return 0
         raise AssertionError("unhandled command")
     except ProvisionerError as exc:

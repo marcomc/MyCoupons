@@ -4,6 +4,12 @@
 
 ### Added
 
+- Add an idempotent, signed-state Cloud provisioning action that creates or
+  adopts only owner-verified labelled Gemini Developer API and Vertex fallback
+  projects; keeps the Developer project unbilled; links only an unlinked Vertex
+  project to its configured Generic Billing Account; and reconciles the required
+  API services with bounded, redacted subprocess diagnostics.
+
 - Add a secure, standard-library local provisioner foundation with strict
   Installer-compatible configuration validation, private atomic resumable
   state, non-blocking locking, deterministic Apps Script source digests, safe
