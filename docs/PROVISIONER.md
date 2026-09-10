@@ -87,6 +87,14 @@ foreign permission, or inaccessible/invalid metadata fails before source
 mutation. If no candidate exists, it creates one standalone project and checks
 the same ownership condition before continuing.
 
+Before this command, associate the Apps Script project with its operator-managed
+standard Cloud project and authorize the isolated OAuth client in that same
+project for the Execution API. Google does not expose that association through
+the Apps Script API. The command invokes the deployed, no-op
+`verifyBootstrapExecutionAccess` function before creating or staging a secret;
+that call must succeed, so an unrelated `clasp` OAuth client cannot leave an
+enabled bootstrap secret behind.
+
 The source is captured as one validated digest, uploaded only when the remote
 content differs, then read back. Every existing deployment must be exactly one
 `EXECUTION_API` entry point with `MYSELF` access; public, web, or malformed
@@ -96,8 +104,8 @@ the bootstrap runs.
 
 For bootstrap, the command creates or adopts only the Vertex-project secret
 `mycoupons-bootstrap` bearing this installation label, rejects public or foreign
-Secret Accessor bindings, grants the verified owner secret access, stages one
-numeric version, and calls the deployed
+Secret Accessor bindings at both secret and project level, grants the verified
+owner secret access, stages one numeric version, and calls the deployed
 `bootstrapFromSecret(secretVersion)` endpoint. It validates the complete
 non-secret result, disables that exact version, and stores only signed,
 non-secret resource IDs, provenance, version/deployment IDs, digests, and
@@ -144,9 +152,11 @@ The validated manifest contract matches the current Apps Script source:
   email identity, and cloud-platform application scopes.
 - Gmail v1 and Drive v3 advanced services.
 
-The digest includes deployable UTF-8 `.gs`, `.html`, `.js`, and `.json` files
+The digest includes deployable UTF-8 `.gs`, `.html`, and `.json` files
 only. Each file is limited to 1 MiB and the complete bundle to 8 MiB; at most
-1,000 deployable files and 128 KiB of UTF-8 path names are accepted. Manifest
+1,000 deployable files and 128 KiB of UTF-8 path names are accepted. `.js`
+files are rejected because the Apps Script API read-back format cannot preserve
+their source extension. Manifest
 validation and digesting consume the same captured bytes; a file or deployable
 file set that changes during capture fails validation. Vendor license files
 remain part of repository provenance but are not Apps Script deployment inputs.

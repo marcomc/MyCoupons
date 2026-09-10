@@ -4,6 +4,12 @@
 
 ### Added
 
+- Harden Apps Script bootstrap deployment: distinguish the automatic HEAD
+  deployment, accept canonical Secret Manager project-number resources, reject
+  `.js` inputs with unverifiable read-back paths, inspect inherited project
+  Secret Accessor grants, and prove Execution API access before staging a
+  bootstrap secret.
+
 - Add a resumable Apps Script deployment and bootstrap action that creates or
   adopts only one private owner-only project, verifies uploaded/versioned source
   digests and owner-only Execution API deployment metadata, transfers bootstrap

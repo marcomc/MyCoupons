@@ -625,7 +625,8 @@ class ProvisionerBundleTests(unittest.TestCase):
             self.assertNotEqual(first, core.validate_bundle(copied))
             gs_digest = core.validate_bundle(copied)
             (copied / "Injected.js").write_text("const changedJs = true;\n", encoding="utf-8")
-            self.assertNotEqual(gs_digest, core.validate_bundle(copied))
+            with self.assertRaisesRegex(core.ProvisionerError, "\\.js"):
+                core.validate_bundle(copied)
             (copied / "Injected.js").unlink()
             (copied / "Injected.html").write_text("<p>changed</p>\n", encoding="utf-8")
             html_digest = core.validate_bundle(copied)
@@ -716,7 +717,7 @@ class ProvisionerBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             copied = Path(temporary) / "src"
             shutil_copytree(ROOT / "src", copied)
-            invalid = copied / "Invalid.js"
+            invalid = copied / "Invalid.gs"
             invalid.write_bytes(b"const invalid = '\xff';\n")
             with self.assertRaisesRegex(core.ProvisionerError, "valid UTF-8"):
                 core.validate_bundle(copied)
@@ -727,7 +728,7 @@ class ProvisionerBundleTests(unittest.TestCase):
                 core.validate_bundle(copied)
             large.unlink()
             original_read = core._read_bundle_file
-            late_file = copied / "Late.js"
+            late_file = copied / "Late.gs"
 
             def add_file_during_capture(*args: object, **kwargs: object) -> bytes:
                 content = original_read(*args, **kwargs)
@@ -741,8 +742,8 @@ class ProvisionerBundleTests(unittest.TestCase):
                     core.validate_bundle(copied)
             late_file.unlink()
             base_size = sum(path.stat().st_size for path in core._iter_bundle_files(copied))
-            (copied / "Fill.js").write_bytes(b"x" * 8)
-            (copied / "ZZEmpty.js").write_bytes(b"")
+            (copied / "Fill.gs").write_bytes(b"x" * 8)
+            (copied / "ZZEmpty.gs").write_bytes(b"")
             with mock.patch.object(core, "MAX_BUNDLE_TOTAL_BYTES", base_size + 8):
                 self.assertRegex(core.validate_bundle(copied), r"^[0-9a-f]{64}$")
             original_iter = core._iter_bundle_files
@@ -922,7 +923,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             deployment = self._deployment()
             deployment["deploymentConfig"]["description"] = "MyCoupons owner-only " + core.validate_bundle(ROOT / "src")
 
-            def api(_token: str, method: str, resource: str, body: object = None) -> object:
+            def api(_token: str, method: str, resource: str, body: object = None, **_kwargs: object) -> object:
                 if resource.startswith("https://www.googleapis.com/drive/v3/files?"):
                     return {"files": []}
                 if resource == "https://script.googleapis.com/v1/projects" and method == "POST":
@@ -945,6 +946,8 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 if resource.endswith("/deployments/deployment-1"):
                     return deployment
                 if resource.endswith(":run"):
+                    if body["function"] == "verifyBootstrapExecutionAccess":  # type: ignore[index]
+                        return {"done": True, "response": {"result": {"version": 1, "ready": True}}}
                     return {"done": True, "response": {"result": {"version": 1, "installed": True, "resumed": False, "spreadsheetId": "sheet-1", "labelId": "label-1", "triggerCreated": True, "reviewTriggerCreated": True, "locale": "en", "timeZone": "Europe/Rome"}}}
                 raise AssertionError((method, resource, body))
 
@@ -1008,6 +1011,13 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "owner-only"):
                 core._deployment_list("private-token", "script-1")
 
+    def test_deployment_discovery_ignores_automatic_head_and_empty_collections(self) -> None:
+        head = {"deploymentId": "HEAD", "deploymentConfig": {"scriptId": "script-1"}}
+        with mock.patch("provisioner.core._apps_script_json", return_value={"deployments": [head]}):
+            self.assertEqual(core._deployment_list("private-token", "script-1"), [head])
+        with mock.patch("provisioner.core._apps_script_json", return_value={}):
+            self.assertEqual(core._apps_script_list("private-token", "https://example.invalid", "versions"), [])
+
     def test_bootstrap_secret_rejects_public_or_foreign_accessor_bindings(self) -> None:
         for member, role in (("allUsers", "roles/secretmanager.secretAccessor"), ("allAuthenticatedUsers", "roles/secretmanager.secretAccessor"), ("group:operators@example.com", "roles/secretmanager.secretAccessor"), ("user:other@example.com", "roles/secretmanager.secretAccessor"), ("user:other@example.com", "roles/owner")):
             with self.subTest(member=member, role=role):
@@ -1018,10 +1028,38 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                         require_owner=False,
                     )
 
+    def test_project_secret_accessor_rejects_foreign_inherited_access(self) -> None:
+        with self.assertRaisesRegex(core.ProvisionerError, "unsafe inherited"):
+            core._assert_owner_only_project_secret_accessor(
+                {"bindings": [{"role": "roles/secretmanager.secretAccessor", "members": ["user:other@example.com"]}]},
+                "owner@example.com",
+            )
+
     def test_secret_inputs_inside_the_checkout_are_rejected_before_reading(self) -> None:
         config = valid_cloud_config()
         with self.assertRaisesRegex(core.ProvisionerError, "outside the Git worktree"):
             core._validate_bootstrap_payload(ROOT / "config" / "provisioner.example.json", config)
+
+    def test_bootstrap_payload_rejects_a_key_over_the_installer_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "payload.json"
+            config = valid_cloud_config()
+            self._payload(path, config)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["geminiApiKey"] = "AIza" + "a" * 509
+            private_json(path, payload)
+            with self.assertRaisesRegex(core.ProvisionerError, "malformed"):
+                core._validate_bootstrap_payload(path, config)
+
+    def test_secret_resource_accepts_the_canonical_project_number(self) -> None:
+        pattern = core._secret_resource_pattern("vertex-project", "654321")
+        self.assertIsNotNone(core.re.fullmatch(pattern, "projects/654321/secrets/mycoupons-bootstrap"))
+        self.assertIsNotNone(core.re.fullmatch(pattern + r"/versions/[1-9][0-9]*", "projects/654321/secrets/mycoupons-bootstrap/versions/1"))
+
+    def test_execution_api_preflight_rejects_before_secret_staging(self) -> None:
+        with mock.patch("provisioner.core._apps_script_json", return_value={"done": False}):
+            with self.assertRaisesRegex(core.ProvisionerError, "authorization"):
+                core._verify_execution_api_access("private-token", "script-1")
 
     def test_verified_bootstrap_resume_never_reinvokes_a_disabled_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1062,11 +1100,12 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 if command[1:4] == ("secrets", "versions", "describe"): return {"name": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1", "state": "DISABLED"}
                 raise AssertionError(command)
 
-            def api(_token: str, method: str, resource: str, _body: object = None) -> object:
+            def api(_token: str, method: str, resource: str, _body: object = None, **_kwargs: object) -> object:
                 if resource.startswith("https://www.googleapis.com/drive/v3/files/script-1"): return self._owner_metadata()
                 if "/content" in resource: return {"files": files}
                 if resource.endswith("/deployments"): return {"deployments": [deployment]}
                 if resource.endswith("/versions"): return {"versions": [{"versionNumber": 1, "description": deployment["deploymentConfig"]["description"]}]}
+                if resource.endswith(":run"): return {"done": True, "response": {"result": {"version": 1, "ready": True}}}
                 raise AssertionError((method, resource))
 
             with mock.patch("provisioner.core.discover_tools", return_value={"clasp": "/safe/clasp", "gcloud": "/safe/gcloud"}), mock.patch("provisioner.core._run_json", side_effect=command), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch("provisioner.core._cloud_success"), mock.patch("provisioner.core._invoke_bootstrap", side_effect=AssertionError("must not run")):

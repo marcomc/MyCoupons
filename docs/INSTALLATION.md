@@ -59,6 +59,12 @@ The Apps Script editor does not pass arguments to functions. Do not replace the
 provisioner's owner-only bootstrap with a manual editor run that could expose a
 credential.
 
+Before bootstrap, associate the project with the intended standard Cloud project
+in the Apps Script editor and authorize the isolated OAuth client from that same
+project. The Apps Script API cannot make or inspect that association. The CLI
+performs a no-op Execution API call before staging a secret and fails if the
+caller cannot invoke the owner-only deployment.
+
 ## Secret Manager bootstrap
 
 The operator CLI uses the owner-only Execution API function

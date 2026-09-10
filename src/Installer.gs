@@ -82,6 +82,12 @@ function beginMyCouponsInstallationFromBootstrapProperty() {
   return result;
 }
 
+// Performs no configuration or secret access. A successful Execution API call
+// proves that the caller's OAuth client is authorized for this deployment.
+function verifyBootstrapExecutionAccess() {
+  return {version: MC_INSTALLER_VERSION, ready: true};
+}
+
 // This function is intended only for an Execution API deployment with access MYSELF.
 // It deliberately accepts one exact Secret Manager version, never a secret name or alias.
 function bootstrapFromSecret(secretVersion) {
@@ -118,10 +124,10 @@ function bootstrapPersistedConfig_() {
 
 function validateBootstrapSecretVersion_(value, expectedProject) {
   if (typeof value !== 'string') fail_('RESOURCE');
-  const pattern = new RegExp('^projects/([a-z][a-z0-9-]{4,28}[a-z0-9])/secrets/' +
+  const pattern = new RegExp('^projects/((?:[a-z][a-z0-9-]{4,28}[a-z0-9])|(?:[1-9][0-9]*))/secrets/' +
     MC_BOOTSTRAP.secretName + '/versions/([1-9][0-9]*)$');
   const match = pattern.exec(value);
-  if (!match || expectedProject && match[1] !== expectedProject) fail_('RESOURCE');
+  if (!match || expectedProject && /^[a-z]/.test(match[1]) && match[1] !== expectedProject) fail_('RESOURCE');
   return {name: value, project: match[1], version: match[2]};
 }
 
