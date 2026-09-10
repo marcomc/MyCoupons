@@ -47,7 +47,7 @@ def _parser() -> argparse.ArgumentParser:
     deploy.add_argument("--config", type=Path, required=True)
     deploy.add_argument("--source-dir", type=Path, default=Path("src"))
     deploy.add_argument("--clasp-auth", type=Path, required=True, help="private isolated clasp authorization file")
-    deploy.add_argument("--bootstrap-payload", type=Path, required=True, help="private one-time Secret Manager bootstrap payload")
+    deploy.add_argument("--bootstrap-payload", type=Path, help="private one-time Secret Manager bootstrap payload; required until bootstrap completes")
     return parser
 
 

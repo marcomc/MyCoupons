@@ -97,7 +97,6 @@ function bootstrapFromSecret(secretVersion) {
     const resource = validateBootstrapSecretVersion_(secretVersion, persisted && persisted.vertexProject);
     const secret = readBootstrapSecret_(resource);
     const bootstrap = validateBootstrapPayload_(secret.payload);
-    if (resource.project !== bootstrap.config.vertexProject) fail_('RESOURCE');
     if (persisted && bootstrap.config.vertexProject !== persisted.vertexProject) fail_('RESOURCE');
     assertBootstrapSecretProject_(resource, secret.name, bootstrap.config.vertexProject);
     assertOwner_(bootstrap.config);

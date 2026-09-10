@@ -109,7 +109,7 @@ CLOUD_INSTALLATION_LABEL = "mycoupons-installation"
 CLOUD_ROLE_LABEL = "mycoupons-role"
 CLOUD_ROLES = frozenset(("developer", "vertex"))
 DEVELOPER_SERVICES = ("apikeys.googleapis.com", "generativelanguage.googleapis.com")
-VERTEX_SERVICES = ("aiplatform.googleapis.com", "script.googleapis.com", "secretmanager.googleapis.com", "cloudresourcemanager.googleapis.com")
+VERTEX_SERVICES = ("aiplatform.googleapis.com", "script.googleapis.com", "secretmanager.googleapis.com", "cloudresourcemanager.googleapis.com", "drive.googleapis.com")
 APPS_SCRIPT_TITLE = "MyCoupons"
 APPS_SCRIPT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
 BOOTSTRAP_SECRET_NAME = "mycoupons-bootstrap"
@@ -566,6 +566,7 @@ def _migrate_v2_state(state: Any, key: bytes) -> dict[str, Any]:
     expected_keys = {"version", "installationId", "configDigest", "identityProof", "phase", "bundleDigest", "cloud"}
     if not isinstance(state, dict) or set(state) != expected_keys or state.get("version") != 2:
         raise ProvisionerError("installation state has an unsupported shape")
+    _validate_common_state_identity(state)
     if not hmac.compare_digest(state.get("identityProof", ""), _identity_proof_v2(key, state)):
         raise ProvisionerError("installation state is not bound to this local installation")
     migrated = dict(state)
@@ -761,7 +762,7 @@ def _iter_bundle_files(source_dir: Path) -> Iterable[Path]:
     yield from sorted(bundle_files)
 
 
-def _has_bootstrap_entry_point(content: bytes) -> bool:
+def _has_bootstrap_entry_point(content: bytes, entry_point: str) -> bool:
     """Recognize the required top-level declaration without accepting comments or strings."""
     try:
         source = content.decode("utf-8")
@@ -823,7 +824,7 @@ def _has_bootstrap_entry_point(content: bytes) -> bool:
         lambda match: match.group(1) + " " * (len(match.group()) - len(match.group(1))),
         visible_source,
     )
-    for match in re.finditer(r"(?m)^[ \t]*function[ \t]+bootstrapFromSecret[ \t]*\(", visible_source):
+    for match in re.finditer(rf"(?m)^[ \t]*function[ \t]+{re.escape(entry_point)}[ \t]*\(", visible_source):
         prefix = visible_source[: match.start()]
         if prefix.count("{") == prefix.count("}"):
             return True
@@ -999,8 +1000,10 @@ def validate_bundle(source_dir: Path) -> str:
     if found_services != expected_services:
         raise ProvisionerError("Apps Script manifest service contract is invalid")
     installer_source = captured.get("Installer.gs")
-    if installer_source is None or not _has_bootstrap_entry_point(installer_source):
+    if installer_source is None or not _has_bootstrap_entry_point(installer_source, "bootstrapFromSecret"):
         raise ProvisionerError("Apps Script source bundle is missing the bootstrapFromSecret entry point")
+    if not _has_bootstrap_entry_point(installer_source, "verifyBootstrapExecutionAccess"):
+        raise ProvisionerError("Apps Script source bundle is missing the verifyBootstrapExecutionAccess entry point")
     return _bundle_digest(captured)
 
 
@@ -1896,7 +1899,7 @@ def _secret_resource_pattern(project_id: str, project_number: str) -> str:
 
 
 def _assert_owner_only_project_secret_accessor(policy: Any, owner: str) -> None:
-    """Reject inherited Secret Accessor grants for principals other than owner."""
+    """Require an owner-only project policy before staging a readable secret."""
     bindings = policy.get("bindings") if isinstance(policy, dict) else None
     expected_member = f"user:{owner.lower()}"
     if not isinstance(bindings, list):
@@ -1904,8 +1907,6 @@ def _assert_owner_only_project_secret_accessor(policy: Any, owner: str) -> None:
     for binding in bindings:
         if not isinstance(binding, dict):
             raise ProvisionerError("Cloud project access inspection returned invalid data")
-        if binding.get("role") != "roles/secretmanager.secretAccessor":
-            continue
         members = binding.get("members")
         if "condition" in binding or not isinstance(members, list) or any(not isinstance(member, str) for member in members):
             raise ProvisionerError("Cloud project has unsafe inherited secret access")
@@ -1951,17 +1952,57 @@ def _stage_bootstrap_secret(gcloud: str, config: Mapping[str, Any], owner: str, 
 
 def _run_json_with_input(command: Sequence[str], input_data: bytes, *, operation: str) -> Any:
     process: subprocess.Popen[bytes] | None = None
+    selector: selectors.BaseSelector | None = None
     try:
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
-        output, _ignored = process.communicate(input=input_data, timeout=30)
+        if process.stdin is None or process.stdout is None:
+            raise OSError("command pipes were not created")
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdin, selectors.EVENT_WRITE)
+        selector.register(process.stdout, selectors.EVENT_READ)
+        output = bytearray()
+        offset = 0
+        deadline = time.monotonic() + 30
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, 30)
+            for selected, _events in selector.select(remaining):
+                stream = selected.fileobj
+                if stream is process.stdin:
+                    written = os.write(stream.fileno(), input_data[offset:])
+                    offset += written
+                    if offset == len(input_data):
+                        selector.unregister(stream)
+                        stream.close()
+                else:
+                    chunk = os.read(stream.fileno(), min(8192, MAX_COMMAND_OUTPUT_BYTES + 1 - len(output)))
+                    if not chunk:
+                        selector.unregister(stream)
+                        continue
+                    output.extend(chunk)
+                    if len(output) > MAX_COMMAND_OUTPUT_BYTES:
+                        raise ProvisionerError(f"{operation} was rejected")
+        completed_returncode = process.wait(timeout=max(0, deadline - time.monotonic()))
     except (OSError, subprocess.TimeoutExpired) as exc:
         if process is not None:
             _terminate_process(process)
         raise ProvisionerError(f"{operation} could not run") from exc
-    if process.returncode != 0 or len(output) > MAX_COMMAND_OUTPUT_BYTES:
+    except ProvisionerError:
+        if process is not None:
+            _terminate_process(process)
+        raise
+    finally:
+        if selector is not None:
+            selector.close()
+        if process is not None and process.stdin is not None:
+            process.stdin.close()
+        if process is not None and process.stdout is not None:
+            process.stdout.close()
+    if completed_returncode != 0:
         raise ProvisionerError(f"{operation} was rejected")
     try:
-        return json.loads(output.decode("utf-8"), object_pairs_hook=_no_duplicate_object, parse_constant=_reject_json_constant, parse_float=_finite_json_float)
+        return json.loads(bytes(output).decode("utf-8"), object_pairs_hook=_no_duplicate_object, parse_constant=_reject_json_constant, parse_float=_finite_json_float)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
         raise ProvisionerError(f"{operation} returned unexpected output") from exc
 
@@ -2017,7 +2058,7 @@ def _disable_bootstrap_secret_version(gcloud: str, config: Mapping[str, Any], ow
         raise ProvisionerError("bootstrap secret version disablement could not be verified")
 
 
-def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: Path, clasp_auth: Path, bootstrap_payload: Path) -> dict[str, Any]:
+def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: Path, clasp_auth: Path, bootstrap_payload: Path | None) -> dict[str, Any]:
     """Deploy one verified private source snapshot and complete its secret bootstrap."""
     validate_cloud_config(config)
     state_dir = ensure_state_dir(state_dir)
@@ -2026,7 +2067,12 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         _require_cloud_ready_state(state, config)
         digest, files = _deployment_bundle(source_dir)
         # Reject every private input before any Apps Script or Cloud mutation.
-        payload = _validate_bootstrap_payload(bootstrap_payload, config)
+        if state["bootstrap"]["status"] == "complete":
+            payload = None
+        elif bootstrap_payload is None:
+            raise ProvisionerError("bootstrap payload is required until bootstrap completes")
+        else:
+            payload = _validate_bootstrap_payload(bootstrap_payload, config)
         state = _mark_bundle_validated_locked(state_dir, config, digest)
         key = _load_or_create_identity_key(state_dir)
         access_token = _require_isolated_clasp_owner(clasp_auth, config["ownerEmail"])
@@ -2078,6 +2124,8 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
                 state = dict(state)
                 state["bootstrap"] = {"secretVersion": None, "status": "staging"}
                 state = _persist_state_locked(state_dir, state, key)
+            if payload is None:
+                raise ProvisionerError("bootstrap payload is required until bootstrap completes")
             secret_version = _stage_bootstrap_secret(gcloud, config, owner, project_number, payload)
             state = dict(state)
             state["bootstrap"] = {"secretVersion": secret_version, "status": "staged"}

@@ -79,6 +79,10 @@ python3 -m provisioner.cli deploy-apps-script \
   --bootstrap-payload /private/path/bootstrap-payload.json
 ```
 
+The payload is required only until bootstrap completes. Once the signed state
+records completion, it may be deleted and later source-only deployments omit
+`--bootstrap-payload`.
+
 The command refreshes and verifies the isolated `clasp` identity against
 `ownerEmail`; it never uses a shared global `clasp` profile. It adopts one
 exactly titled `MyCoupons` project only when Drive confirms that the configured
@@ -104,8 +108,8 @@ the bootstrap runs.
 
 For bootstrap, the command creates or adopts only the Vertex-project secret
 `mycoupons-bootstrap` bearing this installation label, rejects public or foreign
-Secret Accessor bindings at both secret and project level, grants the verified
-owner secret access, stages one numeric version, and calls the deployed
+access at both secret and project level, grants the verified owner secret
+access, stages one numeric version, and calls the deployed
 `bootstrapFromSecret(secretVersion)` endpoint. It validates the complete
 non-secret result, disables that exact version, and stores only signed,
 non-secret resource IDs, provenance, version/deployment IDs, digests, and
@@ -204,7 +208,7 @@ After verified ownership, the command enables only the required services:
 | Project | Services |
 | --- | --- |
 | Gemini Developer API | `apikeys.googleapis.com`, `generativelanguage.googleapis.com` |
-| Vertex fallback | `aiplatform.googleapis.com`, `script.googleapis.com`, `secretmanager.googleapis.com`, `cloudresourcemanager.googleapis.com` |
+| Vertex fallback | `aiplatform.googleapis.com`, `script.googleapis.com`, `secretmanager.googleapis.com`, `cloudresourcemanager.googleapis.com`, `drive.googleapis.com` |
 
 State records a signed creation intent before project creation, then only
 project IDs, project numbers, provenance, phase, and other non-secret metadata
