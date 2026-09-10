@@ -1545,6 +1545,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 "provisioner.core._bootstrap_secret_version_state", return_value="DISABLED"
             ), mock.patch("provisioner.core._disable_bootstrap_secret_version", side_effect=record_disablement), mock.patch(
                 "provisioner.core._disable_enabled_bootstrap_secret_versions"
+            ), mock.patch("provisioner.core._assert_bootstrap_secret_owned"
             ), mock.patch(
                 "provisioner.core._ensure_bootstrap_secret"
             ), mock.patch("provisioner.core._invoke_bootstrap"

@@ -1911,7 +1911,7 @@ def _ensure_owner_only_deployment(access_token: str, script_id: str, digest: str
             access_token,
             "PUT",
             f"https://script.googleapis.com/v1/projects/{script_id}/deployments/{deployment_id}",
-            {"deploymentConfig": {"versionNumber": version, "description": marker, "manifestFileName": "appsscript"}},
+            {"versionNumber": version, "description": marker, "manifestFileName": "appsscript"},
         )
         return _validate_owner_only_deployment(updated, script_id, version)
     created = _apps_script_json(
@@ -2074,22 +2074,29 @@ def _project_ancestor_secret_policies(gcloud: str, project_id: str, project_numb
 
 
 def _ensure_bootstrap_secret(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str) -> None:
+    _assert_bootstrap_secret_owned(gcloud, config, owner, project_number, create=True)
     project_id = config["vertexProject"]
-    try:
-        secret = _secret_describe(gcloud, project_id, project_number, owner)
-    except BootstrapSecretNotFound:
-        _cloud_success((gcloud, "secrets", "create", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", f"--labels={BOOTSTRAP_SECRET_LABEL}={config['cloudInstallationId']}", "--quiet"), account=owner, operation="bootstrap secret creation")
-        secret = _secret_describe(gcloud, project_id, project_number, owner)
-    labels = secret.get("labels") if isinstance(secret, dict) else None
-    expected_name = _secret_resource_pattern(project_id, project_number)
-    if not isinstance(secret, dict) or not isinstance(secret.get("name"), str) or not re.fullmatch(expected_name, secret["name"]) or not isinstance(labels, dict) or labels.get(BOOTSTRAP_SECRET_LABEL) != config["cloudInstallationId"]:
-        raise ProvisionerError("bootstrap secret is not owned by this installation")
     for policy in _project_ancestor_secret_policies(gcloud, project_id, project_number, owner):
         _assert_owner_only_project_secret_accessor(gcloud, policy, owner)
     _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=False)
     _cloud_success((gcloud, "secrets", "add-iam-policy-binding", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", f"--member=user:{owner}", "--role=roles/secretmanager.secretAccessor", "--quiet"), account=owner, operation="bootstrap secret access grant")
     _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=True)
     _disable_enabled_bootstrap_secret_versions(gcloud, config, owner, project_number)
+
+
+def _assert_bootstrap_secret_owned(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str, *, create: bool) -> None:
+    project_id = config["vertexProject"]
+    try:
+        secret = _secret_describe(gcloud, project_id, project_number, owner)
+    except BootstrapSecretNotFound:
+        if not create:
+            raise ProvisionerError("bootstrap secret is not owned by this installation")
+        _cloud_success((gcloud, "secrets", "create", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", f"--labels={BOOTSTRAP_SECRET_LABEL}={config['cloudInstallationId']}", "--quiet"), account=owner, operation="bootstrap secret creation")
+        secret = _secret_describe(gcloud, project_id, project_number, owner)
+    labels = secret.get("labels") if isinstance(secret, dict) else None
+    expected_name = _secret_resource_pattern(project_id, project_number)
+    if not isinstance(secret, dict) or not isinstance(secret.get("name"), str) or not re.fullmatch(expected_name, secret["name"]) or not isinstance(labels, dict) or labels.get(BOOTSTRAP_SECRET_LABEL) != config["cloudInstallationId"]:
+        raise ProvisionerError("bootstrap secret is not owned by this installation")
 
 
 def _disable_enabled_bootstrap_secret_versions(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str) -> None:
@@ -2258,6 +2265,7 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             if status == "staged":
                 _disable_bootstrap_secret_version(gcloud, config, owner, vertex["projectNumber"], state["bootstrap"]["secretVersion"])
             elif status in {"staging", "replacement-staging"}:
+                _assert_bootstrap_secret_owned(gcloud, config, owner, vertex["projectNumber"], create=False)
                 _disable_enabled_bootstrap_secret_versions(gcloud, config, owner, vertex["projectNumber"])
             else:
                 secret_version = state["bootstrap"]["secretVersion"]
