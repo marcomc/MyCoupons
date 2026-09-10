@@ -1899,7 +1899,7 @@ def _validate_bootstrap_payload(path: Path, config: Mapping[str, Any]) -> bytes:
     except OSError as exc:
         raise ProvisionerError("bootstrap payload cannot be resolved") from exc
     _assert_outside_worktree(path)
-    payload = _read_json_file(path, maximum_bytes=12000)
+    payload = _read_json_file(path, maximum_bytes=64 * 1024)
     if not isinstance(payload, dict) or set(payload) != {"version", "config", "geminiApiKey"} or payload.get("version") != 1:
         raise ProvisionerError("bootstrap payload is malformed")
     expected_config = {key: config[key] for key in INSTALLER_CONFIG_KEYS}
@@ -1908,7 +1908,10 @@ def _validate_bootstrap_payload(path: Path, config: Mapping[str, Any]) -> bytes:
     key = payload["geminiApiKey"]
     if not isinstance(key, str) or _utf16_units(key) > 512 or not re.fullmatch(r"AIza[A-Za-z0-9_-]{20,}", key):
         raise ProvisionerError("bootstrap payload is malformed")
-    return _canonical_json(payload)
+    canonical = _canonical_json(payload)
+    if _utf16_units(canonical.decode("utf-8")) > 12000:
+        raise ProvisionerError("bootstrap payload is malformed")
+    return canonical
 
 
 def _require_cloud_ready_state(state: Mapping[str, Any], config: Mapping[str, Any]) -> Mapping[str, Any]:
