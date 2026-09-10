@@ -104,7 +104,7 @@ function bootstrapFromSecret(secretVersion) {
     const previousKey = properties.getProperty('GEMINI_API_KEY');
     try {
       properties.setProperty('GEMINI_API_KEY', bootstrap.geminiApiKey);
-      return bootstrapInstallationResult_(beginMyCouponsInstallation(bootstrap.config));
+      return bootstrapInstallationResult_(beginMyCouponsInstallation(persisted || bootstrap.config));
     } catch (e) {
       if (previousKey === null) properties.deleteProperty('GEMINI_API_KEY');
       else properties.setProperty('GEMINI_API_KEY', previousKey);
