@@ -2324,6 +2324,13 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         if bootstrap["status"] in {"staged", "verified"}:
             _ensure_bootstrap_secret(gcloud, config, owner, project_number)
             secret_version = bootstrap["secretVersion"]
+            if bootstrap["status"] == "staged" and _bootstrap_secret_version_state(gcloud, config, owner, project_number, secret_version) != "ENABLED":
+                if payload is None:
+                    raise ProvisionerError("bootstrap payload is required until bootstrap completes")
+                secret_version = _stage_bootstrap_secret(gcloud, config, owner, project_number, payload)
+                state = dict(state)
+                state["bootstrap"] = {"secretVersion": secret_version, "status": "staged"}
+                state = _persist_state_locked(state_dir, state, key)
         else:
             if bootstrap["status"] == "staging":
                 # No resource ID was durably bound before the interrupted

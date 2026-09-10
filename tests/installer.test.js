@@ -227,7 +227,7 @@ test('bootstrap restores the prior key and leaves secret data out of errors when
 test('bootstrap restores the prior configuration and key when transactional installation fails', () => {
   const {ctx, properties, config} = harness();
   const previous = {...config, vertexProject: 'vertex-project'};
-  const replacement = {...previous, model: 'gemini-replacement'};
+  const replacement = {...previous};
   const priorKey = 'AIza98765432109876543210';
   properties.MYCOUPONS_CONFIG = JSON.stringify(previous);
   properties.GEMINI_API_KEY = priorKey;
