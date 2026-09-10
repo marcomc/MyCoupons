@@ -83,7 +83,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "deploy-apps-script":
             state = deploy_apps_script(args.state_dir, config, args.source_dir, args.clasp_auth, args.bootstrap_payload)
-            _emit({"appsScriptReady": state["phase"] in {"apps-script-ready", "bootstrap-complete"}, "bootstrapComplete": state["phase"] == "bootstrap-complete"})
+            _emit(
+                {
+                    "appsScriptReady": state["phase"] in {"apps-script-ready", "bootstrap-complete"},
+                    "bootstrapComplete": state["phase"] == "bootstrap-complete",
+                    "phase": state["phase"],
+                }
+            )
             return 0
         raise AssertionError("unhandled command")
     except ProvisionerError as exc:

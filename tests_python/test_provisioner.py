@@ -1013,7 +1013,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 if command[1:3] == ("projects", "describe"):
                     return {"projectId": "vertex-project", "projectNumber": "654321", "lifecycleState": "ACTIVE", "labels": {"mycoupons-installation": "installation-demo", "mycoupons-role": "vertex"}}
                 if command[1:3] == ("projects", "get-ancestors"):
-                    return [{"type": "project", "id": "vertex-project"}]
+                    return [{"type": "project", "id": "654321"}]
                 if command[1:3] == ("projects", "get-iam-policy"):
                     return {"bindings": [{"role": "roles/owner", "members": ["user:owner@example.com"]}]}
                 if command[1:3] == ("secrets", "describe"):
@@ -1027,6 +1027,13 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 raise AssertionError(command)
 
             with mock.patch("provisioner.core.discover_tools", return_value={"clasp": "/safe/clasp", "gcloud": "/safe/gcloud"}), mock.patch("provisioner.core._run_json", side_effect=command), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch("provisioner.core._cloud_success"), mock.patch("provisioner.core._run_json_with_input", return_value={"name": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1"}):
+                association_required = core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
+                self.assertEqual(association_required["phase"], "apps-script-association-required")
+                self.assertEqual(
+                    association_required["appsScript"],
+                    {"scriptId": "script-1", "provenance": "created", "bundleDigest": None, "versionNumber": None, "deploymentId": None},
+                )
+                self.assertFalse(deployed_files)
                 state = core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
             self.assertEqual(state["phase"], "bootstrap-complete")
             self.assertEqual(state["appsScript"]["scriptId"], "script-1")
@@ -1166,7 +1173,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             commands.append(command)
             if command[1:3] == ("projects", "get-ancestors"):
                 return [
-                    {"type": "project", "id": "vertex-project"},
+                    {"type": "project", "id": "654321"},
                     {"type": "folder", "id": "123456"},
                     {"type": "organization", "id": "654321"},
                 ]
@@ -1181,7 +1188,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
         with mock.patch("provisioner.core._cloud_json", side_effect=cloud_json), mock.patch(
             "provisioner.core._role_can_access_secret_versions", return_value=True
         ):
-            policies = core._project_ancestor_secret_policies("/safe/gcloud", "vertex-project", "owner@example.com")
+            policies = core._project_ancestor_secret_policies("/safe/gcloud", "vertex-project", "654321", "owner@example.com")
             with self.assertRaisesRegex(core.ProvisionerError, "unsafe inherited"):
                 for policy in policies:
                     core._assert_owner_only_project_secret_accessor("/safe/gcloud", policy, "owner@example.com")
@@ -1257,7 +1264,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 if command[0] == "/safe/clasp": return {"loggedIn": True, "email": "owner@example.com"}
                 if command[1:3] == ("auth", "list"): return [{"account": "owner@example.com", "status": "ACTIVE"}]
                 if command[1:3] == ("projects", "describe"): return {"projectId": "vertex-project", "projectNumber": "654321", "lifecycleState": "ACTIVE", "labels": {"mycoupons-installation": "installation-demo", "mycoupons-role": "vertex"}}
-                if command[1:3] == ("projects", "get-ancestors"): return [{"type": "project", "id": "vertex-project"}]
+                if command[1:3] == ("projects", "get-ancestors"): return [{"type": "project", "id": "654321"}]
                 if command[1:3] == ("projects", "get-iam-policy"): return {"bindings": [{"role": "roles/owner", "members": ["user:owner@example.com"]}]}
                 if command[1:3] == ("secrets", "describe"): return {"name": "projects/vertex-project/secrets/mycoupons-bootstrap", "labels": {"mycoupons-installation": "installation-demo"}}
                 if command[1:4] == ("secrets", "get-iam-policy", "mycoupons-bootstrap"): return {"bindings": [{"role": "roles/secretmanager.secretAccessor", "members": ["user:owner@example.com"]}]}

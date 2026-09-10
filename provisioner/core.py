@@ -482,7 +482,7 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
     }:
         raise ProvisionerError("installation state has an unsupported shape")
     if state["version"] != STATE_VERSION or not isinstance(state["phase"], str) or state["phase"] not in {
-        "initialized", "bundle-validated", "cloud-projects-reconciled", "cloud-ready", "apps-script-ready", "bootstrap-complete"
+        "initialized", "bundle-validated", "cloud-projects-reconciled", "cloud-ready", "apps-script-association-required", "apps-script-ready", "bootstrap-complete"
     }:
         raise ProvisionerError("installation state has an unsupported version or phase")
     _validate_common_state_identity(state)
@@ -510,11 +510,13 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
     if apps_script["scriptId"] is None:
         if any(value is not None for value in apps_script.values()):
             raise ProvisionerError("installation state has an invalid Apps Script record")
+    elif not isinstance(apps_script["scriptId"], str) or not APPS_SCRIPT_ID_RE.fullmatch(apps_script["scriptId"]) or apps_script["provenance"] not in {"created", "adopted"}:
+        raise ProvisionerError("installation state has an invalid Apps Script record")
+    elif all(apps_script[key] is None for key in ("bundleDigest", "versionNumber", "deploymentId")):
+        if state["phase"] != "apps-script-association-required":
+            raise ProvisionerError("installation state has an invalid Apps Script record")
     elif (
-        not isinstance(apps_script["scriptId"], str)
-        or not APPS_SCRIPT_ID_RE.fullmatch(apps_script["scriptId"])
-        or apps_script["provenance"] not in {"created", "adopted"}
-        or not isinstance(apps_script["bundleDigest"], str)
+        not isinstance(apps_script["bundleDigest"], str)
         or not re.fullmatch(r"[0-9a-f]{64}", apps_script["bundleDigest"])
         or not isinstance(apps_script["versionNumber"], int)
         or apps_script["versionNumber"] < 1
@@ -1870,7 +1872,7 @@ def _validate_bootstrap_payload(path: Path, config: Mapping[str, Any]) -> bytes:
 
 def _require_cloud_ready_state(state: Mapping[str, Any], config: Mapping[str, Any]) -> Mapping[str, Any]:
     vertex = state["cloud"].get("vertex") if isinstance(state.get("cloud"), dict) else None
-    if state["phase"] not in {"cloud-ready", "apps-script-ready", "bootstrap-complete"} or not isinstance(vertex, dict):
+    if state["phase"] not in {"cloud-ready", "apps-script-association-required", "apps-script-ready", "bootstrap-complete"} or not isinstance(vertex, dict):
         raise ProvisionerError("Cloud provisioning must complete before Apps Script deployment")
     if vertex.get("projectId") != config["vertexProject"] or vertex.get("provenance") not in {"created", "adopted"}:
         raise ProvisionerError("persisted Vertex project identity does not match the installation")
@@ -1953,7 +1955,7 @@ def _assert_owner_only_project_secret_accessor(gcloud: str, policy: Any, owner: 
             raise ProvisionerError("Cloud project has unsafe inherited secret access")
 
 
-def _project_ancestor_secret_policies(gcloud: str, project_id: str, owner: str) -> list[Any]:
+def _project_ancestor_secret_policies(gcloud: str, project_id: str, project_number: str, owner: str) -> list[Any]:
     """Return every policy inherited by a project, rejecting unknown ancestry."""
     ancestors = _cloud_json(
         (gcloud, "projects", "get-ancestors", project_id, "--format=json", "--quiet"),
@@ -1973,7 +1975,7 @@ def _project_ancestor_secret_policies(gcloud: str, project_id: str, owner: str) 
         if not isinstance(resource_type, str) or not isinstance(resource_id, str) or (resource_type, resource_id) in seen:
             raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
         seen.add((resource_type, resource_id))
-        if resource_type == "project" and resource_id == project_id:
+        if resource_type == "project" and resource_id == project_number:
             project_seen = True
             command = (gcloud, "projects", "get-iam-policy", project_id, "--format=json", "--quiet")
         elif resource_type == "folder" and PROJECT_NUMBER_RE.fullmatch(resource_id):
@@ -2001,7 +2003,7 @@ def _ensure_bootstrap_secret(gcloud: str, config: Mapping[str, Any], owner: str,
     expected_name = _secret_resource_pattern(project_id, project_number)
     if not isinstance(secret, dict) or not isinstance(secret.get("name"), str) or not re.fullmatch(expected_name, secret["name"]) or not isinstance(labels, dict) or labels.get(BOOTSTRAP_SECRET_LABEL) != config["cloudInstallationId"]:
         raise ProvisionerError("bootstrap secret is not owned by this installation")
-    for policy in _project_ancestor_secret_policies(gcloud, project_id, owner):
+    for policy in _project_ancestor_secret_policies(gcloud, project_id, project_number, owner):
         _assert_owner_only_project_secret_accessor(gcloud, policy, owner)
     _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=False)
     _cloud_success((gcloud, "secrets", "add-iam-policy-binding", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", f"--member=user:{owner}", "--role=roles/secretmanager.secretAccessor", "--quiet"), account=owner, operation="bootstrap secret access grant")
@@ -2150,6 +2152,17 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         access_token = _require_isolated_clasp_owner(clasp_auth, config["ownerEmail"])
         script_id, provenance = _find_or_create_apps_script(access_token, config["ownerEmail"], state)
         _assert_private_owner_script(_drive_script_metadata(access_token, script_id), config["ownerEmail"], script_id)
+        if state["appsScript"]["scriptId"] is None and provenance == "created":
+            state = dict(state)
+            state["appsScript"] = {
+                "scriptId": script_id,
+                "provenance": provenance,
+                "bundleDigest": None,
+                "versionNumber": None,
+                "deploymentId": None,
+            }
+            state["phase"] = "apps-script-association-required"
+            return _persist_state_locked(state_dir, state, key)
         # A project we can adopt may still have a deployment that violates the
         # owner-only contract.  Reject it before replacing any remote source.
         _deployment_list(access_token, script_id)

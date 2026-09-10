@@ -88,13 +88,16 @@ The command refreshes and verifies the isolated `clasp` identity against
 exactly titled `MyCoupons` project only when Drive confirms that the configured
 owner is its sole owner and sole permission. More than one candidate, any
 foreign permission, or inaccessible/invalid metadata fails before source
-mutation. If no candidate exists, it creates one standalone project and checks
-the same ownership condition before continuing.
+mutation. If no candidate exists, it creates one standalone project, verifies
+its ownership, persists `apps-script-association-required`, and returns without
+uploading source, creating a deployment, or staging a secret.
 
-Before this command, associate the Apps Script project with its operator-managed
-standard Cloud project and authorize the isolated OAuth client in that same
-project for the Execution API. Google does not expose that association through
-the Apps Script API. The command invokes the deployed, no-op
+Associate that newly created project with its operator-managed standard Cloud
+project in the Apps Script editor, authorize the isolated OAuth client in that
+same project for the Execution API, then rerun the command. For an adopted
+project, complete that operator-managed association before the first command.
+Google does not expose the association through the Apps Script API. The command
+invokes the deployed, no-op
 `verifyBootstrapExecutionAccess` function before creating or staging a secret;
 that call must succeed, so an unrelated `clasp` OAuth client cannot leave an
 enabled bootstrap secret behind.

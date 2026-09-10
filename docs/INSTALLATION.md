@@ -47,20 +47,25 @@ payload outside the checkout; see [the provisioner guide](PROVISIONER.md#apps-sc
 
 ## Apps Script setup
 
-The provisioner creates or adopts one private owner-only Apps Script project,
-uploads `src`, verifies the immutable owner-only Execution API deployment, and
-configures the installer through its secure bootstrap. The installer creates
-only missing Sheet tabs, nested Gmail label prefixes, the owned daily trigger,
-and the installable `onReviewEdit` trigger; it rejects ambiguous matches and
-non-private sharing, and preserves existing headers and rows. Store secrets
-only in Script Properties.
+The provisioner creates or adopts one private owner-only Apps Script project.
+When it creates a project, the command persists
+`apps-script-association-required` and returns before uploading `src`, creating
+a deployment, or staging a secret. Associate that project with the intended
+standard Cloud project, then rerun the command to upload `src`, verify the
+immutable owner-only Execution API deployment, and configure the installer
+through its secure bootstrap. The installer creates only missing Sheet tabs,
+nested Gmail label prefixes, the owned daily trigger, and the installable
+`onReviewEdit` trigger; it rejects ambiguous matches and non-private sharing,
+and preserves existing headers and rows. Store secrets only in Script
+Properties.
 
 The Apps Script editor does not pass arguments to functions. Do not replace the
 provisioner's owner-only bootstrap with a manual editor run that could expose a
 credential.
 
-Before bootstrap, associate the project with the intended standard Cloud project
-in the Apps Script editor and authorize the isolated OAuth client from that same
+Before the rerun after creation, or before the first command for an adopted
+project, associate the project with the intended standard Cloud project in the
+Apps Script editor and authorize the isolated OAuth client from that same
 project. The Apps Script API cannot make or inspect that association. The CLI
 performs a no-op Execution API call before staging a secret and fails if the
 caller cannot invoke the owner-only deployment.

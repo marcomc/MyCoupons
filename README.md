@@ -192,12 +192,15 @@ required APIs without printing identifiers, raw diagnostics, credentials, or
 command output.
 
 `deploy-apps-script` then uses a private isolated clasp authorization to create
-or adopt one sole-owner private Apps Script project, upload/read-back the exact
-source digest, and create/recover only owner-only Execution API deployments. It
-passes an in-memory bootstrap payload through an installation-owned Secret
-Manager version, validates the non-secret `bootstrapFromSecret` result, disables
-that version, and persists only signed non-secret metadata. Unsafe deployments,
-ambiguous projects, or foreign sharing fail closed.
+or adopt one sole-owner private Apps Script project. A newly created project
+returns `apps-script-association-required` before source upload, deployment, or
+secret staging; after its operator-managed Cloud association, a rerun uploads
+and reads back the exact source digest and creates or recovers only owner-only
+Execution API deployments. It passes an in-memory bootstrap payload through an
+installation-owned Secret Manager version, validates the non-secret
+`bootstrapFromSecret` result, disables that version, and persists only signed
+non-secret metadata. Unsafe deployments, ambiguous projects, or foreign sharing
+fail closed.
 
 See [the provisioner guide](docs/PROVISIONER.md) for the implemented commands
 and deferred steps.
