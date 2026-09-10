@@ -577,6 +577,10 @@ class ProvisionerCloudTests(unittest.TestCase):
         same["vertexProject"] = same["developerProject"]
         with self.assertRaisesRegex(core.ProvisionerError, "distinct"):
             core.validate_cloud_config(same)
+        trailing_hyphen = valid_cloud_config()
+        trailing_hyphen["cloudInstallationId"] = "installation-demo-"
+        with self.assertRaisesRegex(core.ProvisionerError, "Cloud installation identity"):
+            core.validate_cloud_config(trailing_hyphen)
 
 
 class ProvisionerBundleTests(unittest.TestCase):
@@ -830,6 +834,11 @@ class ProvisionerCommandTests(unittest.TestCase):
         self.assertTrue(
             core._gcloud_reports_project_not_found(
                 b"ERROR: (gcloud.projects.describe) [developer-project] not found\n", project_id
+            )
+        )
+        self.assertTrue(
+            core._gcloud_reports_project_not_found(
+                b"ERROR: (gcloud.projects.describe) [developer-project] not found.\n", project_id
             )
         )
         for response in (

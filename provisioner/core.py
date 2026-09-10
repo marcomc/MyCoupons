@@ -87,7 +87,7 @@ MAX_BUNDLE_FILES = 1000
 MAX_BUNDLE_PATH_BYTES = 128 * 1024
 PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 PROJECT_NUMBER_RE = re.compile(r"^[1-9][0-9]{5,31}$")
-INSTALLATION_LABEL_RE = re.compile(r"^[a-z][a-z0-9-]{15,62}$")
+INSTALLATION_LABEL_RE = re.compile(r"^[a-z][a-z0-9-]{14,61}[a-z0-9]$")
 BILLING_ACCOUNT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{4,98}$")
 EMAIL_RE = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
 MODEL_RE = re.compile(r"^gemini-[a-z0-9._-]+$")
@@ -967,7 +967,7 @@ def _gcloud_reports_project_not_found(stderr: bytes, project_id: str) -> bool:
         return False
     escaped_id = re.escape(project_id)
     return re.fullmatch(
-        rf"ERROR: \(gcloud\.projects\.describe\) \[{escaped_id}\] not found\s*",
+        rf"ERROR: \(gcloud\.projects\.describe\) \[{escaped_id}\] not found\.?\s*",
         message,
         flags=re.IGNORECASE,
     ) is not None
