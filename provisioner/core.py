@@ -1437,7 +1437,7 @@ def _service_enabled(gcloud: str, project_id: str, service: str, account: str) -
             "list",
             "--enabled",
             f"--filter=config.name={service}",
-            "--format=json",
+            "--format=json(config.name)",
             "--quiet",
             f"--project={project_id}",
         ),
@@ -1449,7 +1449,9 @@ def _service_enabled(gcloud: str, project_id: str, service: str, account: str) -
     names = [entry["config"].get("name") for entry in response]
     if any(not isinstance(name, str) for name in names) or any(name != service for name in names):
         raise ProvisionerError("Cloud API service inspection returned unexpected resources")
-    return len(names) == 1
+    if len(names) > 1:
+        raise ProvisionerError("Cloud API service inspection returned unexpected resources")
+    return bool(names)
 
 
 def _ensure_service(
