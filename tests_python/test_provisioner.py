@@ -1061,6 +1061,23 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                     "private-token", "owner@example.com", state, lambda: None, lambda: None, lambda _value: None, lambda: None
                 )
 
+    def test_script_create_pre_request_intent_retries_the_create(self) -> None:
+        state = {
+            "phase": "apps-script-creation-intent",
+            "appsScript": {"scriptId": None, "provenance": None, "bundleDigest": None, "versionNumber": None, "deploymentId": None},
+        }
+        events: list[object] = []
+        with mock.patch("provisioner.core._apps_script_list", return_value=[]), mock.patch(
+            "provisioner.core._apps_script_json", return_value={"scriptId": "script-1"}
+        ):
+            result = core._find_or_create_apps_script(
+                "private-token", "owner@example.com", state,
+                lambda: events.append("intent"), lambda: events.append("posted"),
+                lambda value: events.append(("created", value)), lambda: events.append("cleared"),
+            )
+        self.assertEqual(result, ("script-1", "created"))
+        self.assertEqual(events, ["cleared", "intent", ("created", "script-1")])
+
     def _deployment(self, script_id: str = "script-1", deployment_id: str = "deployment-1", version: int = 1) -> dict[str, object]:
         return {
             "deploymentId": deployment_id,
@@ -1073,6 +1090,21 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
         metadata["owners"] = [{"emailAddress": None}]
         with self.assertRaisesRegex(core.ProvisionerError, "private and owner-only"):
             core._assert_private_owner_script(metadata, "owner@example.com")
+
+    def test_adopted_script_reuses_its_sole_owner_only_deployment(self) -> None:
+        digest = "a" * 64
+        deployment = self._deployment()
+        deployment["deploymentConfig"]["description"] = "MyCoupons owner-only old-digest"
+        updated = self._deployment(version=2)
+        updated["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+        with mock.patch("provisioner.core._deployment_list", return_value=[deployment]), mock.patch(
+            "provisioner.core._version_for_bundle", return_value=2
+        ), mock.patch("provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
+            "provisioner.core._apps_script_json", return_value=updated
+        ) as api:
+            self.assertEqual(core._ensure_owner_only_deployment("private-token", "script-1", digest), ("deployment-1", 2))
+        self.assertEqual(api.call_args.args[1], "PUT")
+        self.assertTrue(api.call_args.args[2].endswith("/deployments/deployment-1"))
         metadata = self._owner_metadata()
         metadata["permissions"] = [{"type": "user", "role": "owner", "emailAddress": None}]
         with self.assertRaisesRegex(core.ProvisionerError, "private and owner-only"):
@@ -1256,6 +1288,14 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 {"bindings": [{"role": "roles/secretmanager.secretAccessor", "members": ["user:other@example.com"]}]},
                 "owner@example.com",
                 )
+
+    def test_project_secret_accessor_rejects_foreign_iam_escalation_role(self) -> None:
+        policy = {"bindings": [{"role": "projects/vertex-project/roles/iam-mutator", "members": ["user:other@example.com"]}]}
+        with mock.patch(
+            "provisioner.core._cloud_json", return_value={"includedPermissions": ["resourcemanager.projects.setIamPolicy"]}
+        ):
+            with self.assertRaisesRegex(core.ProvisionerError, "unsafe inherited"):
+                core._assert_owner_only_project_secret_accessor("/safe/gcloud", policy, "owner@example.com")
 
     def test_project_secret_accessor_allows_policy_without_bindings(self) -> None:
         core._assert_owner_only_project_secret_accessor(
@@ -1459,6 +1499,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             self._payload(payload, config)
             digest = core.validate_bundle(ROOT / "src")
             old_version = "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1"
+            replacement_version = "projects/vertex-project/secrets/mycoupons-bootstrap/versions/2"
             with core.InstallationLock(state_dir):
                 key = core._load_or_create_identity_key(state_dir)
                 state = core._load_state_locked(state_dir, key)
@@ -1467,11 +1508,17 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 state["phase"] = "apps-script-ready"
                 core._persist_state_locked(state_dir, state, key)
 
-            def abort_after_reading_intent(*_args: object, **_kwargs: object) -> str:
-                key = core._load_or_create_identity_key(state_dir)
-                staged = core._load_state_locked(state_dir, key)
-                self.assertEqual(staged["bootstrap"], {"secretVersion": old_version, "status": "replacement-staging"})
-                raise core.ProvisionerError("simulated response loss")
+            stage_attempts = 0
+
+            def stage_after_reading_intent(*_args: object, **_kwargs: object) -> str:
+                nonlocal stage_attempts
+                stage_attempts += 1
+                if stage_attempts == 1:
+                    key = core._load_or_create_identity_key(state_dir)
+                    staged = core._load_state_locked(state_dir, key)
+                    self.assertEqual(staged["bootstrap"], {"secretVersion": old_version, "status": "replacement-staging"})
+                    raise core.ProvisionerError("simulated response loss")
+                return replacement_version
 
             disabled: list[str] = []
 
@@ -1497,15 +1544,16 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 "provisioner.core._bootstrap_secret_version_state", return_value="DISABLED"
             ), mock.patch("provisioner.core._disable_bootstrap_secret_version", side_effect=record_disablement), mock.patch(
                 "provisioner.core._ensure_bootstrap_secret"
+            ), mock.patch("provisioner.core._invoke_bootstrap"
             ), mock.patch(
-                "provisioner.core._stage_bootstrap_secret", side_effect=abort_after_reading_intent
+                "provisioner.core._stage_bootstrap_secret", side_effect=stage_after_reading_intent
             ):
                 with self.assertRaisesRegex(core.ProvisionerError, "simulated response loss"):
                     core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
-                with self.assertRaisesRegex(core.ProvisionerError, "requires operator cleanup"):
-                    core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
+                resumed = core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
 
             with core.InstallationLock(state_dir):
                 key = core._load_or_create_identity_key(state_dir)
                 persisted = core._load_state_locked(state_dir, key)
-            self.assertEqual(persisted["bootstrap"], {"secretVersion": old_version, "status": "replacement-staging"})
+            self.assertEqual(resumed["phase"], "bootstrap-complete")
+            self.assertEqual(persisted["bootstrap"], {"secretVersion": replacement_version, "status": "complete"})

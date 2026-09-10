@@ -491,7 +491,7 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
     }:
         raise ProvisionerError("installation state has an unsupported shape")
     if state["version"] != STATE_VERSION or not isinstance(state["phase"], str) or state["phase"] not in {
-        "initialized", "bundle-validated", "cloud-projects-reconciled", "cloud-ready", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-ready", "bootstrap-complete"
+        "initialized", "bundle-validated", "cloud-projects-reconciled", "cloud-ready", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-ready", "bootstrap-complete"
     }:
         raise ProvisionerError("installation state has an unsupported version or phase")
     _validate_common_state_identity(state)
@@ -1492,7 +1492,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
         if state["bundleDigest"] is None or state["phase"] == "initialized":
             raise ProvisionerError("validate the Apps Script source bundle before Cloud provisioning")
         key = _load_or_create_identity_key(state_dir)
-        app_script_pending = state["phase"] in {"apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required"}
+        app_script_pending = state["phase"] in {"apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required"}
         gcloud = discover_tools(("gcloud",))["gcloud"]
         if gcloud is None:
             raise ProvisionerError("gcloud is required for Cloud provisioning")
@@ -1746,8 +1746,12 @@ def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapp
     if len(files) > 1:
         raise ProvisionerError("Apps Script project adoption is ambiguous")
     if len(files) == 1:
-        return _assert_private_owner_script(files[0], owner_email), "created" if state["phase"] in {"apps-script-creation-pending", "apps-script-creation-posted"} else "adopted"
-    if state["phase"] in {"apps-script-creation-pending", "apps-script-creation-posted"}:
+        return _assert_private_owner_script(files[0], owner_email), "created" if state["phase"] in {"apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted"} else "adopted"
+    if state["phase"] == "apps-script-creation-intent":
+        # The durable intent precedes the non-idempotent request.  No project
+        # is ambiguous until a POST can have reached the service.
+        clear_creation_intent()
+    elif state["phase"] in {"apps-script-creation-pending", "apps-script-creation-posted"}:
         raise ProvisionerError("Apps Script project creation is pending Drive visibility")
     persist_creation_intent()
     try:
@@ -1891,6 +1895,8 @@ def _ensure_owner_only_deployment(access_token: str, script_id: str, digest: str
     matching = [deployment for deployment in deployments if deployment.get("deploymentConfig", {}).get("description") == marker]
     if not matching and persisted_deployment_id is not None:
         matching = [deployment for deployment in deployments if deployment.get("deploymentId") == persisted_deployment_id]
+    if not matching and persisted_deployment_id is None:
+        matching = [deployment for deployment in deployments if deployment.get("deploymentId") != "HEAD"]
     if len(matching) > 1:
         raise ProvisionerError("Apps Script deployment recovery is ambiguous")
     version = _version_for_bundle(access_token, script_id, digest)
@@ -1943,7 +1949,7 @@ def _validate_bootstrap_payload(path: Path, config: Mapping[str, Any]) -> bytes:
 
 def _require_cloud_ready_state(state: Mapping[str, Any], config: Mapping[str, Any]) -> Mapping[str, Any]:
     vertex = state["cloud"].get("vertex") if isinstance(state.get("cloud"), dict) else None
-    if state["phase"] not in {"cloud-ready", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-ready", "bootstrap-complete"} or not isinstance(vertex, dict):
+    if state["phase"] not in {"cloud-ready", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-ready", "bootstrap-complete"} or not isinstance(vertex, dict):
         raise ProvisionerError("Cloud provisioning must complete before Apps Script deployment")
     if vertex.get("projectId") != config["vertexProject"] or vertex.get("provenance") not in {"created", "adopted"}:
         raise ProvisionerError("persisted Vertex project identity does not match the installation")
@@ -2002,7 +2008,10 @@ def _role_can_access_secret_versions(gcloud: str, role: str, owner: str) -> bool
     permissions = described.get("includedPermissions") if isinstance(described, dict) else None
     if not isinstance(permissions, list) or any(not isinstance(permission, str) for permission in permissions):
         raise ProvisionerError("Cloud role access inspection returned invalid data")
-    return "secretmanager.versions.access" in permissions or "*" in permissions
+    return bool(
+        {"secretmanager.versions.access", "secretmanager.secrets.setIamPolicy", "resourcemanager.projects.setIamPolicy", "*"}
+        & set(permissions)
+    )
 
 
 def _assert_owner_only_project_secret_accessor(gcloud: str, policy: Any, owner: str) -> None:
@@ -2363,6 +2372,15 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         )
         _ensure_service(gcloud, config["vertexProject"], "cloudresourcemanager.googleapis.com", installation_label=config["cloudInstallationId"], role="vertex", expected_owner=owner, persisted=state["cloud"]["vertex"])
         _verify_execution_api_access(access_token, script_id)
+        if bootstrap["status"] in {"staging", "replacement-staging"}:
+            # An interrupted `versions add` has no durable new-version ID.
+            # Reconcile every dedicated-secret version before making this
+            # signed state retryable again.
+            _ensure_bootstrap_secret(gcloud, config, owner, project_number)
+            state = dict(state)
+            state["bootstrap"] = {"secretVersion": None, "status": "not-started"}
+            state = _persist_state_locked(state_dir, state, key)
+            bootstrap = state["bootstrap"]
         if bootstrap["status"] in {"staged", "verified"}:
             _ensure_bootstrap_secret(gcloud, config, owner, project_number)
             secret_version = bootstrap["secretVersion"]
@@ -2377,10 +2395,6 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
                 state["bootstrap"] = {"secretVersion": secret_version, "status": "staged"}
                 state = _persist_state_locked(state_dir, state, key)
         else:
-            if bootstrap["status"] in {"staging", "replacement-staging"}:
-                # No resource ID was durably bound before the interrupted
-                # mutation, so accepting an arbitrary enabled version is unsafe.
-                raise ProvisionerError("interrupted bootstrap staging requires operator cleanup")
             if bootstrap["status"] != "not-started":
                 raise ProvisionerError("bootstrap state is invalid")
             if bootstrap["status"] == "not-started":
