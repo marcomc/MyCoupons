@@ -11,6 +11,7 @@ import datetime
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import selectors
@@ -70,15 +71,25 @@ LOCK_FILE = "install.lock"
 STATE_VERSION = 1
 MAX_CONFIG_BYTES = 8000
 MAX_COMMAND_OUTPUT_BYTES = 65536
+MAX_BUNDLE_FILE_BYTES = 1024 * 1024
+MAX_BUNDLE_TOTAL_BYTES = 8 * 1024 * 1024
 PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
-EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+EMAIL_RE = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
 MODEL_RE = re.compile(r"^gemini-[a-z0-9._-]+$")
 VERTEX_LOCATION_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 ECMASCRIPT_TRIM_CHARS = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+ECMASCRIPT_WHITESPACE_RE = re.compile(f"[{re.escape(ECMASCRIPT_TRIM_CHARS)}]")
 
 
 def _canonical_json(value: Any) -> bytes:
     return json.dumps(value, allow_nan=False, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("non-finite JSON number")
+    return parsed
 
 
 def _sha256(value: bytes) -> str:
@@ -105,6 +116,10 @@ def _no_duplicate_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _reject_json_constant(value: str) -> None:
     raise ValueError(f"unsupported JSON constant: {value}")
+
+
+def _valid_email(value: str) -> bool:
+    return not ECMASCRIPT_WHITESPACE_RE.search(value) and EMAIL_RE.fullmatch(value) is not None
 
 
 def _assert_well_formed_unicode(value: Any) -> None:
@@ -230,6 +245,7 @@ def _read_json_file(path: Path, *, maximum_bytes: int) -> Any:
             raw.decode("utf-8"),
             object_pairs_hook=_no_duplicate_object,
             parse_constant=_reject_json_constant,
+            parse_float=_finite_json_float,
         )
         _assert_well_formed_unicode(result)
         return result
@@ -252,7 +268,7 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ProvisionerError("installation config keys must exactly match the installer contract")
     if _utf16_units(_canonical_json(config).decode("utf-8")) > MAX_CONFIG_BYTES:
         raise ProvisionerError("installation config exceeds the installer size limit")
-    if not isinstance(config["ownerEmail"], str) or not EMAIL_RE.fullmatch(config["ownerEmail"]):
+    if not isinstance(config["ownerEmail"], str) or not _valid_email(config["ownerEmail"]):
         raise ProvisionerError("installation config ownerEmail is invalid")
     for key, expected in CONFIG_DEFAULTS.items():
         if not isinstance(config[key], type(expected)):
@@ -408,11 +424,18 @@ class InstallationLock:
             self.descriptor = None
 
 
-def initialize_state(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any]:
-    """Create resumable state or safely resume the exact same installation."""
+def initialize_state_with_status(state_dir: Path, config: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Create or resume state and report whether it existed under the installation lock."""
     state_dir = ensure_state_dir(state_dir)
     with InstallationLock(state_dir):
-        return _initialize_state_locked(state_dir, config)
+        resumed = (state_dir / STATE_FILE).exists()
+        return _initialize_state_locked(state_dir, config), resumed
+
+
+def initialize_state(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any]:
+    """Create resumable state or safely resume the exact same installation."""
+    state, _resumed = initialize_state_with_status(state_dir, config)
+    return state
 
 
 def _initialize_state_locked(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any]:
@@ -595,7 +618,7 @@ def _open_bundle_root(source_dir: Path) -> int:
         raise
 
 
-def _read_bundle_file(root_descriptor: int, relative: Path) -> bytes:
+def _read_bundle_file(root_descriptor: int, relative: Path, *, maximum_bytes: int) -> bytes:
     descriptor = -1
     directories: list[int] = []
     try:
@@ -621,9 +644,11 @@ def _read_bundle_file(root_descriptor: int, relative: Path) -> bytes:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
             raise ProvisionerError("Apps Script source bundle cannot contain non-regular files")
+        if before.st_size > maximum_bytes:
+            raise ProvisionerError("Apps Script source bundle file is too large")
         with os.fdopen(descriptor, "rb", closefd=True) as handle:
             descriptor = -1
-            content = handle.read()
+            content = handle.read(maximum_bytes + 1)
             after = os.fstat(handle.fileno())
     except OSError as exc:
         raise ProvisionerError("Apps Script source bundle cannot be read") from exc
@@ -639,6 +664,8 @@ def _read_bundle_file(root_descriptor: int, relative: Path) -> bytes:
         after.st_mtime_ns,
     ):
         raise ProvisionerError("Apps Script source bundle changed during validation")
+    if len(content) > maximum_bytes:
+        raise ProvisionerError("Apps Script source bundle file is too large")
     return content
 
 
@@ -651,12 +678,25 @@ def validate_bundle(source_dir: Path) -> str:
     except OSError as exc:
         raise ProvisionerError("Apps Script source directory cannot be resolved") from exc
     captured: dict[str, bytes] = {}
+    captured_bytes = 0
     root_descriptor = _open_bundle_root(source_dir)
     try:
         for path in _iter_bundle_files(source_dir):
             relative_path = path.relative_to(source_dir)
             relative = relative_path.as_posix()
-            captured[relative] = _read_bundle_file(root_descriptor, relative_path)
+            remaining_bytes = MAX_BUNDLE_TOTAL_BYTES - captured_bytes
+            if remaining_bytes < 0:
+                raise ProvisionerError("Apps Script source bundle is too large")
+            content = _read_bundle_file(root_descriptor, relative_path, maximum_bytes=min(MAX_BUNDLE_FILE_BYTES, remaining_bytes))
+            try:
+                content.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ProvisionerError("Apps Script source bundle must be valid UTF-8") from exc
+            captured[relative] = content
+            captured_bytes += len(content)
+        current_paths = {path.relative_to(source_dir).as_posix() for path in _iter_bundle_files(source_dir)}
+        if current_paths != set(captured):
+            raise ProvisionerError("Apps Script source bundle changed during validation")
     finally:
         os.close(root_descriptor)
     manifest_content = captured.get("appsscript.json")
@@ -667,6 +707,7 @@ def validate_bundle(source_dir: Path) -> str:
             manifest_content.decode("utf-8"),
             object_pairs_hook=_no_duplicate_object,
             parse_constant=_reject_json_constant,
+            parse_float=_finite_json_float,
         )
         _assert_well_formed_unicode(manifest)
     except (OSError, RecursionError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
@@ -776,6 +817,7 @@ def _run_json(command: Sequence[str]) -> Any:
             bytes(output).decode("utf-8"),
             object_pairs_hook=_no_duplicate_object,
             parse_constant=_reject_json_constant,
+            parse_float=_finite_json_float,
         )
         _assert_well_formed_unicode(response)
         return response
@@ -789,7 +831,7 @@ def authenticated_identity_preflight(expected_owner: str, project_id: str) -> di
     Raw command output is never returned, because gcloud diagnostics may expose
     local paths or authorization details.
     """
-    if not EMAIL_RE.fullmatch(expected_owner) or not PROJECT_ID_RE.fullmatch(project_id):
+    if not _valid_email(expected_owner) or not PROJECT_ID_RE.fullmatch(project_id):
         raise ProvisionerError("preflight identity or project is invalid")
     gcloud = discover_tools(("gcloud",))["gcloud"]
     if gcloud is None:

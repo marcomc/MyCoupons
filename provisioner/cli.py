@@ -13,7 +13,7 @@ from .core import (
     ProvisionerError,
     authenticated_identity_preflight,
     discover_tools,
-    initialize_state,
+    initialize_state_with_status,
     load_config,
     oauth_authorization_command,
     validate_and_mark_bundle,
@@ -58,9 +58,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return 0
         config = load_config(args.config)
         if args.command == "initialize":
-            existed = (args.state_dir / "state.json").exists()
-            state = initialize_state(args.state_dir, config)
-            _emit({"installationId": state["installationId"], "phase": state["phase"], "resumed": existed})
+            state, resumed = initialize_state_with_status(args.state_dir, config)
+            _emit({"installationId": state["installationId"], "phase": state["phase"], "resumed": resumed})
             return 0
         if args.command == "validate-bundle":
             digest, state = validate_and_mark_bundle(args.state_dir, config, args.source_dir)

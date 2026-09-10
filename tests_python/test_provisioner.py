@@ -108,6 +108,11 @@ class ProvisionerConfigTests(unittest.TestCase):
             private_json(config_path, invalid)
             with self.assertRaisesRegex(core.ProvisionerError, "labelName"):
                 core.load_config(config_path)
+            invalid = valid_config()
+            invalid["ownerEmail"] = "owner\ufeff@example.com"
+            private_json(config_path, invalid)
+            with self.assertRaisesRegex(core.ProvisionerError, "ownerEmail"):
+                core.load_config(config_path)
         with self.assertRaisesRegex(core.ProvisionerError, "cannot be resolved"):
             core.load_config(Path("~missing-user/config.json"))
 
@@ -127,6 +132,10 @@ class ProvisionerConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "malformed"):
                 core.load_config(config_path)
             config_path.write_text("[" * 1100 + "]" * 1100, encoding="utf-8")
+            with self.assertRaisesRegex(core.ProvisionerError, "malformed"):
+                core.load_config(config_path)
+            config_path.write_text('{"ownerEmail":1e400}', encoding="utf-8")
+            config_path.chmod(0o600)
             with self.assertRaisesRegex(core.ProvisionerError, "malformed"):
                 core.load_config(config_path)
 
@@ -203,6 +212,18 @@ class ProvisionerStateTests(unittest.TestCase):
             private_json(state_path, tampered)
             with self.assertRaisesRegex(core.ProvisionerError, "not bound"):
                 core.initialize_state(state_dir, config)
+
+    def test_state_resume_status_is_decided_under_the_installation_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_path = root / "config.json"
+            private_json(config_path, valid_config())
+            config = core.load_config(config_path)
+            state_dir = root / "state"
+            _state, resumed = core.initialize_state_with_status(state_dir, config)
+            self.assertFalse(resumed)
+            _state, resumed = core.initialize_state_with_status(state_dir, config)
+            self.assertTrue(resumed)
 
     def test_identity_key_uses_a_bounded_private_read(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -379,6 +400,11 @@ class ProvisionerBundleTests(unittest.TestCase):
                 core.validate_bundle(copied)
             manifest["executionApi"] = {"access": "MYSELF"}
             (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
+            overflowing_manifest = json.dumps(manifest)[:-1] + ',"unvalidated":1e400}'
+            (copied / "appsscript.json").write_text(overflowing_manifest, encoding="utf-8")
+            with self.assertRaisesRegex(core.ProvisionerError, "malformed"):
+                core.validate_bundle(copied)
+            (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
             (copied / "Installer.gs").write_text('// function bootstrapFromSecret(\n"function bootstrapFromSecret("\nnew /}/.test(\'\');\nfunction outer() { function bootstrapFromSecret() {} }\n', encoding="utf-8")
             with self.assertRaisesRegex(core.ProvisionerError, "bootstrapFromSecret"):
                 core.validate_bundle(copied)
@@ -401,6 +427,40 @@ class ProvisionerBundleTests(unittest.TestCase):
             with mock.patch("provisioner.core.validate_bundle", side_effect=validate_while_locked):
                 digest, state = core.validate_and_mark_bundle(state_dir, config, ROOT / "src")
             self.assertEqual(state["bundleDigest"], digest)
+
+    def test_bundle_rejects_invalid_text_large_files_and_late_file_additions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            copied = Path(temporary) / "src"
+            shutil_copytree(ROOT / "src", copied)
+            invalid = copied / "Invalid.js"
+            invalid.write_bytes(b"const invalid = '\xff';\n")
+            with self.assertRaisesRegex(core.ProvisionerError, "valid UTF-8"):
+                core.validate_bundle(copied)
+            invalid.unlink()
+            large = copied / "Large.gs"
+            large.write_bytes(b"x" * (core.MAX_BUNDLE_FILE_BYTES + 1))
+            with self.assertRaisesRegex(core.ProvisionerError, "too large"):
+                core.validate_bundle(copied)
+            large.unlink()
+            original_read = core._read_bundle_file
+            late_file = copied / "Late.js"
+
+            def add_file_during_capture(*args: object, **kwargs: object) -> bytes:
+                content = original_read(*args, **kwargs)
+                relative = args[1]
+                if isinstance(relative, Path) and relative.name == "appsscript.json":
+                    late_file.write_text("const late = true;\n", encoding="utf-8")
+                return content
+
+            with mock.patch("provisioner.core._read_bundle_file", side_effect=add_file_during_capture):
+                with self.assertRaisesRegex(core.ProvisionerError, "changed during validation"):
+                    core.validate_bundle(copied)
+            late_file.unlink()
+            base_size = sum(path.stat().st_size for path in core._iter_bundle_files(copied))
+            (copied / "Fill.js").write_bytes(b"x" * 8)
+            (copied / "ZZEmpty.js").write_bytes(b"")
+            with mock.patch.object(core, "MAX_BUNDLE_TOTAL_BYTES", base_size + 8):
+                self.assertRegex(core.validate_bundle(copied), r"^[0-9a-f]{64}$")
 
     def test_bundle_rejects_a_traversal_error(self) -> None:
         def inaccessible_walk(*_args: object, **kwargs: object) -> object:
@@ -473,6 +533,9 @@ class ProvisionerCommandTests(unittest.TestCase):
         nonstandard_constant = (sys.executable, "-c", "import sys; sys.stdout.write('{\\\"account\\\":NaN}')")
         with self.assertRaisesRegex(core.ProvisionerError, "unexpected output"):
             core._run_json(nonstandard_constant)
+        overflowing_number = (sys.executable, "-c", "import sys; sys.stdout.write('{\\\"unvalidated\\\":1e400}')")
+        with self.assertRaisesRegex(core.ProvisionerError, "unexpected output"):
+            core._run_json(overflowing_number)
 
     def test_cli_rejects_secret_like_config_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

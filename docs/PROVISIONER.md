@@ -90,10 +90,11 @@ The validated manifest contract matches the current Apps Script source:
   email identity, and cloud-platform application scopes.
 - Gmail v1 and Drive v3 advanced services.
 
-The digest includes deployable `.gs`, `.html`, `.js`, and `.json` files only. Manifest
-validation and digesting consume the same captured bytes; a file that changes
-while it is being read fails validation. Vendor license files remain part of
-repository provenance but are not Apps Script deployment inputs.
+The digest includes deployable UTF-8 `.gs`, `.html`, `.js`, and `.json` files
+only. Each file is limited to 1 MiB and the complete bundle to 8 MiB. Manifest
+validation and digesting consume the same captured bytes; a file or deployable
+file set that changes during capture fails validation. Vendor license files
+remain part of repository provenance but are not Apps Script deployment inputs.
 
 ## Deferred cloud actions
 
