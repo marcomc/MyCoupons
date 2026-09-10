@@ -51,8 +51,9 @@ The provisioner creates or adopts one private owner-only Apps Script project.
 When it creates a project, the command persists
 `apps-script-association-required` and returns before uploading `src`, creating
 a deployment, or staging a secret. Associate that project with the intended
-standard Cloud project, then rerun the command to upload `src`, verify the
-immutable owner-only Execution API deployment, and configure the installer
+standard Cloud project, then rerun the command with
+`--acknowledge-association` to upload `src`, verify the immutable owner-only
+Execution API deployment, and configure the installer
 through its secure bootstrap. The installer creates only missing Sheet tabs,
 nested Gmail label prefixes, the owned daily trigger, and the installable
 `onReviewEdit` trigger; it rejects ambiguous matches and non-private sharing,
