@@ -117,7 +117,7 @@ CLOUD_INSTALLATION_LABEL = "mycoupons-installation"
 CLOUD_ROLE_LABEL = "mycoupons-role"
 CLOUD_ROLES = frozenset(("developer", "vertex"))
 DEVELOPER_SERVICES = ("apikeys.googleapis.com", "generativelanguage.googleapis.com")
-VERTEX_SERVICES = ("aiplatform.googleapis.com", "script.googleapis.com", "secretmanager.googleapis.com", "cloudresourcemanager.googleapis.com", "drive.googleapis.com")
+VERTEX_SERVICES = ("aiplatform.googleapis.com", "script.googleapis.com", "secretmanager.googleapis.com", "cloudresourcemanager.googleapis.com", "drive.googleapis.com", "gmail.googleapis.com")
 APPS_SCRIPT_TITLE = "MyCoupons"
 APPS_SCRIPT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
 BOOTSTRAP_SECRET_NAME = "mycoupons-bootstrap"
@@ -1738,7 +1738,7 @@ def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapp
         raise ProvisionerError("Apps Script project adoption is ambiguous")
     if len(files) == 1:
         return _assert_private_owner_script(files[0], owner_email), "created" if state["phase"] in {"apps-script-creation-pending", "apps-script-creation-posted"} else "adopted"
-    if state["phase"] == "apps-script-creation-posted":
+    if state["phase"] in {"apps-script-creation-pending", "apps-script-creation-posted"}:
         raise ProvisionerError("Apps Script project creation is pending Drive visibility")
     persist_creation_intent()
     try:

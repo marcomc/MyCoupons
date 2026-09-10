@@ -1048,6 +1048,19 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
         self.assertEqual(raised.exception.status, 503)
         self.assertEqual(events, ["intent", "posted"])
 
+    def test_script_create_pending_recovery_waits_without_reposting(self) -> None:
+        state = {
+            "phase": "apps-script-creation-pending",
+            "appsScript": {"scriptId": None, "provenance": None, "bundleDigest": None, "versionNumber": None, "deploymentId": None},
+        }
+        with mock.patch("provisioner.core._apps_script_list", return_value=[]), mock.patch(
+            "provisioner.core._apps_script_json", side_effect=AssertionError("must not repost")
+        ):
+            with self.assertRaisesRegex(core.ProvisionerError, "pending Drive visibility"):
+                core._find_or_create_apps_script(
+                    "private-token", "owner@example.com", state, lambda: None, lambda: None, lambda _value: None, lambda: None
+                )
+
     def _deployment(self, script_id: str = "script-1", deployment_id: str = "deployment-1", version: int = 1) -> dict[str, object]:
         return {
             "deploymentId": deployment_id,
