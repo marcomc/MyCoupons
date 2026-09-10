@@ -79,6 +79,25 @@ test('owner-only bootstrap reads the exact temporary secret and returns no secre
   assert.equal(requests[1].options.headers.Authorization, 'Bearer oauth-token');
 });
 
+test('bootstrap resumes persisted configuration through the no-argument installation path', () => {
+  const {ctx, properties, config} = harness();
+  const persisted = {...config, vertexProject: 'vertex-project', labelId: 'Label_123'};
+  properties.MYCOUPONS_CONFIG = JSON.stringify(persisted);
+  ctx.UrlFetchApp = {fetch: bootstrapFetch(bootstrapPayload({...config, vertexProject: 'vertex-project'}))};
+  let resumed = 0;
+  ctx.installMyCoupons = (...args) => {
+    assert.deepEqual(args, []);
+    resumed += 1;
+    return {version: 1, installed: true, resumed: true, spreadsheetId: 'sheet-id', labelId: 'Label_123',
+      triggerCreated: false, reviewTriggerCreated: false, locale: 'en', timeZone: 'Europe/Rome'};
+  };
+  ctx.beginMyCouponsInstallation = () => assert.fail('persisted configuration must not be revalidated as new input');
+  const result = ctx.bootstrapFromSecret('projects/vertex-project/secrets/mycoupons-bootstrap/versions/7');
+  assert.equal(resumed, 1);
+  assert.equal(JSON.stringify(result), JSON.stringify({version: 1, installed: true, resumed: true, spreadsheetId: 'sheet-id', labelId: 'Label_123',
+    triggerCreated: false, reviewTriggerCreated: false, locale: 'en', timeZone: 'Europe/Rome'}));
+});
+
 test('bootstrap rejects malformed and foreign resources or payloads without installing', () => {
   const {ctx, config} = harness();
   let requested = 0;
@@ -199,10 +218,13 @@ test('bootstrap fails closed on an unauthorized caller or Secret Manager HTTP er
 test('bootstrap never reads a version outside the persisted Vertex project', () => {
   const {ctx, properties, config} = harness();
   properties.MYCOUPONS_CONFIG = JSON.stringify({...config, vertexProject: 'vertex-project'});
-  let requested = 0;
-  ctx.UrlFetchApp = {fetch: () => { requested += 1; return bootstrapSecret('{}'); }};
+  let secretRequested = 0;
+  ctx.UrlFetchApp = {fetch: (url) => {
+    if (url.includes('secretmanager.googleapis.com')) secretRequested += 1;
+    return bootstrapSecret('{}');
+  }};
   assert.throws(() => ctx.bootstrapFromSecret('projects/foreign-project/secrets/mycoupons-bootstrap/versions/7'), /RESOURCE/);
-  assert.equal(requested, 0);
+  assert.equal(secretRequested, 0);
 });
 
 test('bootstrap restores the prior key and leaves secret data out of errors when installation fails', () => {
@@ -224,7 +246,7 @@ test('bootstrap restores the prior key and leaves secret data out of errors when
 test('bootstrap restores the prior configuration and key when transactional installation fails', () => {
   const {ctx, properties, config} = harness();
   const previous = {...config, vertexProject: 'vertex-project'};
-  const replacement = {...previous, model: 'gemini-replacement'};
+  const replacement = {...previous};
   const priorKey = 'AIza98765432109876543210';
   properties.MYCOUPONS_CONFIG = JSON.stringify(previous);
   properties.GEMINI_API_KEY = priorKey;

@@ -82,6 +82,12 @@ function beginMyCouponsInstallationFromBootstrapProperty() {
   return result;
 }
 
+// Performs no configuration or secret access. A successful Execution API call
+// proves that the caller's OAuth client is authorized for this deployment.
+function verifyBootstrapExecutionAccess() {
+  return {version: MC_INSTALLER_VERSION, ready: true};
+}
+
 // This function is intended only for an Execution API deployment with access MYSELF.
 // It deliberately accepts one exact Secret Manager version, never a secret name or alias.
 function bootstrapFromSecret(secretVersion) {
@@ -91,15 +97,20 @@ function bootstrapFromSecret(secretVersion) {
     const resource = validateBootstrapSecretVersion_(secretVersion, persisted && persisted.vertexProject);
     const secret = readBootstrapSecret_(resource);
     const bootstrap = validateBootstrapPayload_(secret.payload);
-    if (resource.project !== bootstrap.config.vertexProject) fail_('RESOURCE');
     if (persisted && bootstrap.config.vertexProject !== persisted.vertexProject) fail_('RESOURCE');
+    if (persisted && MC_INSTALLER_INPUT_KEYS.some(function (key) {
+      return persisted[key] !== bootstrap.config[key] && !(key === 'spreadsheetId' && bootstrap.config.spreadsheetId === '');
+    })) fail_('RESOURCE');
     assertBootstrapSecretProject_(resource, secret.name, bootstrap.config.vertexProject);
     assertOwner_(bootstrap.config);
     const properties = props_();
     const previousKey = properties.getProperty('GEMINI_API_KEY');
     try {
       properties.setProperty('GEMINI_API_KEY', bootstrap.geminiApiKey);
-      return bootstrapInstallationResult_(beginMyCouponsInstallation(bootstrap.config));
+      // Persisted configuration includes the opaque label identity, which is
+      // accepted only by the no-argument resume path.
+      const result = persisted ? installMyCoupons() : beginMyCouponsInstallation(bootstrap.config);
+      return bootstrapInstallationResult_(result);
     } catch (e) {
       if (previousKey === null) properties.deleteProperty('GEMINI_API_KEY');
       else properties.setProperty('GEMINI_API_KEY', previousKey);
@@ -118,10 +129,14 @@ function bootstrapPersistedConfig_() {
 
 function validateBootstrapSecretVersion_(value, expectedProject) {
   if (typeof value !== 'string') fail_('RESOURCE');
-  const pattern = new RegExp('^projects/([a-z][a-z0-9-]{4,28}[a-z0-9])/secrets/' +
+  const pattern = new RegExp('^projects/((?:[a-z][a-z0-9-]{4,28}[a-z0-9])|(?:[1-9][0-9]*))/secrets/' +
     MC_BOOTSTRAP.secretName + '/versions/([1-9][0-9]*)$');
   const match = pattern.exec(value);
-  if (!match || expectedProject && match[1] !== expectedProject) fail_('RESOURCE');
+  if (!match) fail_('RESOURCE');
+  if (expectedProject) {
+    const expectedNumber = resolveBootstrapProjectNumber_(expectedProject);
+    if (match[1] !== expectedProject && match[1] !== expectedNumber) fail_('RESOURCE');
+  }
   return {name: value, project: match[1], version: match[2]};
 }
 

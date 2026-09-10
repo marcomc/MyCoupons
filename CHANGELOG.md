@@ -4,6 +4,18 @@
 
 ### Added
 
+- Harden Apps Script bootstrap deployment: distinguish the automatic HEAD
+  deployment, accept canonical Secret Manager project-number resources, reject
+  `.js` inputs with unverifiable read-back paths, inspect inherited project
+  Secret Accessor grants, and prove Execution API access before staging a
+  bootstrap secret.
+
+- Add a resumable Apps Script deployment and bootstrap action that creates or
+  adopts only one private owner-only project, verifies uploaded/versioned source
+  digests and owner-only Execution API deployment metadata, transfers bootstrap
+  data through a labelled Secret Manager version without persisting its payload,
+  and disables the exact version after the verified non-secret response.
+
 - Add an idempotent, signed-state Cloud provisioning action that creates or
   adopts only owner-verified labelled Gemini Developer API and Vertex fallback
   projects; keeps the Developer project unbilled; links only an unlinked Vertex

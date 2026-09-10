@@ -10,6 +10,7 @@ import dataclasses
 import datetime
 import hashlib
 import hmac
+import http.client
 import json
 import math
 import os
@@ -22,6 +23,9 @@ import stat
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -33,6 +37,18 @@ class ProvisionerError(Exception):
 
 class ProjectNotFound(ProvisionerError):
     """An internal, narrowly classified absent-project result."""
+
+
+class BootstrapSecretNotFound(ProvisionerError):
+    """An internal, narrowly classified absent bootstrap-secret result."""
+
+
+class AppsScriptHttpError(ProvisionerError):
+    """An Apps Script HTTP failure whose status is safe to classify locally."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__("Apps Script API request was rejected")
+        self.status = status
 
 
 INSTALLER_CONFIG_KEYS = frozenset(
@@ -78,13 +94,16 @@ CONFIG_DEFAULTS: dict[str, Any] = {
 IDENTITY_FILE = "identity.key"
 STATE_FILE = "state.json"
 LOCK_FILE = "install.lock"
-STATE_VERSION = 2
+STATE_VERSION = 3
 MAX_CONFIG_BYTES = 8000
 MAX_COMMAND_OUTPUT_BYTES = 65536
 MAX_BUNDLE_FILE_BYTES = 1024 * 1024
 MAX_BUNDLE_TOTAL_BYTES = 8 * 1024 * 1024
 MAX_BUNDLE_FILES = 1000
 MAX_BUNDLE_PATH_BYTES = 128 * 1024
+# Source responses include the complete bundle and JSON escaping overhead.  Keep
+# this distinct from the small, non-source command response bound.
+MAX_APPS_SCRIPT_SOURCE_RESPONSE_BYTES = MAX_BUNDLE_TOTAL_BYTES * 8 + MAX_BUNDLE_PATH_BYTES + 1024 * 1024
 PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 PROJECT_NUMBER_RE = re.compile(r"^[1-9][0-9]{5,31}$")
 INSTALLATION_LABEL_RE = re.compile(r"^[a-z][a-z0-9-]{14,61}[a-z0-9]$")
@@ -99,7 +118,11 @@ CLOUD_INSTALLATION_LABEL = "mycoupons-installation"
 CLOUD_ROLE_LABEL = "mycoupons-role"
 CLOUD_ROLES = frozenset(("developer", "vertex"))
 DEVELOPER_SERVICES = ("apikeys.googleapis.com", "generativelanguage.googleapis.com")
-VERTEX_SERVICES = ("aiplatform.googleapis.com", "script.googleapis.com", "secretmanager.googleapis.com")
+VERTEX_SERVICES = ("aiplatform.googleapis.com", "script.googleapis.com", "secretmanager.googleapis.com", "cloudresourcemanager.googleapis.com", "drive.googleapis.com", "gmail.googleapis.com")
+APPS_SCRIPT_TITLE = "MyCoupons"
+APPS_SCRIPT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
+BOOTSTRAP_SECRET_NAME = "mycoupons-bootstrap"
+BOOTSTRAP_SECRET_LABEL = "mycoupons-installation"
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -426,6 +449,8 @@ def _identity_proof(key: bytes, state: Mapping[str, Any]) -> str:
             "phase": state["phase"],
             "bundleDigest": state["bundleDigest"],
             "cloud": state["cloud"],
+            "appsScript": state["appsScript"],
+            "bootstrap": state["bootstrap"],
         }
     )
     return hmac.new(key, b"mycoupons-state\0" + signed, hashlib.sha256).hexdigest()
@@ -462,11 +487,11 @@ def _validate_common_state_identity(state: Mapping[str, Any]) -> None:
 
 def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
     if not isinstance(state, dict) or set(state) != {
-        "version", "installationId", "configDigest", "identityProof", "phase", "bundleDigest", "cloud"
+        "version", "installationId", "configDigest", "identityProof", "phase", "bundleDigest", "cloud", "appsScript", "bootstrap"
     }:
         raise ProvisionerError("installation state has an unsupported shape")
     if state["version"] != STATE_VERSION or not isinstance(state["phase"], str) or state["phase"] not in {
-        "initialized", "bundle-validated", "cloud-projects-reconciled", "cloud-ready"
+        "initialized", "bundle-validated", "cloud-projects-reconciled", "cloud-ready", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-adoption-pending", "apps-script-ready", "bootstrap-complete"
     }:
         raise ProvisionerError("installation state has an unsupported version or phase")
     _validate_common_state_identity(state)
@@ -488,6 +513,39 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
             or record["provenance"] not in {"created", "adopted"}
         ):
             raise ProvisionerError("installation state has an invalid Cloud project record")
+    apps_script = state["appsScript"]
+    if not isinstance(apps_script, dict) or set(apps_script) != {"scriptId", "provenance", "bundleDigest", "versionNumber", "deploymentId"}:
+        raise ProvisionerError("installation state has an invalid Apps Script record")
+    if apps_script["scriptId"] is None:
+        if any(value is not None for value in apps_script.values()):
+            raise ProvisionerError("installation state has an invalid Apps Script record")
+    elif not isinstance(apps_script["scriptId"], str) or not APPS_SCRIPT_ID_RE.fullmatch(apps_script["scriptId"]) or apps_script["provenance"] not in {"created", "adopted"}:
+        raise ProvisionerError("installation state has an invalid Apps Script record")
+    elif all(apps_script[key] is None for key in ("bundleDigest", "versionNumber", "deploymentId")):
+        if (apps_script["provenance"] == "created" and state["phase"] != "apps-script-association-required") or (
+            apps_script["provenance"] == "adopted" and state["phase"] != "apps-script-adoption-pending"
+        ):
+            raise ProvisionerError("installation state has an invalid Apps Script record")
+    elif (
+        not isinstance(apps_script["bundleDigest"], str)
+        or not re.fullmatch(r"[0-9a-f]{64}", apps_script["bundleDigest"])
+        or not isinstance(apps_script["versionNumber"], int)
+        or apps_script["versionNumber"] < 1
+        or not isinstance(apps_script["deploymentId"], str)
+        or not APPS_SCRIPT_ID_RE.fullmatch(apps_script["deploymentId"])
+    ):
+        raise ProvisionerError("installation state has an invalid Apps Script record")
+    bootstrap = state["bootstrap"]
+    if not isinstance(bootstrap, dict) or set(bootstrap) != {"secretVersion", "status"}:
+        raise ProvisionerError("installation state has an invalid bootstrap record")
+    if isinstance(bootstrap["status"], str) and bootstrap["status"] in {"not-started", "staging"} and bootstrap["secretVersion"] is None:
+        pass
+    elif isinstance(bootstrap["status"], str) and bootstrap["status"] in {"replacement-staging", "staged", "verified", "complete"} and isinstance(bootstrap["secretVersion"], str) and re.fullmatch(
+        rf"projects/(?:{PROJECT_ID_RE.pattern[1:-1]}|{PROJECT_NUMBER_RE.pattern[1:-1]})/secrets/{BOOTSTRAP_SECRET_NAME}/versions/[1-9][0-9]*", bootstrap["secretVersion"]
+    ):
+        pass
+    else:
+        raise ProvisionerError("installation state has an invalid bootstrap record")
     expected = _identity_proof(key, state)
     if not hmac.compare_digest(state["identityProof"], expected):
         raise ProvisionerError("installation state is not bound to this local installation")
@@ -504,8 +562,35 @@ def _migrate_v1_state(state: Any, key: bytes) -> dict[str, Any]:
     if not hmac.compare_digest(state["identityProof"], _identity_proof_v1(key, state)):
         raise ProvisionerError("installation state is not bound to this local installation")
     migrated = dict(state)
-    migrated["version"] = STATE_VERSION
+    migrated["version"] = 2
     migrated["cloud"] = {"developer": None, "vertex": None}
+    migrated["identityProof"] = _identity_proof_v2(key, migrated)
+    return _migrate_v2_state(migrated, key)
+
+
+def _identity_proof_v2(key: bytes, state: Mapping[str, Any]) -> str:
+    signed = _canonical_json(
+        {key_name: value for key_name, value in state.items() if key_name != "identityProof"}
+    )
+    return hmac.new(key, b"mycoupons-state\0" + signed, hashlib.sha256).hexdigest()
+
+
+def _migrate_v2_state(state: Any, key: bytes) -> dict[str, Any]:
+    expected_keys = {"version", "installationId", "configDigest", "identityProof", "phase", "bundleDigest", "cloud"}
+    if not isinstance(state, dict) or set(state) != expected_keys or state.get("version") != 2:
+        raise ProvisionerError("installation state has an unsupported shape")
+    _validate_common_state_identity(state)
+    if not hmac.compare_digest(state.get("identityProof", ""), _identity_proof_v2(key, state)):
+        raise ProvisionerError("installation state is not bound to this local installation")
+    migrated = dict(state)
+    migrated["version"] = STATE_VERSION
+    # Version 2 considered the Cloud setup ready before deployment required
+    # Cloud Resource Manager and Drive.  Make an upgraded ready state repeat
+    # service reconciliation before it can deploy.
+    if migrated["phase"] == "cloud-ready":
+        migrated["phase"] = "cloud-projects-reconciled"
+    migrated["appsScript"] = {"scriptId": None, "provenance": None, "bundleDigest": None, "versionNumber": None, "deploymentId": None}
+    migrated["bootstrap"] = {"secretVersion": None, "status": "not-started"}
     migrated["identityProof"] = _identity_proof(key, migrated)
     return _validate_state(migrated, key)
 
@@ -515,6 +600,10 @@ def _load_state_locked(state_dir: Path, key: bytes) -> dict[str, Any]:
     state = _read_json_file(state_path, maximum_bytes=4096)
     if isinstance(state, dict) and state.get("version") == 1:
         state = _migrate_v1_state(state, key)
+        _write_private_atomic(state_path, _canonical_json(state))
+        return state
+    if isinstance(state, dict) and state.get("version") == 2:
+        state = _migrate_v2_state(state, key)
         _write_private_atomic(state_path, _canonical_json(state))
         return state
     return _validate_state(state, key)
@@ -605,6 +694,8 @@ def _initialize_state_locked(state_dir: Path, config: Mapping[str, Any]) -> dict
         "phase": "initialized",
         "bundleDigest": None,
         "cloud": {"developer": None, "vertex": None},
+        "appsScript": {"scriptId": None, "provenance": None, "bundleDigest": None, "versionNumber": None, "deploymentId": None},
+        "bootstrap": {"secretVersion": None, "status": "not-started"},
     }
     state["identityProof"] = _identity_proof(key, state)
     _write_private_atomic(state_path, _canonical_json(state))
@@ -675,7 +766,11 @@ def _iter_bundle_files(source_dir: Path) -> Iterable[Path]:
             path = directory / child_name
             if path.is_symlink():
                 raise ProvisionerError("Apps Script source bundle cannot contain symlinks")
-            if path.is_file() and path.suffix in {".gs", ".html", ".js", ".json"}:
+            if path.is_file() and path.suffix == ".js":
+                raise ProvisionerError("Apps Script source bundle cannot contain .js files")
+            if path.is_file() and path.suffix == ".json" and path.relative_to(source_dir).as_posix() != "appsscript.json":
+                raise ProvisionerError("Apps Script source bundle can contain only appsscript.json")
+            if path.is_file() and path.suffix in {".gs", ".html", ".json"}:
                 try:
                     relative_bytes = path.relative_to(source_dir).as_posix().encode("utf-8")
                 except UnicodeEncodeError as exc:
@@ -687,7 +782,7 @@ def _iter_bundle_files(source_dir: Path) -> Iterable[Path]:
     yield from sorted(bundle_files)
 
 
-def _has_bootstrap_entry_point(content: bytes) -> bool:
+def _has_bootstrap_entry_point(content: bytes, entry_point: str) -> bool:
     """Recognize the required top-level declaration without accepting comments or strings."""
     try:
         source = content.decode("utf-8")
@@ -749,9 +844,10 @@ def _has_bootstrap_entry_point(content: bytes) -> bool:
         lambda match: match.group(1) + " " * (len(match.group()) - len(match.group(1))),
         visible_source,
     )
-    for match in re.finditer(r"(?m)^[ \t]*function[ \t]+bootstrapFromSecret[ \t]*\(", visible_source):
+    for match in re.finditer(rf"(?m)^[ \t]*function[ \t]+{re.escape(entry_point)}[ \t]*\(", visible_source):
         prefix = visible_source[: match.start()]
-        if prefix.count("{") == prefix.count("}"):
+        preceding = prefix.rstrip()
+        if prefix.count("{") == prefix.count("}") and (not preceding or preceding[-1] in ";}"):
             return True
     return False
 
@@ -911,9 +1007,12 @@ def validate_bundle(source_dir: Path) -> str:
     scopes = manifest.get("oauthScopes")
     if not isinstance(scopes, list) or len(scopes) != len(expected_scopes) or not all(isinstance(scope, str) for scope in scopes):
         raise ProvisionerError("Apps Script manifest OAuth scope contract is invalid")
-    if "webapp" in manifest or manifest.get("executionApi") != {"access": "MYSELF"} or set(scopes) != expected_scopes:
+    whitelist = manifest.get("urlFetchWhitelist")
+    if "webapp" in manifest or "addOns" in manifest or whitelist is not None or manifest.get("executionApi") != {"access": "MYSELF"} or set(scopes) != expected_scopes:
         raise ProvisionerError("Apps Script manifest access or OAuth scope contract is invalid")
     dependencies = manifest.get("dependencies")
+    if not isinstance(dependencies, dict) or set(dependencies) != {"enabledAdvancedServices"}:
+        raise ProvisionerError("Apps Script manifest dependency contract is invalid")
     services = dependencies.get("enabledAdvancedServices") if isinstance(dependencies, dict) else None
     expected_services = {("Gmail", "gmail", "v1"), ("Drive", "drive", "v3")}
     if not isinstance(services, list) or len(services) != len(expected_services) or not all(
@@ -925,8 +1024,10 @@ def validate_bundle(source_dir: Path) -> str:
     if found_services != expected_services:
         raise ProvisionerError("Apps Script manifest service contract is invalid")
     installer_source = captured.get("Installer.gs")
-    if installer_source is None or not _has_bootstrap_entry_point(installer_source):
+    if installer_source is None or not _has_bootstrap_entry_point(installer_source, "bootstrapFromSecret"):
         raise ProvisionerError("Apps Script source bundle is missing the bootstrapFromSecret entry point")
+    if not _has_bootstrap_entry_point(installer_source, "verifyBootstrapExecutionAccess"):
+        raise ProvisionerError("Apps Script source bundle is missing the verifyBootstrapExecutionAccess entry point")
     return _bundle_digest(captured)
 
 
@@ -981,7 +1082,19 @@ def _gcloud_reports_project_not_found(stderr: bytes, project_id: str) -> bool:
     ) is not None
 
 
-def _run_command_output(command: Sequence[str], *, operation: str, absent_project: str | None = None) -> bytes:
+def _gcloud_reports_bootstrap_secret_not_found(stderr: bytes, project_id: str, project_number: str, secret_name: str) -> bool:
+    try:
+        message = stderr.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return re.fullmatch(
+        rf"ERROR: \(gcloud\.secrets\.describe\) NOT_FOUND: (?:Secret )?\[?projects/(?:{re.escape(project_id)}|{re.escape(project_number)})/secrets/{re.escape(secret_name)}\]? not found\.?\s*",
+        message,
+        flags=re.IGNORECASE,
+    ) is not None
+
+
+def _run_command_output(command: Sequence[str], *, operation: str, absent_project: str | None = None, absent_secret: tuple[str, str, str] | None = None) -> bytes:
     """Run one fixed-argument command with bounded output and no diagnostics."""
     process: subprocess.Popen[bytes] | None = None
     selector: selectors.BaseSelector | None = None
@@ -990,7 +1103,7 @@ def _run_command_output(command: Sequence[str], *, operation: str, absent_projec
             command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE if absent_project is not None else subprocess.DEVNULL,
+            stderr=subprocess.PIPE if absent_project is not None or absent_secret is not None else subprocess.DEVNULL,
             close_fds=True,
             start_new_session=True,
         )
@@ -1040,14 +1153,17 @@ def _run_command_output(command: Sequence[str], *, operation: str, absent_projec
     if completed_returncode != 0:
         if absent_project is not None and _gcloud_reports_project_not_found(bytes(stderr), absent_project):
             raise ProjectNotFound("Cloud project was not found")
+        if absent_secret is not None and _gcloud_reports_bootstrap_secret_not_found(bytes(stderr), *absent_secret):
+            raise BootstrapSecretNotFound("bootstrap secret was not found")
         raise ProvisionerError(f"{operation} was rejected")
     return bytes(output)
 
 
 def _run_json(
-    command: Sequence[str], *, operation: str = "read-only authentication preflight", absent_project: str | None = None
+    command: Sequence[str], *, operation: str = "read-only authentication preflight", absent_project: str | None = None,
+    absent_secret: tuple[str, str, str] | None = None,
 ) -> Any:
-    output = _run_command_output(command, operation=operation, absent_project=absent_project)
+    output = _run_command_output(command, operation=operation, absent_project=absent_project, absent_secret=absent_secret)
     try:
         response = json.loads(
             output.decode("utf-8"),
@@ -1378,6 +1494,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
         if state["bundleDigest"] is None or state["phase"] == "initialized":
             raise ProvisionerError("validate the Apps Script source bundle before Cloud provisioning")
         key = _load_or_create_identity_key(state_dir)
+        app_script_pending = state["phase"] in {"apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-adoption-pending"}
         gcloud = discover_tools(("gcloud",))["gcloud"]
         if gcloud is None:
             raise ProvisionerError("gcloud is required for Cloud provisioning")
@@ -1425,7 +1542,13 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
                 cloud[role] = record
                 state["cloud"] = cloud
                 state = _persist_state_locked(state_dir, state, key)
-        state["phase"] = "cloud-projects-reconciled"
+        state["phase"] = (
+            "bootstrap-complete"
+            if state["bootstrap"]["status"] == "complete"
+            else state["phase"]
+            if app_script_pending
+            else "cloud-projects-reconciled"
+        )
         state["cloud"] = cloud
         state = _persist_state_locked(state_dir, state, key)
         _reconcile_vertex_billing(
@@ -1450,5 +1573,877 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
                     expected_owner=owner_account,
                     persisted=cloud[role],
                 )
-        state["phase"] = "cloud-ready"
+        state["phase"] = (
+            "bootstrap-complete"
+            if state["bootstrap"]["status"] == "complete"
+            else state["phase"]
+            if app_script_pending
+            else "cloud-ready"
+        )
+        return _persist_state_locked(state_dir, state, key)
+
+
+def _read_private_oauth_token(path: Path) -> str:
+    """Read a refreshed isolated clasp token without returning its contents."""
+    auth = _read_json_file(path, maximum_bytes=256 * 1024)
+    if not isinstance(auth, dict):
+        raise ProvisionerError("isolated Apps Script authorization is malformed")
+    tokens = auth.get("tokens")
+    default = tokens.get("default") if isinstance(tokens, dict) else None
+    token = default.get("access_token") if isinstance(default, dict) else None
+    if not isinstance(token, str) or not token or "\r" in token or "\n" in token:
+        raise ProvisionerError("isolated Apps Script authorization has no usable access token")
+    return token
+
+
+def _apps_script_json(
+    access_token: str,
+    method: str,
+    resource: str,
+    body: Any | None = None,
+    *,
+    maximum_bytes: int = MAX_COMMAND_OUTPUT_BYTES,
+) -> Any:
+    """Make one bounded Apps Script or Drive API request without surfacing data."""
+    if not access_token or not resource.startswith("https://"):
+        raise ProvisionerError("Apps Script API request is invalid")
+    content = None if body is None else _canonical_json(body)
+    request = urllib.request.Request(
+        resource,
+        data=content,
+        method=method,
+        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json", **({"Content-Type": "application/json"} if content else {})},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read(maximum_bytes + 1)
+    except urllib.error.HTTPError as exc:
+        raise AppsScriptHttpError(exc.code) from exc
+    except (OSError, http.client.HTTPException) as exc:
+        raise ProvisionerError("Apps Script API request was rejected") from exc
+    if len(raw) > maximum_bytes:
+        raise ProvisionerError("Apps Script API returned unexpected output")
+    try:
+        result = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_object, parse_constant=_reject_json_constant, parse_float=_finite_json_float)
+        _assert_well_formed_unicode(result)
+        return result
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
+        raise ProvisionerError("Apps Script API returned unexpected output") from exc
+
+
+def _require_isolated_clasp_owner(auth_path: Path, owner_email: str) -> str:
+    auth_path = _expand_absolute_path(auth_path, error_message="isolated Apps Script authorization cannot be resolved")
+    _assert_not_symlink(auth_path)
+    try:
+        auth_path = auth_path.resolve(strict=True)
+    except OSError as exc:
+        raise ProvisionerError("isolated Apps Script authorization cannot be resolved") from exc
+    _assert_outside_worktree(auth_path)
+    try:
+        auth_stat = auth_path.stat()
+    except OSError as exc:
+        raise ProvisionerError("isolated Apps Script authorization cannot be resolved") from exc
+    if not stat.S_ISREG(auth_stat.st_mode) or not _is_private_mode(auth_stat.st_mode, 0o600):
+        raise ProvisionerError("isolated Apps Script authorization must be a regular mode-0600 file")
+    clasp = discover_tools(("clasp",))["clasp"]
+    if clasp is None:
+        raise ProvisionerError("clasp is required to refresh isolated Apps Script authorization")
+    identity = _run_json((clasp, "-A", str(auth_path), "--json", "show-authorized-user"), operation="isolated Apps Script authorization inspection")
+    if not isinstance(identity, dict) or identity.get("loggedIn") is not True or not isinstance(identity.get("email"), str):
+        raise ProvisionerError("isolated Apps Script authorization identity is malformed")
+    if identity["email"].lower() != owner_email.lower():
+        raise ProvisionerError("isolated Apps Script authorization does not match ownerEmail")
+    return _read_private_oauth_token(auth_path)
+
+
+def _apps_script_file_name(relative: str) -> tuple[str, str]:
+    if relative == "appsscript.json":
+        return "appsscript", "JSON"
+    # Apps Script reports SERVER_JS without the source extension.  Accepting
+    # .js here would make a verified read-back indistinguishable from .gs.
+    suffixes = {".gs": "SERVER_JS", ".html": "HTML"}
+    suffix = Path(relative).suffix
+    if suffix not in suffixes or any(part in {"", ".", ".."} for part in Path(relative).parts):
+        raise ProvisionerError("Apps Script source bundle contains an unsupported deployment path")
+    return relative[: -len(suffix)], suffixes[suffix]
+
+
+def _deployment_bundle(source_dir: Path) -> tuple[str, list[dict[str, str]]]:
+    expected_digest = validate_bundle(source_dir)
+    source_dir = _expand_absolute_path(source_dir, error_message="Apps Script source directory cannot be resolved")
+    root_descriptor = _open_bundle_root(source_dir)
+    captured: dict[str, bytes] = {}
+    captured_bytes = 0
+    try:
+        for path in _iter_bundle_files(source_dir):
+            relative_path = path.relative_to(source_dir)
+            remaining_bytes = MAX_BUNDLE_TOTAL_BYTES - captured_bytes
+            if remaining_bytes < 0:
+                raise ProvisionerError("Apps Script source bundle changed during deployment capture")
+            content = _read_bundle_file(root_descriptor, relative_path, maximum_bytes=min(MAX_BUNDLE_FILE_BYTES, remaining_bytes))
+            captured[relative_path.as_posix()] = content
+            captured_bytes += len(content)
+    finally:
+        os.close(root_descriptor)
+    if _bundle_digest(captured) != expected_digest:
+        raise ProvisionerError("Apps Script source bundle changed during deployment capture")
+    files = []
+    for relative, content in sorted(captured.items()):
+        name, file_type = _apps_script_file_name(relative)
+        files.append({"name": name, "type": file_type, "source": content.decode("utf-8")})
+    return expected_digest, files
+
+
+def _assert_private_owner_script(metadata: Any, owner_email: str, expected_id: str | None = None) -> str:
+    if not isinstance(metadata, dict):
+        raise ProvisionerError("Apps Script project inspection returned invalid data")
+    script_id = metadata.get("id") or metadata.get("scriptId")
+    owners = metadata.get("owners")
+    permissions = metadata.get("permissions")
+    owner_address = (
+        owners[0].get("emailAddress")
+        if isinstance(owners, list) and len(owners) == 1 and isinstance(owners[0], dict)
+        else None
+    )
+    permission_address = (
+        permissions[0].get("emailAddress")
+        if isinstance(permissions, list) and len(permissions) == 1 and isinstance(permissions[0], dict)
+        else None
+    )
+    if (
+        not isinstance(script_id, str)
+        or not APPS_SCRIPT_ID_RE.fullmatch(script_id)
+        or expected_id is not None and script_id != expected_id
+        or metadata.get("mimeType") != "application/vnd.google-apps.script"
+        or not isinstance(owner_address, str)
+        or owner_address.lower() != owner_email.lower()
+        or not isinstance(permission_address, str)
+        or permissions[0].get("type") != "user"
+        or permissions[0].get("role") != "owner"
+        or permission_address.lower() != owner_email.lower()
+    ):
+        raise ProvisionerError("Apps Script project is not private and owner-only")
+    return script_id
+
+
+def _drive_script_metadata(access_token: str, script_id: str) -> Any:
+    if not APPS_SCRIPT_ID_RE.fullmatch(script_id):
+        raise ProvisionerError("Apps Script project identity is invalid")
+    fields = "id,mimeType,owners(emailAddress),permissions(type,role,emailAddress)"
+    return _apps_script_json(access_token, "GET", f"https://www.googleapis.com/drive/v3/files/{script_id}?fields={fields}")
+
+
+def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapping[str, Any], persist_creation_intent: Callable[[], None], persist_creation_posted: Callable[[], None], persist_created_script: Callable[[str], None], clear_creation_intent: Callable[[], None]) -> tuple[str, str]:
+    record = state["appsScript"]
+    if record["scriptId"] is not None:
+        script_id = _assert_private_owner_script(_drive_script_metadata(access_token, record["scriptId"]), owner_email, record["scriptId"])
+        return script_id, record["provenance"]
+    query = "mimeType = 'application/vnd.google-apps.script' and name = 'MyCoupons' and trashed = false"
+    fields = "nextPageToken,files(id,mimeType,owners(emailAddress),permissions(type,role,emailAddress))"
+    files = _apps_script_list(
+        access_token,
+        "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode({"corpora": "user", "q": query, "fields": fields}),
+        "files",
+    )
+    if len(files) > 1:
+        raise ProvisionerError("Apps Script project adoption is ambiguous")
+    if len(files) == 1:
+        return _assert_private_owner_script(files[0], owner_email), "created" if state["phase"] in {"apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted"} else "adopted"
+    if state["phase"] == "apps-script-creation-intent":
+        # The pre-send intent is safe to clear: it is persisted before the
+        # may-have-been-sent state, so a process exit here cannot duplicate a
+        # project on retry.
+        clear_creation_intent()
+    elif state["phase"] in {"apps-script-creation-pending", "apps-script-creation-posted"}:
+        raise ProvisionerError("Apps Script project creation is pending Drive visibility")
+    persist_creation_intent()
+    # Persist an ambiguous outcome before the non-idempotent request can reach
+    # Apps Script.  A retry now waits for Drive reconciliation instead of
+    # issuing another create request.
+    persist_creation_posted()
+    try:
+        created = _apps_script_json(access_token, "POST", "https://script.googleapis.com/v1/projects", {"title": APPS_SCRIPT_TITLE})
+    except AppsScriptHttpError as exc:
+        if 400 <= exc.status < 500:
+            clear_creation_intent()
+        raise
+    except ProvisionerError:
+        # The request was already recorded as potentially accepted.
+        raise
+    script_id = created.get("scriptId") if isinstance(created, dict) else None
+    if not isinstance(script_id, str) or not APPS_SCRIPT_ID_RE.fullmatch(script_id):
+        raise ProvisionerError("Apps Script project creation returned invalid data")
+    # A successful create response is the durable creation boundary.  Record
+    # its opaque ID before any Drive metadata request so retries cannot create
+    # a duplicate after an interrupted verification.
+    persist_created_script(script_id)
+    return script_id, "created"
+
+
+def _remote_bundle_digest(access_token: str, script_id: str, version_number: int | None = None) -> str:
+    suffix = "" if version_number is None else f"?versionNumber={version_number}"
+    content = _apps_script_json(
+        access_token,
+        "GET",
+        f"https://script.googleapis.com/v1/projects/{script_id}/content{suffix}",
+        maximum_bytes=MAX_APPS_SCRIPT_SOURCE_RESPONSE_BYTES,
+    )
+    files = content.get("files") if isinstance(content, dict) else None
+    if not isinstance(files, list):
+        raise ProvisionerError("Apps Script source inspection returned invalid data")
+    captured: dict[str, bytes] = {}
+    for entry in files:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not isinstance(entry.get("type"), str) or not isinstance(entry.get("source"), str):
+            raise ProvisionerError("Apps Script source inspection returned invalid data")
+        if entry["type"] == "JSON" and entry["name"] == "appsscript":
+            relative = "appsscript.json"
+        elif entry["type"] == "SERVER_JS":
+            relative = entry["name"] + ".gs"
+        elif entry["type"] == "HTML":
+            relative = entry["name"] + ".html"
+        else:
+            raise ProvisionerError("Apps Script source inspection returned an unsupported file")
+        if relative in captured:
+            raise ProvisionerError("Apps Script source inspection returned duplicate files")
+        captured[relative] = entry["source"].encode("utf-8")
+    return _bundle_digest(captured)
+
+
+def _validate_owner_only_deployment(deployment: Any, script_id: str, version_number: int | None = None) -> tuple[str, int]:
+    if not isinstance(deployment, dict):
+        raise ProvisionerError("Apps Script deployment inspection returned invalid data")
+    deployment_id = deployment.get("deploymentId")
+    config = deployment.get("deploymentConfig")
+    entry_points = deployment.get("entryPoints")
+    if (
+        not isinstance(deployment_id, str)
+        or not APPS_SCRIPT_ID_RE.fullmatch(deployment_id)
+        or not isinstance(config, dict)
+        or config.get("scriptId") != script_id
+        or not isinstance(config.get("versionNumber"), int)
+        or config["versionNumber"] < 1
+        or config.get("manifestFileName") != "appsscript"
+        or version_number is not None and config["versionNumber"] != version_number
+        or not isinstance(entry_points, list)
+        or len(entry_points) != 1
+        or not isinstance(entry_points[0], dict)
+        or entry_points[0].get("entryPointType") != "EXECUTION_API"
+        or not isinstance(entry_points[0].get("executionApi"), dict)
+        or not isinstance(entry_points[0]["executionApi"].get("entryPointConfig"), dict)
+        or entry_points[0]["executionApi"]["entryPointConfig"].get("access") != "MYSELF"
+    ):
+        raise ProvisionerError("Apps Script deployment is not an owner-only API executable")
+    return deployment_id, config["versionNumber"]
+
+
+def _apps_script_list(access_token: str, resource: str, key: str) -> list[Any]:
+    result: list[Any] = []
+    token = ""
+    seen_tokens: set[str] = set()
+    for _page in range(1000):
+        separator = "&" if "?" in resource else "?"
+        response = _apps_script_json(access_token, "GET", resource if not token else resource + separator + urllib.parse.urlencode({"pageToken": token}))
+        entries = response.get(key, []) if isinstance(response, dict) else None
+        next_token = response.get("nextPageToken", "") if isinstance(response, dict) else None
+        if not isinstance(entries, list) or not isinstance(next_token, str) or len(next_token) > 4096:
+            raise ProvisionerError("Apps Script resource discovery returned invalid data")
+        result.extend(entries)
+        if not next_token:
+            return result
+        if next_token in seen_tokens:
+            raise ProvisionerError("Apps Script resource discovery returned a repeated page token")
+        seen_tokens.add(next_token)
+        token = next_token
+    raise ProvisionerError("Apps Script resource discovery exceeded its page limit")
+
+
+def _deployment_list(access_token: str, script_id: str) -> list[Any]:
+    deployments = _apps_script_list(access_token, f"https://script.googleapis.com/v1/projects/{script_id}/deployments", "deployments")
+    executable_count = 0
+    for deployment in deployments:
+        # Every script has an automatic mutable HEAD deployment.  It has no
+        # immutable version number and cannot satisfy the deployment contract.
+        if isinstance(deployment, dict) and deployment.get("deploymentId") == "HEAD":
+            continue
+        _validate_owner_only_deployment(deployment, script_id)
+        executable_count += 1
+    if executable_count > 1:
+        raise ProvisionerError("Apps Script deployment recovery is ambiguous")
+    return deployments
+
+
+def _version_for_bundle(access_token: str, script_id: str, digest: str) -> int:
+    description = f"MyCoupons owner-only {digest}"
+    versions = _apps_script_list(access_token, f"https://script.googleapis.com/v1/projects/{script_id}/versions", "versions")
+    candidates = [item for item in versions if isinstance(item, dict) and item.get("description") == description]
+    if len(candidates) > 1:
+        raise ProvisionerError("Apps Script version recovery is ambiguous")
+    if len(candidates) == 1:
+        number = candidates[0].get("versionNumber")
+        if not isinstance(number, int) or number < 1:
+            raise ProvisionerError("Apps Script version recovery returned invalid data")
+        return number
+    created = _apps_script_json(access_token, "POST", f"https://script.googleapis.com/v1/projects/{script_id}/versions", {"description": description})
+    number = created.get("versionNumber") if isinstance(created, dict) else None
+    if not isinstance(number, int) or number < 1 or created.get("description") != description:
+        raise ProvisionerError("Apps Script version creation returned invalid data")
+    return number
+
+
+def _ensure_owner_only_deployment(access_token: str, script_id: str, digest: str, persisted_deployment_id: str | None = None) -> tuple[str, int]:
+    deployments = _deployment_list(access_token, script_id)
+    marker = f"MyCoupons owner-only {digest}"
+    matching = [deployment for deployment in deployments if isinstance(deployment, dict) and deployment.get("deploymentId") != "HEAD" and isinstance(deployment.get("deploymentConfig"), dict) and deployment["deploymentConfig"].get("description") == marker]
+    if not matching and persisted_deployment_id is not None:
+        matching = [deployment for deployment in deployments if deployment.get("deploymentId") == persisted_deployment_id]
+    if not matching and persisted_deployment_id is None:
+        matching = [deployment for deployment in deployments if deployment.get("deploymentId") != "HEAD"]
+    if len(matching) > 1:
+        raise ProvisionerError("Apps Script deployment recovery is ambiguous")
+    version = _version_for_bundle(access_token, script_id, digest)
+    if _remote_bundle_digest(access_token, script_id, version) != digest:
+        raise ProvisionerError("Apps Script version content does not match the verified source bundle")
+    if len(matching) == 1:
+        deployment_id = matching[0].get("deploymentId")
+        if not isinstance(deployment_id, str) or not APPS_SCRIPT_ID_RE.fullmatch(deployment_id):
+            raise ProvisionerError("Apps Script deployment inspection returned invalid data")
+        updated = _apps_script_json(
+            access_token,
+            "PUT",
+            f"https://script.googleapis.com/v1/projects/{script_id}/deployments/{deployment_id}",
+            {"versionNumber": version, "description": marker, "manifestFileName": "appsscript"},
+        )
+        return _validate_owner_only_deployment(updated, script_id, version)
+    created = _apps_script_json(
+        access_token,
+        "POST",
+        f"https://script.googleapis.com/v1/projects/{script_id}/deployments",
+        {"versionNumber": version, "description": marker, "manifestFileName": "appsscript"},
+    )
+    deployment_id, _ = _validate_owner_only_deployment(created, script_id, version)
+    verified = _apps_script_json(access_token, "GET", f"https://script.googleapis.com/v1/projects/{script_id}/deployments/{deployment_id}")
+    return _validate_owner_only_deployment(verified, script_id, version)
+
+
+def _validate_bootstrap_payload(path: Path, config: Mapping[str, Any]) -> bytes:
+    path = _expand_absolute_path(path, error_message="bootstrap payload cannot be resolved")
+    _assert_not_symlink(path)
+    try:
+        path = path.resolve(strict=True)
+    except OSError as exc:
+        raise ProvisionerError("bootstrap payload cannot be resolved") from exc
+    _assert_outside_worktree(path)
+    payload = _read_json_file(path, maximum_bytes=64 * 1024)
+    if not isinstance(payload, dict) or set(payload) != {"version", "config", "geminiApiKey"} or type(payload.get("version")) is not int or payload["version"] != 1:
+        raise ProvisionerError("bootstrap payload is malformed")
+    expected_config = {key: config[key] for key in INSTALLER_CONFIG_KEYS}
+    if not isinstance(payload["config"], dict) or _canonical_json(payload["config"]) != _canonical_json(expected_config):
+        raise ProvisionerError("bootstrap payload config does not match the installation")
+    key = payload["geminiApiKey"]
+    if not isinstance(key, str) or _utf16_units(key) > 512 or not re.fullmatch(r"AIza[A-Za-z0-9_-]{20,}", key):
+        raise ProvisionerError("bootstrap payload is malformed")
+    canonical = _canonical_json(payload)
+    if _utf16_units(canonical.decode("utf-8")) > 12000:
+        raise ProvisionerError("bootstrap payload is malformed")
+    return canonical
+
+
+def _require_cloud_ready_state(state: Mapping[str, Any], config: Mapping[str, Any]) -> Mapping[str, Any]:
+    vertex = state["cloud"].get("vertex") if isinstance(state.get("cloud"), dict) else None
+    if state["phase"] not in {"cloud-ready", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-adoption-pending", "apps-script-ready", "bootstrap-complete"} or not isinstance(vertex, dict):
+        raise ProvisionerError("Cloud provisioning must complete before Apps Script deployment")
+    if vertex.get("projectId") != config["vertexProject"] or vertex.get("provenance") not in {"created", "adopted"}:
+        raise ProvisionerError("persisted Vertex project identity does not match the installation")
+    return vertex
+
+
+def _secret_describe(gcloud: str, project_id: str, project_number: str, owner: str) -> Any:
+    return _run_json(
+        (gcloud, "secrets", "describe", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", "--format=json", "--quiet", f"--account={owner}"),
+        operation="bootstrap secret inspection",
+        absent_secret=(project_id, project_number, BOOTSTRAP_SECRET_NAME),
+    )
+
+
+def _secret_access_policy(gcloud: str, project_id: str, owner: str) -> Any:
+    return _cloud_json(
+        (gcloud, "secrets", "get-iam-policy", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", "--format=json", "--quiet"),
+        account=owner,
+        operation="bootstrap secret access inspection",
+    )
+
+
+def _assert_owner_only_secret_accessor(policy: Any, owner: str, *, require_owner: bool) -> None:
+    bindings = policy.get("bindings", []) if isinstance(policy, dict) else None
+    expected_member = f"user:{owner.lower()}"
+    if not isinstance(bindings, list):
+        raise ProvisionerError("bootstrap secret access inspection returned invalid data")
+    owner_found = False
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            raise ProvisionerError("bootstrap secret access inspection returned invalid data")
+        members = binding.get("members")
+        if "condition" in binding or not isinstance(members, list) or any(not isinstance(member, str) for member in members):
+            raise ProvisionerError("bootstrap secret has unsafe access bindings")
+        if any(member.lower() != expected_member for member in members):
+            raise ProvisionerError("bootstrap secret has unsafe access bindings")
+        owner_found = owner_found or (
+            binding.get("role") == "roles/secretmanager.secretAccessor" and expected_member in {member.lower() for member in members}
+        )
+    if require_owner and not owner_found:
+        raise ProvisionerError("bootstrap secret access grant could not be verified")
+
+
+def _secret_resource_pattern(project_id: str, project_number: str) -> str:
+    return rf"projects/(?:{re.escape(project_id)}|{re.escape(project_number)})/secrets/{BOOTSTRAP_SECRET_NAME}"
+
+
+def _role_can_access_secret_versions(gcloud: str, role: str, owner: str) -> bool:
+    if not isinstance(role, str) or not role:
+        raise ProvisionerError("Cloud project access inspection returned invalid data")
+    described = _cloud_json(
+        (gcloud, "iam", "roles", "describe", role, "--format=json", "--quiet"),
+        account=owner,
+        operation="Cloud role access inspection",
+    )
+    permissions = described.get("includedPermissions") if isinstance(described, dict) else None
+    if not isinstance(permissions, list) or any(not isinstance(permission, str) for permission in permissions):
+        raise ProvisionerError("Cloud role access inspection returned invalid data")
+    return bool(
+        {"secretmanager.versions.access", "secretmanager.secrets.setIamPolicy", "resourcemanager.projects.setIamPolicy", "resourcemanager.folders.setIamPolicy", "resourcemanager.organizations.setIamPolicy", "iam.roles.update", "*"}
+        & set(permissions)
+    )
+
+
+def _assert_owner_only_project_secret_accessor(gcloud: str, policy: Any, owner: str) -> None:
+    """Reject foreign effective secret-version access on one Cloud resource."""
+    bindings = policy.get("bindings", []) if isinstance(policy, dict) else None
+    expected_member = f"user:{owner.lower()}"
+    if not isinstance(bindings, list):
+        raise ProvisionerError("Cloud project access inspection returned invalid data")
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            raise ProvisionerError("Cloud project access inspection returned invalid data")
+        members = binding.get("members")
+        if not isinstance(members, list) or any(not isinstance(member, str) for member in members):
+            raise ProvisionerError("Cloud project has unsafe inherited secret access")
+        foreign_member = any(member.lower() != expected_member for member in members)
+        if "condition" in binding:
+            if _role_can_access_secret_versions(gcloud, binding.get("role"), owner):
+                raise ProvisionerError("Cloud project has unsafe inherited secret access")
+            continue
+        if foreign_member and _role_can_access_secret_versions(gcloud, binding.get("role"), owner):
+            raise ProvisionerError("Cloud project has unsafe inherited secret access")
+
+
+def _project_ancestor_secret_policies(gcloud: str, project_id: str, project_number: str, owner: str) -> list[Any]:
+    """Return every policy inherited by a project, rejecting unknown ancestry."""
+    ancestors = _cloud_json(
+        (gcloud, "projects", "get-ancestors", project_id, "--format=json", "--quiet"),
+        account=owner,
+        operation="Cloud resource hierarchy inspection",
+    )
+    if not isinstance(ancestors, list):
+        raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
+    seen: set[tuple[str, str]] = set()
+    project_seen = False
+    policies: list[Any] = []
+    for ancestor in ancestors:
+        if not isinstance(ancestor, dict):
+            raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
+        resource_type = ancestor.get("type")
+        resource_id = ancestor.get("id")
+        if not isinstance(resource_type, str) or not isinstance(resource_id, str) or (resource_type, resource_id) in seen:
+            raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
+        seen.add((resource_type, resource_id))
+        if resource_type == "project" and resource_id == project_number:
+            project_seen = True
+            command = (gcloud, "projects", "get-iam-policy", project_id, "--format=json", "--quiet")
+        elif resource_type == "folder" and PROJECT_NUMBER_RE.fullmatch(resource_id):
+            command = (gcloud, "resource-manager", "folders", "get-iam-policy", resource_id, "--format=json", "--quiet")
+        elif resource_type == "organization" and PROJECT_NUMBER_RE.fullmatch(resource_id):
+            command = (gcloud, "organizations", "get-iam-policy", resource_id, "--format=json", "--quiet")
+        else:
+            raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
+        policies.append(
+            _cloud_json(command, account=owner, operation="Cloud project access inspection")
+        )
+    if not project_seen:
+        raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
+    return policies
+
+
+def _ensure_bootstrap_secret(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str) -> None:
+    _assert_bootstrap_secret_owned(gcloud, config, owner, project_number, create=True)
+    project_id = config["vertexProject"]
+    _disable_enabled_bootstrap_secret_versions(gcloud, config, owner, project_number)
+    for policy in _project_ancestor_secret_policies(gcloud, project_id, project_number, owner):
+        _assert_owner_only_project_secret_accessor(gcloud, policy, owner)
+    _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=False)
+    _cloud_success((gcloud, "secrets", "add-iam-policy-binding", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", f"--member=user:{owner}", "--role=roles/secretmanager.secretAccessor", "--quiet"), account=owner, operation="bootstrap secret access grant")
+    _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=True)
+
+
+def _assert_bootstrap_secret_owned(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str, *, create: bool) -> None:
+    project_id = config["vertexProject"]
+    try:
+        secret = _secret_describe(gcloud, project_id, project_number, owner)
+    except BootstrapSecretNotFound:
+        if not create:
+            raise ProvisionerError("bootstrap secret is not owned by this installation")
+        _cloud_success((gcloud, "secrets", "create", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", f"--labels={BOOTSTRAP_SECRET_LABEL}={config['cloudInstallationId']}", "--quiet"), account=owner, operation="bootstrap secret creation")
+        secret = _secret_describe(gcloud, project_id, project_number, owner)
+    labels = secret.get("labels") if isinstance(secret, dict) else None
+    expected_name = _secret_resource_pattern(project_id, project_number)
+    if not isinstance(secret, dict) or not isinstance(secret.get("name"), str) or not re.fullmatch(expected_name, secret["name"]) or not isinstance(labels, dict) or labels.get(BOOTSTRAP_SECRET_LABEL) != config["cloudInstallationId"]:
+        raise ProvisionerError("bootstrap secret is not owned by this installation")
+
+
+def _disable_enabled_bootstrap_secret_versions(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str) -> None:
+    versions = _cloud_json(
+        (gcloud, "secrets", "versions", "list", BOOTSTRAP_SECRET_NAME, f"--project={config['vertexProject']}", "--format=json", "--quiet"),
+        account=owner,
+        operation="bootstrap secret version reconciliation",
+    )
+    expected = _secret_resource_pattern(config["vertexProject"], project_number) + r"/versions/[1-9][0-9]*"
+    if not isinstance(versions, list):
+        raise ProvisionerError("bootstrap secret version reconciliation returned invalid data")
+    names: set[str] = set()
+    for version in versions:
+        name = version.get("name") if isinstance(version, dict) else None
+        state = version.get("state") if isinstance(version, dict) else None
+        if (
+            not isinstance(name, str)
+            or name in names
+            or not re.fullmatch(expected, name)
+            or not isinstance(state, str)
+            or state not in {"ENABLED", "DISABLED", "DESTROYED"}
+        ):
+            raise ProvisionerError("bootstrap secret version reconciliation returned invalid data")
+        names.add(name)
+        if state == "ENABLED":
+            _disable_bootstrap_secret_version(gcloud, config, owner, project_number, name)
+
+
+def _stage_bootstrap_secret(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str, payload: bytes) -> str:
+    result = _run_json_with_input(
+        (gcloud, "secrets", "versions", "add", BOOTSTRAP_SECRET_NAME, f"--project={config['vertexProject']}", "--data-file=-", "--format=json", "--quiet", f"--account={owner}"),
+        payload,
+        operation="bootstrap secret staging",
+    )
+    name = result.get("name") if isinstance(result, dict) else None
+    expected = _secret_resource_pattern(config["vertexProject"], project_number) + r"/versions/[1-9][0-9]*"
+    if not isinstance(name, str) or not re.fullmatch(expected, name):
+        raise ProvisionerError("bootstrap secret staging returned invalid data")
+    return name
+
+
+def _run_json_with_input(command: Sequence[str], input_data: bytes, *, operation: str) -> Any:
+    process: subprocess.Popen[bytes] | None = None
+    selector: selectors.BaseSelector | None = None
+    try:
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+        if process.stdin is None or process.stdout is None:
+            raise OSError("command pipes were not created")
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdin, selectors.EVENT_WRITE)
+        selector.register(process.stdout, selectors.EVENT_READ)
+        output = bytearray()
+        offset = 0
+        deadline = time.monotonic() + 30
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, 30)
+            for selected, _events in selector.select(remaining):
+                stream = selected.fileobj
+                if stream is process.stdin:
+                    written = os.write(stream.fileno(), input_data[offset:])
+                    offset += written
+                    if offset == len(input_data):
+                        selector.unregister(stream)
+                        stream.close()
+                else:
+                    chunk = os.read(stream.fileno(), min(8192, MAX_COMMAND_OUTPUT_BYTES + 1 - len(output)))
+                    if not chunk:
+                        selector.unregister(stream)
+                        continue
+                    output.extend(chunk)
+                    if len(output) > MAX_COMMAND_OUTPUT_BYTES:
+                        raise ProvisionerError(f"{operation} was rejected")
+        completed_returncode = process.wait(timeout=max(0, deadline - time.monotonic()))
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        if process is not None:
+            _terminate_process(process)
+        raise ProvisionerError(f"{operation} could not run") from exc
+    except ProvisionerError:
+        if process is not None:
+            _terminate_process(process)
+        raise
+    finally:
+        if selector is not None:
+            selector.close()
+        if process is not None and process.stdin is not None:
+            process.stdin.close()
+        if process is not None and process.stdout is not None:
+            process.stdout.close()
+    if completed_returncode != 0:
+        raise ProvisionerError(f"{operation} was rejected")
+    try:
+        return json.loads(bytes(output).decode("utf-8"), object_pairs_hook=_no_duplicate_object, parse_constant=_reject_json_constant, parse_float=_finite_json_float)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
+        raise ProvisionerError(f"{operation} returned unexpected output") from exc
+
+
+def _validate_bootstrap_result(value: Any) -> None:
+    if not isinstance(value, dict) or set(value) != {"version", "installed", "resumed", "spreadsheetId", "labelId", "triggerCreated", "reviewTriggerCreated", "locale", "timeZone"}:
+        raise ProvisionerError("Apps Script bootstrap returned invalid data")
+    if value["version"] != 1 or value["installed"] is not True or value["locale"] != "en" or value["timeZone"] != "Europe/Rome":
+        raise ProvisionerError("Apps Script bootstrap did not confirm installation")
+    if not all(isinstance(value[key], bool) for key in ("resumed", "triggerCreated", "reviewTriggerCreated")) or not all(isinstance(value[key], str) and value[key] for key in ("spreadsheetId", "labelId")):
+        raise ProvisionerError("Apps Script bootstrap returned invalid data")
+
+
+def _invoke_bootstrap(access_token: str, script_id: str, secret_version: str) -> None:
+    result = _apps_script_json(access_token, "POST", f"https://script.googleapis.com/v1/scripts/{script_id}:run", {"function": "bootstrapFromSecret", "parameters": [secret_version], "devMode": False})
+    if not isinstance(result, dict) or result.get("done") is not True:
+        raise ProvisionerError("Apps Script bootstrap was rejected")
+    _validate_bootstrap_result(result.get("response", {}).get("result") if isinstance(result.get("response"), dict) else None)
+
+
+def _verify_execution_api_access(access_token: str, script_id: str) -> None:
+    """Prove the OAuth client can invoke this immutable API deployment first."""
+    result = _apps_script_json(
+        access_token,
+        "POST",
+        f"https://script.googleapis.com/v1/scripts/{script_id}:run",
+        {"function": "verifyBootstrapExecutionAccess", "parameters": [], "devMode": False},
+    )
+    value = result.get("response", {}).get("result") if isinstance(result, dict) and isinstance(result.get("response"), dict) else None
+    if not isinstance(result, dict) or result.get("done") is not True or value != {"version": 1, "ready": True}:
+        raise ProvisionerError("Apps Script execution API authorization was rejected")
+
+
+def _bootstrap_secret_version_state(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str, secret_version: str) -> str:
+    version = secret_version.rsplit("/", 1)[-1]
+    result = _cloud_json(
+        (gcloud, "secrets", "versions", "describe", version, f"--secret={BOOTSTRAP_SECRET_NAME}", f"--project={config['vertexProject']}", "--format=json", "--quiet"),
+        account=owner,
+        operation="bootstrap secret version inspection",
+    )
+    expected = _secret_resource_pattern(config["vertexProject"], project_number) + r"/versions/[1-9][0-9]*"
+    if not isinstance(result, dict) or result.get("name") != secret_version or not re.fullmatch(expected, secret_version) or result.get("state") not in {"ENABLED", "DISABLED", "DESTROYED"}:
+        raise ProvisionerError("bootstrap secret version inspection returned invalid data")
+    return result["state"]
+
+
+def _disable_bootstrap_secret_version(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str, secret_version: str) -> None:
+    if _bootstrap_secret_version_state(gcloud, config, owner, project_number, secret_version) in {"DISABLED", "DESTROYED"}:
+        return
+    version = secret_version.rsplit("/", 1)[-1]
+    _cloud_success((gcloud, "secrets", "versions", "disable", version, f"--secret={BOOTSTRAP_SECRET_NAME}", f"--project={config['vertexProject']}", "--quiet"), account=owner, operation="bootstrap secret version disablement")
+    if _bootstrap_secret_version_state(gcloud, config, owner, project_number, secret_version) != "DISABLED":
+        raise ProvisionerError("bootstrap secret version disablement could not be verified")
+
+
+def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: Path, clasp_auth: Path, bootstrap_payload: Path | None, *, association_acknowledged: bool = False) -> dict[str, Any]:
+    """Deploy one verified private source snapshot and complete its secret bootstrap."""
+    validate_cloud_config(config)
+    state_dir = ensure_state_dir(state_dir)
+    with InstallationLock(state_dir):
+        state = _initialize_state_locked(state_dir, config)
+        key = _load_or_create_identity_key(state_dir)
+        if state["bootstrap"]["status"] in {"staged", "verified", "staging", "replacement-staging"}:
+            vertex = state["cloud"].get("vertex")
+            if not isinstance(vertex, dict) or vertex.get("projectId") != config["vertexProject"] or not isinstance(vertex.get("projectNumber"), str):
+                raise ProvisionerError("persisted Vertex project identity does not match the installation")
+            gcloud = discover_tools(("gcloud",))["gcloud"]
+            if gcloud is None:
+                raise ProvisionerError("gcloud is required for secure bootstrap")
+            owner = _require_active_gcloud_owner(gcloud, config["ownerEmail"])
+            status = state["bootstrap"]["status"]
+            if status in {"staged", "verified"}:
+                _assert_bootstrap_secret_owned(gcloud, config, owner, vertex["projectNumber"], create=False)
+            if status == "staged":
+                _disable_bootstrap_secret_version(gcloud, config, owner, vertex["projectNumber"], state["bootstrap"]["secretVersion"])
+            elif status in {"staging", "replacement-staging"}:
+                _assert_bootstrap_secret_owned(gcloud, config, owner, vertex["projectNumber"], create=False)
+                _disable_enabled_bootstrap_secret_versions(gcloud, config, owner, vertex["projectNumber"])
+            else:
+                secret_version = state["bootstrap"]["secretVersion"]
+                _disable_bootstrap_secret_version(gcloud, config, owner, vertex["projectNumber"], secret_version)
+                state = dict(state)
+                state["bootstrap"] = {"secretVersion": secret_version, "status": "complete"}
+                state["phase"] = "bootstrap-complete"
+                state = _persist_state_locked(state_dir, state, key)
+        _require_cloud_ready_state(state, config)
+        digest, files = _deployment_bundle(source_dir)
+        # Reject every private input before any Apps Script or Cloud mutation.
+        if state["bootstrap"]["status"] == "complete":
+            payload = None
+        elif bootstrap_payload is None:
+            raise ProvisionerError("bootstrap payload is required until bootstrap completes")
+        else:
+            payload = _validate_bootstrap_payload(bootstrap_payload, config)
+        state = _mark_bundle_validated_locked(state_dir, config, digest)
+        access_token = _require_isolated_clasp_owner(clasp_auth, config["ownerEmail"])
+        created_this_run = False
+        def persist_creation_intent() -> None:
+            nonlocal state
+            state = dict(state)
+            state["phase"] = "apps-script-creation-intent"
+            state = _persist_state_locked(state_dir, state, key)
+
+        def persist_creation_posted() -> None:
+            nonlocal state
+            state = dict(state)
+            state["phase"] = "apps-script-creation-posted"
+            state = _persist_state_locked(state_dir, state, key)
+
+        def persist_created_script(script_id: str) -> None:
+            nonlocal created_this_run, state
+            state = dict(state)
+            state["appsScript"] = {
+                "scriptId": script_id,
+                "provenance": "created",
+                "bundleDigest": None,
+                "versionNumber": None,
+                "deploymentId": None,
+            }
+            state["phase"] = "apps-script-association-required"
+            state = _persist_state_locked(state_dir, state, key)
+            created_this_run = True
+
+        def clear_creation_intent() -> None:
+            nonlocal state
+            state = dict(state)
+            state["phase"] = "cloud-ready"
+            state = _persist_state_locked(state_dir, state, key)
+
+        script_id, provenance = _find_or_create_apps_script(access_token, config["ownerEmail"], state, persist_creation_intent, persist_creation_posted, persist_created_script, clear_creation_intent)
+        _assert_private_owner_script(_drive_script_metadata(access_token, script_id), config["ownerEmail"], script_id)
+        if created_this_run or (state["phase"] == "apps-script-association-required" and not association_acknowledged):
+            return state
+        if state["appsScript"]["scriptId"] is None and provenance == "created":
+            state = dict(state)
+            state["appsScript"] = {
+                "scriptId": script_id,
+                "provenance": provenance,
+                "bundleDigest": None,
+                "versionNumber": None,
+                "deploymentId": None,
+            }
+            state["phase"] = "apps-script-association-required"
+            return _persist_state_locked(state_dir, state, key)
+        if state["appsScript"]["scriptId"] is None and provenance == "adopted":
+            state = dict(state)
+            state["appsScript"] = {
+                "scriptId": script_id,
+                "provenance": "adopted",
+                "bundleDigest": None,
+                "versionNumber": None,
+                "deploymentId": None,
+            }
+            state["phase"] = "apps-script-adoption-pending"
+            state = _persist_state_locked(state_dir, state, key)
+        # A project we can adopt may still have a deployment that violates the
+        # owner-only contract.  Reject it before replacing any remote source.
+        _deployment_list(access_token, script_id)
+        if _remote_bundle_digest(access_token, script_id) != digest:
+            _apps_script_json(
+                access_token,
+                "PUT",
+                f"https://script.googleapis.com/v1/projects/{script_id}/content",
+                {"files": files},
+                maximum_bytes=MAX_APPS_SCRIPT_SOURCE_RESPONSE_BYTES,
+            )
+            if _remote_bundle_digest(access_token, script_id) != digest:
+                raise ProvisionerError("Apps Script source deployment could not be verified")
+        deployment_id, version_number = _ensure_owner_only_deployment(access_token, script_id, digest, state["appsScript"]["deploymentId"])
+        state = dict(state)
+        state["appsScript"] = {"scriptId": script_id, "provenance": provenance, "bundleDigest": digest, "versionNumber": version_number, "deploymentId": deployment_id}
+        state["phase"] = "bootstrap-complete" if state["bootstrap"]["status"] == "complete" else "apps-script-ready"
+        state = _persist_state_locked(state_dir, state, key)
+        if state["bootstrap"]["status"] == "complete":
+            return state
+        gcloud = discover_tools(("gcloud",))["gcloud"]
+        if gcloud is None:
+            raise ProvisionerError("gcloud is required for secure bootstrap")
+        owner = _require_active_gcloud_owner(gcloud, config["ownerEmail"])
+        project_number = state["cloud"]["vertex"]["projectNumber"]
+        bootstrap = state["bootstrap"]
+        if bootstrap["status"] == "verified":
+            # Bootstrap was already invoked.  Only gcloud is needed to make
+            # its exact persisted version unusable; do that before checks
+            # needed solely to stage or invoke another bootstrap request.
+            _disable_bootstrap_secret_version(gcloud, config, owner, project_number, bootstrap["secretVersion"])
+            state = dict(state)
+            state["bootstrap"] = {"secretVersion": bootstrap["secretVersion"], "status": "complete"}
+            state["phase"] = "bootstrap-complete"
+            return _persist_state_locked(state_dir, state, key)
+        _revalidate_project_before_mutation(
+            gcloud,
+            project_id=config["vertexProject"],
+            installation_label=config["cloudInstallationId"],
+            role="vertex",
+            expected_owner=owner,
+            persisted=state["cloud"]["vertex"],
+        )
+        _ensure_service(
+            gcloud, config["vertexProject"], "gmail.googleapis.com",
+            installation_label=config["cloudInstallationId"], role="vertex", expected_owner=owner,
+            persisted=state["cloud"]["vertex"],
+        )
+        _ensure_service(
+            gcloud, config["vertexProject"], "drive.googleapis.com",
+            installation_label=config["cloudInstallationId"], role="vertex", expected_owner=owner,
+            persisted=state["cloud"]["vertex"],
+        )
+        _ensure_service(gcloud, config["vertexProject"], "cloudresourcemanager.googleapis.com", installation_label=config["cloudInstallationId"], role="vertex", expected_owner=owner, persisted=state["cloud"]["vertex"])
+        if bootstrap["status"] in {"staging", "replacement-staging"}:
+            # An interrupted `versions add` has no durable new-version ID.
+            # Reconcile every dedicated-secret version before making this
+            # signed state retryable again.
+            _ensure_bootstrap_secret(gcloud, config, owner, project_number)
+            state = dict(state)
+            state["bootstrap"] = {"secretVersion": None, "status": "not-started"}
+            state = _persist_state_locked(state_dir, state, key)
+            bootstrap = state["bootstrap"]
+        _verify_execution_api_access(access_token, script_id)
+        if bootstrap["status"] in {"staged", "verified"}:
+            _ensure_bootstrap_secret(gcloud, config, owner, project_number)
+            secret_version = bootstrap["secretVersion"]
+            if bootstrap["status"] == "staged" and _bootstrap_secret_version_state(gcloud, config, owner, project_number, secret_version) != "ENABLED":
+                if payload is None:
+                    raise ProvisionerError("bootstrap payload is required until bootstrap completes")
+                state = dict(state)
+                state["bootstrap"] = {"secretVersion": secret_version, "status": "replacement-staging"}
+                state = _persist_state_locked(state_dir, state, key)
+                secret_version = _stage_bootstrap_secret(gcloud, config, owner, project_number, payload)
+                state = dict(state)
+                state["bootstrap"] = {"secretVersion": secret_version, "status": "staged"}
+                state = _persist_state_locked(state_dir, state, key)
+        else:
+            if bootstrap["status"] != "not-started":
+                raise ProvisionerError("bootstrap state is invalid")
+            if bootstrap["status"] == "not-started":
+                _ensure_bootstrap_secret(gcloud, config, owner, project_number)
+                state = dict(state)
+                state["bootstrap"] = {"secretVersion": None, "status": "staging"}
+                state = _persist_state_locked(state_dir, state, key)
+            if payload is None:
+                raise ProvisionerError("bootstrap payload is required until bootstrap completes")
+            secret_version = _stage_bootstrap_secret(gcloud, config, owner, project_number, payload)
+            state = dict(state)
+            state["bootstrap"] = {"secretVersion": secret_version, "status": "staged"}
+            state = _persist_state_locked(state_dir, state, key)
+        if state["bootstrap"]["status"] == "staged":
+            _invoke_bootstrap(access_token, script_id, secret_version)
+            state = dict(state)
+            state["bootstrap"] = {"secretVersion": secret_version, "status": "verified"}
+            state = _persist_state_locked(state_dir, state, key)
+        _disable_bootstrap_secret_version(gcloud, config, owner, project_number, secret_version)
+        state = dict(state)
+        state["bootstrap"] = {"secretVersion": secret_version, "status": "complete"}
+        state["phase"] = "bootstrap-complete"
         return _persist_state_locked(state_dir, state, key)
