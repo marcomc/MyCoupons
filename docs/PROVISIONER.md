@@ -104,11 +104,14 @@ that call must succeed, so an unrelated `clasp` OAuth client cannot leave an
 enabled bootstrap secret behind.
 
 The source is captured as one validated digest, uploaded only when the remote
-content differs, then read back. Every existing deployment must be exactly one
-`EXECUTION_API` entry point with `MYSELF` access; public, web, or malformed
-deployments stop the command. A digest-bound immutable source version and
-owner-only deployment are created or recovered uniquely and read back before
-the bootstrap runs.
+content differs, then read back. The API-created automatic HEAD record is
+recognized only by its opaque ID, missing version, `appsscript` manifest, and
+the exact owner-only Execution API entry-point shape (or its omission);
+duplicate or malformed HEAD-shaped records stop recovery.
+Every other existing deployment must have exactly one `EXECUTION_API` entry
+point with `MYSELF` access; public, web, or malformed deployments stop the
+command. A digest-bound immutable source version and owner-only deployment are
+created or recovered uniquely and read back before the bootstrap runs.
 
 For bootstrap, the command creates or adopts only the Vertex-project secret
 `mycoupons-bootstrap` bearing this installation label, rejects public or foreign

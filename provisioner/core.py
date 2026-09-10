@@ -1838,6 +1838,30 @@ def _validate_owner_only_deployment(deployment: Any, script_id: str, version_num
     return deployment_id, config["versionNumber"]
 
 
+def _is_automatic_head_deployment(deployment: Any, script_id: str) -> bool:
+    """Recognize only the mutable automatic HEAD deployment Apps Script creates."""
+    if not isinstance(deployment, dict):
+        return False
+    deployment_id = deployment.get("deploymentId")
+    config = deployment.get("deploymentConfig")
+    if not (
+        isinstance(deployment_id, str)
+        and deployment_id != "HEAD"
+        and APPS_SCRIPT_ID_RE.fullmatch(deployment_id) is not None
+        and isinstance(config, dict)
+        and set(config) == {"scriptId", "manifestFileName"}
+        and config.get("scriptId") == script_id
+        and config.get("manifestFileName") == "appsscript"
+    ):
+        return False
+    return "entryPoints" not in deployment or deployment["entryPoints"] == [
+        {
+            "entryPointType": "EXECUTION_API",
+            "executionApi": {"entryPointConfig": {"access": "MYSELF"}},
+        }
+    ]
+
+
 def _apps_script_list(access_token: str, resource: str, key: str) -> list[Any]:
     result: list[Any] = []
     token = ""
@@ -1862,14 +1886,16 @@ def _apps_script_list(access_token: str, resource: str, key: str) -> list[Any]:
 def _deployment_list(access_token: str, script_id: str) -> list[Any]:
     deployments = _apps_script_list(access_token, f"https://script.googleapis.com/v1/projects/{script_id}/deployments", "deployments")
     executable_count = 0
+    automatic_head_count = 0
     for deployment in deployments:
         # Every script has an automatic mutable HEAD deployment.  It has no
         # immutable version number and cannot satisfy the deployment contract.
-        if isinstance(deployment, dict) and deployment.get("deploymentId") == "HEAD":
+        if _is_automatic_head_deployment(deployment, script_id):
+            automatic_head_count += 1
             continue
         _validate_owner_only_deployment(deployment, script_id)
         executable_count += 1
-    if executable_count > 1:
+    if automatic_head_count > 1 or executable_count > 1:
         raise ProvisionerError("Apps Script deployment recovery is ambiguous")
     return deployments
 
@@ -1895,11 +1921,15 @@ def _version_for_bundle(access_token: str, script_id: str, digest: str) -> int:
 def _ensure_owner_only_deployment(access_token: str, script_id: str, digest: str, persisted_deployment_id: str | None = None) -> tuple[str, int]:
     deployments = _deployment_list(access_token, script_id)
     marker = f"MyCoupons owner-only {digest}"
-    matching = [deployment for deployment in deployments if isinstance(deployment, dict) and deployment.get("deploymentId") != "HEAD" and isinstance(deployment.get("deploymentConfig"), dict) and deployment["deploymentConfig"].get("description") == marker]
+    matching = [deployment for deployment in deployments if isinstance(deployment, dict) and not _is_automatic_head_deployment(deployment, script_id) and isinstance(deployment.get("deploymentConfig"), dict) and deployment["deploymentConfig"].get("description") == marker]
     if not matching and persisted_deployment_id is not None:
-        matching = [deployment for deployment in deployments if deployment.get("deploymentId") == persisted_deployment_id]
+        matching = [
+            deployment
+            for deployment in deployments
+            if not _is_automatic_head_deployment(deployment, script_id) and deployment.get("deploymentId") == persisted_deployment_id
+        ]
     if not matching and persisted_deployment_id is None:
-        matching = [deployment for deployment in deployments if deployment.get("deploymentId") != "HEAD"]
+        matching = [deployment for deployment in deployments if not _is_automatic_head_deployment(deployment, script_id)]
     if len(matching) > 1:
         raise ProvisionerError("Apps Script deployment recovery is ambiguous")
     version = _version_for_bundle(access_token, script_id, digest)
