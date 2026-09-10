@@ -1746,6 +1746,10 @@ def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapp
     except AppsScriptHttpError as exc:
         if 400 <= exc.status < 500:
             clear_creation_intent()
+        else:
+            # A server error can follow remote acceptance of a non-idempotent
+            # create request, so wait for Drive visibility instead of retrying.
+            persist_creation_posted()
         raise
     except ProvisionerError:
         # A transport failure can follow a remote project creation.  Preserve
@@ -1906,7 +1910,7 @@ def _validate_bootstrap_payload(path: Path, config: Mapping[str, Any]) -> bytes:
         raise ProvisionerError("bootstrap payload cannot be resolved") from exc
     _assert_outside_worktree(path)
     payload = _read_json_file(path, maximum_bytes=64 * 1024)
-    if not isinstance(payload, dict) or set(payload) != {"version", "config", "geminiApiKey"} or payload.get("version") != 1:
+    if not isinstance(payload, dict) or set(payload) != {"version", "config", "geminiApiKey"} or type(payload.get("version")) is not int or payload["version"] != 1:
         raise ProvisionerError("bootstrap payload is malformed")
     expected_config = {key: config[key] for key in INSTALLER_CONFIG_KEYS}
     if not isinstance(payload["config"], dict) or _canonical_json(payload["config"]) != _canonical_json(expected_config):

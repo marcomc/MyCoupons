@@ -1026,6 +1026,28 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 )
         self.assertEqual(events, ["intent", "posted"])
 
+    def test_script_create_server_failure_marks_an_ambiguous_attempt_posted(self) -> None:
+        state = {
+            "phase": "cloud-ready",
+            "appsScript": {"scriptId": None, "provenance": None, "bundleDigest": None, "versionNumber": None, "deploymentId": None},
+        }
+        events: list[object] = []
+        with mock.patch("provisioner.core._apps_script_list", return_value=[]), mock.patch(
+            "provisioner.core._apps_script_json", side_effect=core.AppsScriptHttpError(503)
+        ):
+            with self.assertRaises(core.AppsScriptHttpError) as raised:
+                core._find_or_create_apps_script(
+                    "private-token",
+                    "owner@example.com",
+                    state,
+                    lambda: events.append("intent"),
+                    lambda: events.append("posted"),
+                    lambda value: events.append(("created", value)),
+                    lambda: events.append("cleared"),
+                )
+        self.assertEqual(raised.exception.status, 503)
+        self.assertEqual(events, ["intent", "posted"])
+
     def _deployment(self, script_id: str = "script-1", deployment_id: str = "deployment-1", version: int = 1) -> dict[str, object]:
         return {
             "deploymentId": deployment_id,
@@ -1286,6 +1308,17 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             self._payload(path, config)
             payload = json.loads(path.read_text(encoding="utf-8"))
             payload["geminiApiKey"] = "AIza" + "a" * 509
+            private_json(path, payload)
+            with self.assertRaisesRegex(core.ProvisionerError, "malformed"):
+                core._validate_bootstrap_payload(path, config)
+
+    def test_bootstrap_payload_rejects_a_boolean_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "payload.json"
+            config = valid_cloud_config()
+            self._payload(path, config)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["version"] = True
             private_json(path, payload)
             with self.assertRaisesRegex(core.ProvisionerError, "malformed"):
                 core._validate_bootstrap_payload(path, config)
