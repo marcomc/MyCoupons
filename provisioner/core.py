@@ -1008,6 +1008,8 @@ def validate_bundle(source_dir: Path) -> str:
     if "webapp" in manifest or "addOns" in manifest or whitelist is not None or manifest.get("executionApi") != {"access": "MYSELF"} or set(scopes) != expected_scopes:
         raise ProvisionerError("Apps Script manifest access or OAuth scope contract is invalid")
     dependencies = manifest.get("dependencies")
+    if not isinstance(dependencies, dict) or set(dependencies) != {"enabledAdvancedServices"}:
+        raise ProvisionerError("Apps Script manifest dependency contract is invalid")
     services = dependencies.get("enabledAdvancedServices") if isinstance(dependencies, dict) else None
     expected_services = {("Gmail", "gmail", "v1"), ("Drive", "drive", "v3")}
     if not isinstance(services, list) or len(services) != len(expected_services) or not all(
@@ -1887,7 +1889,7 @@ def _ensure_owner_only_deployment(access_token: str, script_id: str, digest: str
             access_token,
             "PUT",
             f"https://script.googleapis.com/v1/projects/{script_id}/deployments/{deployment_id}",
-            {"versionNumber": version, "description": marker, "manifestFileName": "appsscript"},
+            {"deploymentConfig": {"versionNumber": version, "description": marker, "manifestFileName": "appsscript"}},
         )
         return _validate_owner_only_deployment(updated, script_id, version)
     created = _apps_script_json(

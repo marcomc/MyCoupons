@@ -211,7 +211,7 @@ After verified ownership, the command enables only the required services:
 | Project | Services |
 | --- | --- |
 | Gemini Developer API | `apikeys.googleapis.com`, `generativelanguage.googleapis.com` |
-| Vertex fallback | `aiplatform.googleapis.com`, `script.googleapis.com`, `secretmanager.googleapis.com`, `cloudresourcemanager.googleapis.com`, `drive.googleapis.com` |
+| Vertex fallback | `aiplatform.googleapis.com`, `script.googleapis.com`, `secretmanager.googleapis.com`, `cloudresourcemanager.googleapis.com`, `drive.googleapis.com`, `gmail.googleapis.com` |
 
 State records a signed creation intent before project creation, then only
 project IDs, project numbers, provenance, phase, and other non-secret metadata
