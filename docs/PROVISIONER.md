@@ -7,7 +7,8 @@
 - [Implemented commands](#implemented-commands)
 - [Authentication preflight](#authentication-preflight)
 - [Source bundle contract](#source-bundle-contract)
-- [Deferred cloud actions](#deferred-cloud-actions)
+- [Cloud provisioning](#cloud-provisioning)
+- [Deferred deployment actions](#deferred-deployment-actions)
 
 ## Scope
 
@@ -97,11 +98,68 @@ validation and digesting consume the same captured bytes; a file or deployable
 file set that changes during capture fails validation. Vendor license files
 remain part of repository provenance but are not Apps Script deployment inputs.
 
-## Deferred cloud actions
+## Cloud provisioning
 
-The next increment may use this local contract to provision the operator-owned
-Cloud project, use an isolated `clasp` authorization, deploy the validated
-digest, create an immutable temporary Secret Manager version, invoke
+After `validate-bundle`, `provision-cloud` reconciles the two explicitly named
+projects from the same private config:
+
+```sh
+python3 -m provisioner.cli provision-cloud \
+  --config /private/path/mycoupons.local.json
+```
+
+The Cloud command requires these otherwise-empty configuration fields:
+
+| Field | Contract |
+| --- | --- |
+| `developerProject` | Distinct Gemini Developer API project ID. It must remain unbilled. |
+| `vertexProject` | Distinct paid Vertex fallback project ID. |
+| `vertexBillingAccount` | The selected open Generic Billing Account ID, with or without `billingAccounts/`. |
+| `cloudInstallationId` | A 16–63-character lowercase label value identifying this installation. |
+
+It first requires exactly one active `gcloud` account matching `ownerEmail`.
+Every subsequent Cloud read and mutation is pinned to that verified account,
+instead of the mutable active Cloud SDK configuration.
+For an existing project, it requires an active lifecycle, an unconditional
+`roles/owner` binding for that account, and both ownership labels:
+`mycoupons-installation=CLOUD_INSTALLATION_ID` and
+`mycoupons-role=developer` or `vertex`. A nonmatching, unlabeled, inaccessible,
+or ambiguous project is never adopted or changed. If a configured project is
+reported absent by gcloud's exact not-found response, the command attempts
+creation with those labels. Timeouts, malformed output, authorization failures,
+and every other inspection failure fail closed without exposing Cloud diagnostics.
+
+The developer project is checked before the Vertex project is created or
+changed. Any billing linkage on it is a hard error: this command never links,
+unlinks, or relinks its billing. The Vertex project may be linked only when it
+is currently unlinked; it must then verify the selected account is open and the
+exact requested linkage. A billing subaccount is rejected; a different existing
+linkage is rejected rather than relabeled.
+
+After verified ownership, the command enables only the required services:
+
+| Project | Services |
+| --- | --- |
+| Gemini Developer API | `apikeys.googleapis.com`, `generativelanguage.googleapis.com` |
+| Vertex fallback | `aiplatform.googleapis.com`, `script.googleapis.com`, `secretmanager.googleapis.com` |
+
+State records a signed creation intent before project creation, then only
+project IDs, project numbers, provenance, phase, and other non-secret metadata
+in the private state directory. Existing signed foundation state is migrated
+locally before Cloud work and rebinds its prior installer-only config digest;
+malformed or unbound state is rejected. Every command is
+single-process locked, uses fixed arguments, has a 30-second bounded subprocess
+deadline, discards stderr, bounds stdout, and returns generic redacted errors.
+Retries resume through `cloud-projects-reconciled` and `cloud-ready`; already
+enabled services and the exact confirmed billing link are left unchanged.
+
+This command creates no API key, OAuth client, secret, Apps Script project, or
+deployment. It is not evidence that Google has accepted a model request.
+
+## Deferred deployment actions
+
+The next increment may use this local contract to use an isolated `clasp`
+authorization, deploy the validated digest, create an immutable temporary
+Secret Manager version, invoke
 `bootstrapFromSecret`, verify its non-secret result, and disable that version
-after success. None of those actions are implemented or authorized by this
-foundation.
+after success. None of those actions are implemented or authorized here.

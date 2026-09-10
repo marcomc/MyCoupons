@@ -35,11 +35,26 @@ def valid_config() -> dict[str, object]:
         "initialDate": "",
         "developerProject": "",
         "vertexProject": "vertex-project",
+        "vertexBillingAccount": "",
+        "cloudInstallationId": "",
         "vertexLocation": "global",
         "model": "gemini-flash-latest",
         "autoVertexFallback": False,
         "fetchRemoteImages": True,
     }
+
+
+def valid_cloud_config() -> dict[str, object]:
+    config = valid_config()
+    config.update(
+        {
+            "developerProject": "developer-project",
+            "vertexProject": "vertex-project",
+            "vertexBillingAccount": "ABCDEF-123456-ABCDEF",
+            "cloudInstallationId": "installation-demo",
+        }
+    )
+    return config
 
 
 class ProvisionerConfigTests(unittest.TestCase):
@@ -213,6 +228,29 @@ class ProvisionerStateTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "not bound"):
                 core.initialize_state(state_dir, config)
 
+    def test_signed_v1_state_migrates_without_losing_its_bundle_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_path = root / "config.json"
+            private_json(config_path, valid_config())
+            config = core.load_config(config_path)
+            state_dir = root / "state"
+            core.initialize_state(state_dir, config)
+            core.mark_bundle_validated(state_dir, config, "a" * 64)
+            state_path = state_dir / "state.json"
+            v2 = json.loads(state_path.read_text(encoding="utf-8"))
+            v1 = {key: value for key, value in v2.items() if key != "cloud"}
+            v1["version"] = 1
+            key = core._read_private_bytes(state_dir / "identity.key", maximum_bytes=32)
+            v1["configDigest"] = core._legacy_installer_config_digest(config)
+            v1["identityProof"] = core._identity_proof_v1(key, v1)
+            private_json(state_path, v1)
+            migrated = core.initialize_state(state_dir, config)
+            self.assertEqual(migrated["version"], core.STATE_VERSION)
+            self.assertEqual(migrated["phase"], "bundle-validated")
+            self.assertEqual(migrated["cloud"], {"developer": None, "vertex": None})
+            self.assertEqual(migrated["configDigest"], core.config_digest(config))
+
     def test_state_resume_status_is_decided_under_the_installation_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -306,6 +344,216 @@ class ProvisionerStateTests(unittest.TestCase):
                         pass
             finally:
                 os.close(reader)
+
+
+class ProvisionerCloudTests(unittest.TestCase):
+    def _bundle_validated_state(self, root: Path, config: dict[str, object]) -> Path:
+        state_dir = root / "state"
+        core.initialize_state(state_dir, config)
+        core.mark_bundle_validated(state_dir, config, "a" * 64)
+        return state_dir
+
+    def _cloud_command_responder(self, resources: dict[str, dict[str, object]], billing: dict[str, dict[str, object]], services: set[tuple[str, str]]):
+        def response(command: tuple[str, ...], **_kwargs: object) -> object:
+            if command[1:3] == ("auth", "list"):
+                return [{"account": "owner@example.com", "status": "ACTIVE"}]
+            if command[1:3] == ("projects", "describe"):
+                project_id = command[3]
+                if project_id not in resources:
+                    raise core.ProjectNotFound("Cloud project was not found")
+                return resources[project_id]
+            if command[1:3] == ("projects", "get-iam-policy"):
+                return {"bindings": [{"role": "roles/owner", "members": ["user:owner@example.com"]}]}
+            if command[1:4] == ("billing", "projects", "describe"):
+                return {"projectId": command[4], **billing[command[4]]}
+            if command[1:4] == ("billing", "accounts", "describe"):
+                return {"name": command[4], "open": True}
+            if command[1:3] == ("services", "list"):
+                project_id = next(part.removeprefix("--project=") for part in command if part.startswith("--project="))
+                service = next(part.removeprefix("--filter=config.name=") for part in command if part.startswith("--filter=config.name="))
+                return [{"config": {"name": service}}] if (project_id, service) in services else []
+            raise AssertionError(command)
+
+        return response
+
+    def test_cloud_provision_creates_resumes_and_never_relinks_billed_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._bundle_validated_state(root, config)
+            resources: dict[str, dict[str, object]] = {}
+            billing = {
+                "developer-project": {"billingEnabled": False, "billingAccountName": ""},
+                "vertex-project": {"billingEnabled": False, "billingAccountName": ""},
+            }
+            services: set[tuple[str, str]] = set()
+            commands: list[tuple[str, ...]] = []
+
+            def mutate(command: tuple[str, ...], **_kwargs: object) -> None:
+                commands.append(command)
+                if command[1:3] == ("projects", "create"):
+                    project_id = command[3]
+                    labels = next(part.removeprefix("--labels=") for part in command if part.startswith("--labels="))
+                    resources[project_id] = {
+                        "projectId": project_id,
+                        "projectNumber": "123456" if project_id == "developer-project" else "654321",
+                        "lifecycleState": "ACTIVE",
+                        "labels": dict(item.split("=", 1) for item in labels.split(",")),
+                    }
+                    return
+                if command[1:4] == ("billing", "projects", "link"):
+                    project_id = command[4]
+                    billing[project_id] = {"billingEnabled": True, "billingAccountName": command[5].removeprefix("--billing-account=")}
+                    return
+                if command[1:3] == ("services", "enable"):
+                    services.add((next(part.removeprefix("--project=") for part in command if part.startswith("--project=")), command[3]))
+                    return
+                raise AssertionError(command)
+
+            responder = self._cloud_command_responder(resources, billing, services)
+            with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+                "provisioner.core._run_json", side_effect=responder
+            ) as run_json, mock.patch("provisioner.core._run_success", side_effect=mutate):
+                state = core.provision_cloud(state_dir, config)
+            self.assertEqual(state["phase"], "cloud-ready")
+            self.assertEqual(state["cloud"]["developer"]["provenance"], "created")
+            self.assertEqual(state["cloud"]["vertex"]["provenance"], "created")
+            self.assertIn(
+                (
+                    "/safe/gcloud",
+                    "billing",
+                    "projects",
+                    "link",
+                    "vertex-project",
+                    "--billing-account=billingAccounts/ABCDEF-123456-ABCDEF",
+                    "--quiet",
+                    "--account=owner@example.com",
+                ),
+                commands,
+            )
+            self.assertEqual({service for _project, service in services}, set(core.DEVELOPER_SERVICES + core.VERTEX_SERVICES))
+            remote_reads = [call.args[0] for call in run_json.call_args_list if call.args[0][1:3] != ("auth", "list")]
+            self.assertTrue(all("--account=owner@example.com" in command for command in remote_reads))
+            self.assertTrue(all("--account=owner@example.com" in command for command in commands))
+            commands.clear()
+            with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+                "provisioner.core._run_json", side_effect=responder
+            ), mock.patch("provisioner.core._run_success", side_effect=mutate):
+                resumed = core.provision_cloud(state_dir, config)
+            self.assertEqual(resumed["phase"], "cloud-ready")
+            self.assertEqual(commands, [])
+
+    def test_cloud_provision_rejects_foreign_labels_and_billed_developer_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._bundle_validated_state(root, config)
+            resources = {
+                "developer-project": {
+                    "projectId": "developer-project",
+                    "projectNumber": "123456",
+                    "lifecycleState": "ACTIVE",
+                    "labels": {core.CLOUD_INSTALLATION_LABEL: "other-installation", core.CLOUD_ROLE_LABEL: "developer"},
+                }
+            }
+            billing = {
+                "developer-project": {"billingEnabled": True, "billingAccountName": "billingAccounts/OTHER"},
+                "vertex-project": {"billingEnabled": False, "billingAccountName": ""},
+            }
+            responder = self._cloud_command_responder(resources, billing, set())
+            with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+                "provisioner.core._run_json", side_effect=responder
+            ), mock.patch("provisioner.core._run_success") as mutate:
+                with self.assertRaisesRegex(core.ProvisionerError, "eligible"):
+                    core.provision_cloud(state_dir, config)
+            mutate.assert_not_called()
+
+            resources["developer-project"]["labels"] = {
+                core.CLOUD_INSTALLATION_LABEL: "installation-demo",
+                core.CLOUD_ROLE_LABEL: "developer",
+            }
+            with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+                "provisioner.core._run_json", side_effect=responder
+            ), mock.patch("provisioner.core._run_success") as mutate:
+                with self.assertRaisesRegex(core.ProvisionerError, "unbilled"):
+                    core.provision_cloud(state_dir, config)
+            mutate.assert_not_called()
+
+    def test_cloud_creation_intent_is_signed_before_a_failed_create_can_be_retried(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._bundle_validated_state(root, config)
+            responder = self._cloud_command_responder(
+                {},
+                {
+                    "developer-project": {"billingEnabled": False, "billingAccountName": ""},
+                    "vertex-project": {"billingEnabled": False, "billingAccountName": ""},
+                },
+                set(),
+            )
+            with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+                "provisioner.core._run_json", side_effect=responder
+            ), mock.patch("provisioner.core._run_success", side_effect=core.ProvisionerError("Cloud project creation was rejected")):
+                with self.assertRaisesRegex(core.ProvisionerError, "creation was rejected"):
+                    core.provision_cloud(state_dir, config)
+            state = core.initialize_state(state_dir, config)
+            self.assertEqual(
+                state["cloud"]["developer"],
+                {"projectId": "developer-project", "projectNumber": None, "provenance": "creating"},
+            )
+            self.assertIsNone(state["cloud"]["vertex"])
+
+    def test_cloud_provision_does_not_create_after_an_unclassified_project_inspection_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._bundle_validated_state(root, config)
+
+            def rejected_inspection(command: tuple[str, ...], **_kwargs: object) -> object:
+                if command[1:3] == ("auth", "list"):
+                    return [{"account": "owner@example.com", "status": "ACTIVE"}]
+                raise core.ProvisionerError("Cloud project inspection was rejected")
+
+            with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+                "provisioner.core._run_json", side_effect=rejected_inspection
+            ), mock.patch("provisioner.core._run_success") as mutate:
+                with self.assertRaisesRegex(core.ProvisionerError, "inspection was rejected"):
+                    core.provision_cloud(state_dir, config)
+            mutate.assert_not_called()
+
+    def test_cloud_provision_rejects_an_open_billing_subaccount_before_linkage(self) -> None:
+        with mock.patch(
+            "provisioner.core._run_json",
+            return_value={
+                "name": "billingAccounts/ABCDEF-123456-ABCDEF",
+                "open": True,
+                "masterBillingAccount": "billingAccounts/PARENT",
+            },
+        ), mock.patch("provisioner.core._run_success") as mutate:
+            with self.assertRaisesRegex(core.ProvisionerError, "selected billing account"):
+                core._reconcile_vertex_billing(
+                    "/safe/gcloud",
+                    "vertex-project",
+                    "ABCDEF-123456-ABCDEF",
+                    installation_label="installation-demo",
+                    expected_owner="owner@example.com",
+                    persisted={"projectId": "vertex-project", "projectNumber": "654321", "provenance": "created"},
+                )
+        mutate.assert_not_called()
+
+    def test_cloud_config_requires_distinct_projects_billing_and_adoption_identity(self) -> None:
+        config = valid_cloud_config()
+        core.validate_cloud_config(config)
+        for key, value in (("developerProject", ""), ("vertexBillingAccount", ""), ("cloudInstallationId", "short")):
+            invalid = valid_cloud_config()
+            invalid[key] = value
+            with self.assertRaises(core.ProvisionerError):
+                core.validate_cloud_config(invalid)
+        same = valid_cloud_config()
+        same["vertexProject"] = same["developerProject"]
+        with self.assertRaisesRegex(core.ProvisionerError, "distinct"):
+            core.validate_cloud_config(same)
 
 
 class ProvisionerBundleTests(unittest.TestCase):
@@ -553,6 +801,20 @@ class ProvisionerCommandTests(unittest.TestCase):
         overflowing_number = (sys.executable, "-c", "import sys; sys.stdout.write('{\\\"unvalidated\\\":1e400}')")
         with self.assertRaisesRegex(core.ProvisionerError, "unexpected output"):
             core._run_json(overflowing_number)
+
+    def test_project_not_found_classifier_accepts_only_the_exact_gcloud_error(self) -> None:
+        project_id = "developer-project"
+        self.assertTrue(
+            core._gcloud_reports_project_not_found(
+                b"ERROR: (gcloud.projects.describe) [developer-project] not found\n", project_id
+            )
+        )
+        for response in (
+            b"ERROR: (gcloud.projects.describe) [developer-project] not found or permission denied\n",
+            b"ERROR: (gcloud.projects.describe) developer-project not found while impersonation is unavailable\n",
+            b"ERROR: (gcloud.projects.describe) PERMISSION_DENIED\n",
+        ):
+            self.assertFalse(core._gcloud_reports_project_not_found(response, project_id))
 
     def test_cli_rejects_secret_like_config_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
