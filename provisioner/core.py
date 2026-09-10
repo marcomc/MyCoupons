@@ -1602,7 +1602,6 @@ def _require_isolated_clasp_owner(auth_path: Path, owner_email: str) -> str:
     except OSError as exc:
         raise ProvisionerError("isolated Apps Script authorization cannot be resolved") from exc
     _assert_outside_worktree(auth_path)
-    _read_private_oauth_token(auth_path)
     clasp = discover_tools(("clasp",))["clasp"]
     if clasp is None:
         raise ProvisionerError("clasp is required to refresh isolated Apps Script authorization")
@@ -1824,12 +1823,19 @@ def _ensure_owner_only_deployment(access_token: str, script_id: str, digest: str
     if _remote_bundle_digest(access_token, script_id, version) != digest:
         raise ProvisionerError("Apps Script version content does not match the verified source bundle")
     if len(matching) == 1:
-        return _validate_owner_only_deployment(matching[0], script_id, version)
+        deployment_id, _ = _validate_owner_only_deployment(matching[0], script_id, version)
+        updated = _apps_script_json(
+            access_token,
+            "PUT",
+            f"https://script.googleapis.com/v1/projects/{script_id}/deployments/{deployment_id}",
+            {"versionNumber": version, "description": marker, "manifestFileName": "appsscript"},
+        )
+        return _validate_owner_only_deployment(updated, script_id, version)
     created = _apps_script_json(
         access_token,
         "POST",
         f"https://script.googleapis.com/v1/projects/{script_id}/deployments",
-        {"versionNumber": version, "description": marker},
+        {"versionNumber": version, "description": marker, "manifestFileName": "appsscript"},
     )
     deployment_id, _ = _validate_owner_only_deployment(created, script_id, version)
     verified = _apps_script_json(access_token, "GET", f"https://script.googleapis.com/v1/projects/{script_id}/deployments/{deployment_id}")
@@ -1882,7 +1888,7 @@ def _secret_access_policy(gcloud: str, project_id: str, owner: str) -> Any:
 
 
 def _assert_owner_only_secret_accessor(policy: Any, owner: str, *, require_owner: bool) -> None:
-    bindings = policy.get("bindings") if isinstance(policy, dict) else None
+    bindings = policy.get("bindings", []) if isinstance(policy, dict) else None
     expected_member = f"user:{owner.lower()}"
     if not isinstance(bindings, list):
         raise ProvisionerError("bootstrap secret access inspection returned invalid data")

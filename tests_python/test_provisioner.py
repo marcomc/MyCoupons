@@ -1106,6 +1106,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 if resource.startswith("https://www.googleapis.com/drive/v3/files/script-1"): return self._owner_metadata()
                 if "/content" in resource: return {"files": files}
                 if resource.endswith("/deployments"): return {"deployments": [deployment]}
+                if resource.endswith("/deployments/deployment-1") and method == "PUT": return deployment
                 if resource.endswith("/versions"): return {"versions": [{"versionNumber": 1, "description": deployment["deploymentConfig"]["description"]}]}
                 if resource.endswith(":run"): return {"done": True, "response": {"result": {"version": 1, "ready": True}}}
                 raise AssertionError((method, resource))
