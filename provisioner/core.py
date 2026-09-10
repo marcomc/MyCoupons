@@ -750,6 +750,8 @@ def _iter_bundle_files(source_dir: Path) -> Iterable[Path]:
                 raise ProvisionerError("Apps Script source bundle cannot contain symlinks")
             if path.is_file() and path.suffix == ".js":
                 raise ProvisionerError("Apps Script source bundle cannot contain .js files")
+            if path.is_file() and path.suffix == ".json" and path.name != "appsscript.json":
+                raise ProvisionerError("Apps Script source bundle can contain only appsscript.json")
             if path.is_file() and path.suffix in {".gs", ".html", ".json"}:
                 try:
                     relative_bytes = path.relative_to(source_dir).as_posix().encode("utf-8")
@@ -1629,10 +1631,16 @@ def _deployment_bundle(source_dir: Path) -> tuple[str, list[dict[str, str]]]:
     source_dir = _expand_absolute_path(source_dir, error_message="Apps Script source directory cannot be resolved")
     root_descriptor = _open_bundle_root(source_dir)
     captured: dict[str, bytes] = {}
+    captured_bytes = 0
     try:
         for path in _iter_bundle_files(source_dir):
             relative_path = path.relative_to(source_dir)
-            captured[relative_path.as_posix()] = _read_bundle_file(root_descriptor, relative_path, maximum_bytes=MAX_BUNDLE_FILE_BYTES)
+            remaining_bytes = MAX_BUNDLE_TOTAL_BYTES - captured_bytes
+            if remaining_bytes < 0:
+                raise ProvisionerError("Apps Script source bundle changed during deployment capture")
+            content = _read_bundle_file(root_descriptor, relative_path, maximum_bytes=min(MAX_BUNDLE_FILE_BYTES, remaining_bytes))
+            captured[relative_path.as_posix()] = content
+            captured_bytes += len(content)
     finally:
         os.close(root_descriptor)
     if _bundle_digest(captured) != expected_digest:
@@ -1898,8 +1906,22 @@ def _secret_resource_pattern(project_id: str, project_number: str) -> str:
     return rf"projects/(?:{re.escape(project_id)}|{re.escape(project_number)})/secrets/{BOOTSTRAP_SECRET_NAME}"
 
 
-def _assert_owner_only_project_secret_accessor(policy: Any, owner: str) -> None:
-    """Require an owner-only project policy before staging a readable secret."""
+def _role_can_access_secret_versions(gcloud: str, role: str, owner: str) -> bool:
+    if not isinstance(role, str) or not role:
+        raise ProvisionerError("Cloud project access inspection returned invalid data")
+    described = _cloud_json(
+        (gcloud, "iam", "roles", "describe", role, "--format=json", "--quiet"),
+        account=owner,
+        operation="Cloud role access inspection",
+    )
+    permissions = described.get("includedPermissions") if isinstance(described, dict) else None
+    if not isinstance(permissions, list) or any(not isinstance(permission, str) for permission in permissions):
+        raise ProvisionerError("Cloud role access inspection returned invalid data")
+    return "secretmanager.versions.access" in permissions or "*" in permissions
+
+
+def _assert_owner_only_project_secret_accessor(gcloud: str, policy: Any, owner: str) -> None:
+    """Reject foreign project roles with effective secret-version access."""
     bindings = policy.get("bindings") if isinstance(policy, dict) else None
     expected_member = f"user:{owner.lower()}"
     if not isinstance(bindings, list):
@@ -1910,7 +1932,7 @@ def _assert_owner_only_project_secret_accessor(policy: Any, owner: str) -> None:
         members = binding.get("members")
         if "condition" in binding or not isinstance(members, list) or any(not isinstance(member, str) for member in members):
             raise ProvisionerError("Cloud project has unsafe inherited secret access")
-        if any(member.lower() != expected_member for member in members):
+        if any(member.lower() != expected_member for member in members) and _role_can_access_secret_versions(gcloud, binding.get("role"), owner):
             raise ProvisionerError("Cloud project has unsafe inherited secret access")
 
 
@@ -1930,7 +1952,7 @@ def _ensure_bootstrap_secret(gcloud: str, config: Mapping[str, Any], owner: str,
         account=owner,
         operation="Cloud project access inspection",
     )
-    _assert_owner_only_project_secret_accessor(project_policy, owner)
+    _assert_owner_only_project_secret_accessor(gcloud, project_policy, owner)
     _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=False)
     _cloud_success((gcloud, "secrets", "add-iam-policy-binding", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", f"--member=user:{owner}", "--role=roles/secretmanager.secretAccessor", "--quiet"), account=owner, operation="bootstrap secret access grant")
     _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=True)

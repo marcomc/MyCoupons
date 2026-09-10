@@ -1029,11 +1029,13 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                     )
 
     def test_project_secret_accessor_rejects_foreign_inherited_access(self) -> None:
-        with self.assertRaisesRegex(core.ProvisionerError, "unsafe inherited"):
-            core._assert_owner_only_project_secret_accessor(
+        with mock.patch("provisioner.core._role_can_access_secret_versions", return_value=True):
+            with self.assertRaisesRegex(core.ProvisionerError, "unsafe inherited"):
+                core._assert_owner_only_project_secret_accessor(
+                    "/safe/gcloud",
                 {"bindings": [{"role": "roles/secretmanager.secretAccessor", "members": ["user:other@example.com"]}]},
                 "owner@example.com",
-            )
+                )
 
     def test_secret_inputs_inside_the_checkout_are_rejected_before_reading(self) -> None:
         config = valid_cloud_config()
