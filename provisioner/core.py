@@ -750,7 +750,7 @@ def _iter_bundle_files(source_dir: Path) -> Iterable[Path]:
                 raise ProvisionerError("Apps Script source bundle cannot contain symlinks")
             if path.is_file() and path.suffix == ".js":
                 raise ProvisionerError("Apps Script source bundle cannot contain .js files")
-            if path.is_file() and path.suffix == ".json" and path.name != "appsscript.json":
+            if path.is_file() and path.suffix == ".json" and path.relative_to(source_dir).as_posix() != "appsscript.json":
                 raise ProvisionerError("Apps Script source bundle can contain only appsscript.json")
             if path.is_file() and path.suffix in {".gs", ".html", ".json"}:
                 try:
@@ -988,7 +988,8 @@ def validate_bundle(source_dir: Path) -> str:
     scopes = manifest.get("oauthScopes")
     if not isinstance(scopes, list) or len(scopes) != len(expected_scopes) or not all(isinstance(scope, str) for scope in scopes):
         raise ProvisionerError("Apps Script manifest OAuth scope contract is invalid")
-    if "webapp" in manifest or manifest.get("executionApi") != {"access": "MYSELF"} or set(scopes) != expected_scopes:
+    whitelist = manifest.get("urlFetchWhitelist")
+    if "webapp" in manifest or "addOns" in manifest or whitelist is not None or manifest.get("executionApi") != {"access": "MYSELF"} or set(scopes) != expected_scopes:
         raise ProvisionerError("Apps Script manifest access or OAuth scope contract is invalid")
     dependencies = manifest.get("dependencies")
     services = dependencies.get("enabledAdvancedServices") if isinstance(dependencies, dict) else None
@@ -1060,19 +1061,19 @@ def _gcloud_reports_project_not_found(stderr: bytes, project_id: str) -> bool:
     ) is not None
 
 
-def _gcloud_reports_bootstrap_secret_not_found(stderr: bytes, project_id: str, secret_name: str) -> bool:
+def _gcloud_reports_bootstrap_secret_not_found(stderr: bytes, project_id: str, project_number: str, secret_name: str) -> bool:
     try:
         message = stderr.decode("utf-8")
     except UnicodeDecodeError:
         return False
     return re.fullmatch(
-        rf"ERROR: \(gcloud\.secrets\.describe\) NOT_FOUND: (?:Secret )?\[?projects/{re.escape(project_id)}/secrets/{re.escape(secret_name)}\]? not found\.?\s*",
+        rf"ERROR: \(gcloud\.secrets\.describe\) NOT_FOUND: (?:Secret )?\[?projects/(?:{re.escape(project_id)}|{re.escape(project_number)})/secrets/{re.escape(secret_name)}\]? not found\.?\s*",
         message,
         flags=re.IGNORECASE,
     ) is not None
 
 
-def _run_command_output(command: Sequence[str], *, operation: str, absent_project: str | None = None, absent_secret: tuple[str, str] | None = None) -> bytes:
+def _run_command_output(command: Sequence[str], *, operation: str, absent_project: str | None = None, absent_secret: tuple[str, str, str] | None = None) -> bytes:
     """Run one fixed-argument command with bounded output and no diagnostics."""
     process: subprocess.Popen[bytes] | None = None
     selector: selectors.BaseSelector | None = None
@@ -1139,7 +1140,7 @@ def _run_command_output(command: Sequence[str], *, operation: str, absent_projec
 
 def _run_json(
     command: Sequence[str], *, operation: str = "read-only authentication preflight", absent_project: str | None = None,
-    absent_secret: tuple[str, str] | None = None,
+    absent_secret: tuple[str, str, str] | None = None,
 ) -> Any:
     output = _run_command_output(command, operation=operation, absent_project=absent_project, absent_secret=absent_secret)
     try:
@@ -1519,7 +1520,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
                 cloud[role] = record
                 state["cloud"] = cloud
                 state = _persist_state_locked(state_dir, state, key)
-        state["phase"] = "cloud-projects-reconciled"
+        state["phase"] = "bootstrap-complete" if state["bootstrap"]["status"] == "complete" else "cloud-projects-reconciled"
         state["cloud"] = cloud
         state = _persist_state_locked(state_dir, state, key)
         _reconcile_vertex_billing(
@@ -1544,7 +1545,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
                     expected_owner=owner_account,
                     persisted=cloud[role],
                 )
-        state["phase"] = "cloud-ready"
+        state["phase"] = "bootstrap-complete" if state["bootstrap"]["status"] == "complete" else "cloud-ready"
         return _persist_state_locked(state_dir, state, key)
 
 
@@ -1871,11 +1872,11 @@ def _require_cloud_ready_state(state: Mapping[str, Any], config: Mapping[str, An
     return vertex
 
 
-def _secret_describe(gcloud: str, project_id: str, owner: str) -> Any:
+def _secret_describe(gcloud: str, project_id: str, project_number: str, owner: str) -> Any:
     return _run_json(
         (gcloud, "secrets", "describe", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", "--format=json", "--quiet", f"--account={owner}"),
         operation="bootstrap secret inspection",
-        absent_secret=(project_id, BOOTSTRAP_SECRET_NAME),
+        absent_secret=(project_id, project_number, BOOTSTRAP_SECRET_NAME),
     )
 
 
@@ -1927,7 +1928,7 @@ def _role_can_access_secret_versions(gcloud: str, role: str, owner: str) -> bool
 
 
 def _assert_owner_only_project_secret_accessor(gcloud: str, policy: Any, owner: str) -> None:
-    """Reject foreign project roles with effective secret-version access."""
+    """Reject foreign effective secret-version access on one Cloud resource."""
     bindings = policy.get("bindings") if isinstance(policy, dict) else None
     expected_member = f"user:{owner.lower()}"
     if not isinstance(bindings, list):
@@ -1942,23 +1943,56 @@ def _assert_owner_only_project_secret_accessor(gcloud: str, policy: Any, owner: 
             raise ProvisionerError("Cloud project has unsafe inherited secret access")
 
 
+def _project_ancestor_secret_policies(gcloud: str, project_id: str, owner: str) -> list[Any]:
+    """Return every policy inherited by a project, rejecting unknown ancestry."""
+    ancestors = _cloud_json(
+        (gcloud, "projects", "get-ancestors", project_id, "--format=json", "--quiet"),
+        account=owner,
+        operation="Cloud resource hierarchy inspection",
+    )
+    if not isinstance(ancestors, list):
+        raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
+    seen: set[tuple[str, str]] = set()
+    project_seen = False
+    policies: list[Any] = []
+    for ancestor in ancestors:
+        if not isinstance(ancestor, dict):
+            raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
+        resource_type = ancestor.get("type")
+        resource_id = ancestor.get("id")
+        if not isinstance(resource_type, str) or not isinstance(resource_id, str) or (resource_type, resource_id) in seen:
+            raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
+        seen.add((resource_type, resource_id))
+        if resource_type == "project" and resource_id == project_id:
+            project_seen = True
+            command = (gcloud, "projects", "get-iam-policy", project_id, "--format=json", "--quiet")
+        elif resource_type == "folder" and PROJECT_NUMBER_RE.fullmatch(resource_id):
+            command = (gcloud, "resource-manager", "folders", "get-iam-policy", resource_id, "--format=json", "--quiet")
+        elif resource_type == "organization" and PROJECT_NUMBER_RE.fullmatch(resource_id):
+            command = (gcloud, "organizations", "get-iam-policy", resource_id, "--format=json", "--quiet")
+        else:
+            raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
+        policies.append(
+            _cloud_json(command, account=owner, operation="Cloud project access inspection")
+        )
+    if not project_seen:
+        raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
+    return policies
+
+
 def _ensure_bootstrap_secret(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str) -> None:
     project_id = config["vertexProject"]
     try:
-        secret = _secret_describe(gcloud, project_id, owner)
+        secret = _secret_describe(gcloud, project_id, project_number, owner)
     except BootstrapSecretNotFound:
         _cloud_success((gcloud, "secrets", "create", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", f"--labels={BOOTSTRAP_SECRET_LABEL}={config['cloudInstallationId']}", "--quiet"), account=owner, operation="bootstrap secret creation")
-        secret = _secret_describe(gcloud, project_id, owner)
+        secret = _secret_describe(gcloud, project_id, project_number, owner)
     labels = secret.get("labels") if isinstance(secret, dict) else None
     expected_name = _secret_resource_pattern(project_id, project_number)
     if not isinstance(secret, dict) or not isinstance(secret.get("name"), str) or not re.fullmatch(expected_name, secret["name"]) or not isinstance(labels, dict) or labels.get(BOOTSTRAP_SECRET_LABEL) != config["cloudInstallationId"]:
         raise ProvisionerError("bootstrap secret is not owned by this installation")
-    project_policy = _cloud_json(
-        (gcloud, "projects", "get-iam-policy", project_id, "--format=json", "--quiet"),
-        account=owner,
-        operation="Cloud project access inspection",
-    )
-    _assert_owner_only_project_secret_accessor(gcloud, project_policy, owner)
+    for policy in _project_ancestor_secret_policies(gcloud, project_id, owner):
+        _assert_owner_only_project_secret_accessor(gcloud, policy, owner)
     _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=False)
     _cloud_success((gcloud, "secrets", "add-iam-policy-binding", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", f"--member=user:{owner}", "--role=roles/secretmanager.secretAccessor", "--quiet"), account=owner, operation="bootstrap secret access grant")
     _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=True)

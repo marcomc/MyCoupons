@@ -467,12 +467,18 @@ class ProvisionerCloudTests(unittest.TestCase):
             remote_reads = [call.args[0] for call in run_json.call_args_list if call.args[0][1:3] != ("auth", "list")]
             self.assertTrue(all("--account=owner@example.com" in command for command in remote_reads))
             self.assertTrue(all("--account=owner@example.com" in command for command in commands))
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                complete = core._load_state_locked(state_dir, key)
+                complete["bootstrap"] = {"secretVersion": "projects/654321/secrets/mycoupons-bootstrap/versions/1", "status": "complete"}
+                complete["phase"] = "bootstrap-complete"
+                core._persist_state_locked(state_dir, complete, key)
             commands.clear()
             with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
                 "provisioner.core._run_json", side_effect=responder
             ), mock.patch("provisioner.core._run_success", side_effect=mutate):
                 resumed = core.provision_cloud(state_dir, config)
-            self.assertEqual(resumed["phase"], "cloud-ready")
+            self.assertEqual(resumed["phase"], "bootstrap-complete")
             self.assertEqual(commands, [])
 
     def test_cloud_provision_rejects_foreign_labels_and_billed_developer_before_mutation(self) -> None:
@@ -619,6 +625,23 @@ class ProvisionerBundleTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "access"):
                 core.validate_bundle(copied)
             del manifest["webapp"]
+            manifest["addOns"] = {}
+            (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(core.ProvisionerError, "access"):
+                core.validate_bundle(copied)
+            del manifest["addOns"]
+            manifest["urlFetchWhitelist"] = ["https://example.invalid/"]
+            (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(core.ProvisionerError, "access"):
+                core.validate_bundle(copied)
+            del manifest["urlFetchWhitelist"]
+            nested_manifest_dir = copied / "backup"
+            nested_manifest_dir.mkdir()
+            (nested_manifest_dir / "appsscript.json").write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(core.ProvisionerError, "only appsscript"):
+                core.validate_bundle(copied)
+            (nested_manifest_dir / "appsscript.json").unlink()
+            nested_manifest_dir.rmdir()
             (copied / "Injected.gs").write_text("const changed = true;\n", encoding="utf-8")
             manifest["executionApi"] = {"access": "MYSELF"}
             (copied / "appsscript.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -958,6 +981,8 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                     return [{"account": "owner@example.com", "status": "ACTIVE"}]
                 if command[1:3] == ("projects", "describe"):
                     return {"projectId": "vertex-project", "projectNumber": "654321", "lifecycleState": "ACTIVE", "labels": {"mycoupons-installation": "installation-demo", "mycoupons-role": "vertex"}}
+                if command[1:3] == ("projects", "get-ancestors"):
+                    return [{"type": "project", "id": "vertex-project"}]
                 if command[1:3] == ("projects", "get-iam-policy"):
                     return {"bindings": [{"role": "roles/owner", "members": ["user:owner@example.com"]}]}
                 if command[1:3] == ("secrets", "describe"):
@@ -1037,6 +1062,45 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 "owner@example.com",
                 )
 
+    def test_project_hierarchy_rejects_foreign_secret_access_before_staging(self) -> None:
+        commands: list[tuple[str, ...]] = []
+
+        def cloud_json(command: tuple[str, ...], **_kwargs: object) -> object:
+            commands.append(command)
+            if command[1:3] == ("projects", "get-ancestors"):
+                return [
+                    {"type": "project", "id": "vertex-project"},
+                    {"type": "folder", "id": "123456"},
+                    {"type": "organization", "id": "654321"},
+                ]
+            if command[1:3] == ("projects", "get-iam-policy"):
+                return {"bindings": [{"role": "roles/owner", "members": ["user:owner@example.com"]}]}
+            if command[1:4] == ("resource-manager", "folders", "get-iam-policy"):
+                return {"bindings": [{"role": "roles/viewer", "members": ["user:owner@example.com"]}]}
+            if command[1:3] == ("organizations", "get-iam-policy"):
+                return {"bindings": [{"role": "roles/secretmanager.secretAccessor", "members": ["user:other@example.com"]}]}
+            raise AssertionError(command)
+
+        with mock.patch("provisioner.core._cloud_json", side_effect=cloud_json), mock.patch(
+            "provisioner.core._role_can_access_secret_versions", return_value=True
+        ):
+            policies = core._project_ancestor_secret_policies("/safe/gcloud", "vertex-project", "owner@example.com")
+            with self.assertRaisesRegex(core.ProvisionerError, "unsafe inherited"):
+                for policy in policies:
+                    core._assert_owner_only_project_secret_accessor("/safe/gcloud", policy, "owner@example.com")
+        self.assertIn(("/safe/gcloud", "resource-manager", "folders", "get-iam-policy", "123456", "--format=json", "--quiet"), commands)
+        self.assertIn(("/safe/gcloud", "organizations", "get-iam-policy", "654321", "--format=json", "--quiet"), commands)
+
+    def test_missing_secret_classifier_accepts_canonical_project_number(self) -> None:
+        self.assertTrue(
+            core._gcloud_reports_bootstrap_secret_not_found(
+                b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found\n",
+                "vertex-project",
+                "654321",
+                "mycoupons-bootstrap",
+            )
+        )
+
     def test_secret_inputs_inside_the_checkout_are_rejected_before_reading(self) -> None:
         config = valid_cloud_config()
         with self.assertRaisesRegex(core.ProvisionerError, "outside the Git worktree"):
@@ -1096,6 +1160,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 if command[0] == "/safe/clasp": return {"loggedIn": True, "email": "owner@example.com"}
                 if command[1:3] == ("auth", "list"): return [{"account": "owner@example.com", "status": "ACTIVE"}]
                 if command[1:3] == ("projects", "describe"): return {"projectId": "vertex-project", "projectNumber": "654321", "lifecycleState": "ACTIVE", "labels": {"mycoupons-installation": "installation-demo", "mycoupons-role": "vertex"}}
+                if command[1:3] == ("projects", "get-ancestors"): return [{"type": "project", "id": "vertex-project"}]
                 if command[1:3] == ("projects", "get-iam-policy"): return {"bindings": [{"role": "roles/owner", "members": ["user:owner@example.com"]}]}
                 if command[1:3] == ("secrets", "describe"): return {"name": "projects/vertex-project/secrets/mycoupons-bootstrap", "labels": {"mycoupons-installation": "installation-demo"}}
                 if command[1:4] == ("secrets", "get-iam-policy", "mycoupons-bootstrap"): return {"bindings": [{"role": "roles/secretmanager.secretAccessor", "members": ["user:owner@example.com"]}]}
