@@ -196,7 +196,7 @@ def _assert_private_directory(path: Path) -> None:
     _assert_not_symlink(path)
     try:
         directory_stat = path.stat()
-    except (OSError, http.client.HTTPException) as exc:
+    except OSError as exc:
         raise ProvisionerError("provisioning directory cannot be inspected") from exc
     if not stat.S_ISDIR(directory_stat.st_mode) or not _is_private_mode(directory_stat.st_mode, 0o700):
         raise ProvisionerError("provisioning directory must be mode 0700 and not group/world accessible")
@@ -1617,7 +1617,7 @@ def _apps_script_json(
             raw = response.read(maximum_bytes + 1)
     except urllib.error.HTTPError as exc:
         raise AppsScriptHttpError(exc.code) from exc
-    except OSError as exc:
+    except (OSError, http.client.HTTPException) as exc:
         raise ProvisionerError("Apps Script API request was rejected") from exc
     if len(raw) > maximum_bytes:
         raise ProvisionerError("Apps Script API returned unexpected output")
@@ -1875,17 +1875,21 @@ def _version_for_bundle(access_token: str, script_id: str, digest: str) -> int:
     return number
 
 
-def _ensure_owner_only_deployment(access_token: str, script_id: str, digest: str) -> tuple[str, int]:
+def _ensure_owner_only_deployment(access_token: str, script_id: str, digest: str, persisted_deployment_id: str | None = None) -> tuple[str, int]:
     deployments = _deployment_list(access_token, script_id)
     marker = f"MyCoupons owner-only {digest}"
     matching = [deployment for deployment in deployments if deployment.get("deploymentConfig", {}).get("description") == marker]
+    if not matching and persisted_deployment_id is not None:
+        matching = [deployment for deployment in deployments if deployment.get("deploymentId") == persisted_deployment_id]
     if len(matching) > 1:
         raise ProvisionerError("Apps Script deployment recovery is ambiguous")
     version = _version_for_bundle(access_token, script_id, digest)
     if _remote_bundle_digest(access_token, script_id, version) != digest:
         raise ProvisionerError("Apps Script version content does not match the verified source bundle")
     if len(matching) == 1:
-        deployment_id, _ = _validate_owner_only_deployment(matching[0], script_id, version)
+        deployment_id = matching[0].get("deploymentId")
+        if not isinstance(deployment_id, str) or not APPS_SCRIPT_ID_RE.fullmatch(deployment_id):
+            raise ProvisionerError("Apps Script deployment inspection returned invalid data")
         updated = _apps_script_json(
             access_token,
             "PUT",
@@ -2267,7 +2271,7 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             )
             if _remote_bundle_digest(access_token, script_id) != digest:
                 raise ProvisionerError("Apps Script source deployment could not be verified")
-        deployment_id, version_number = _ensure_owner_only_deployment(access_token, script_id, digest)
+        deployment_id, version_number = _ensure_owner_only_deployment(access_token, script_id, digest, state["appsScript"]["deploymentId"])
         state = dict(state)
         state["appsScript"] = {"scriptId": script_id, "provenance": provenance, "bundleDigest": digest, "versionNumber": version_number, "deploymentId": deployment_id}
         state["phase"] = "bootstrap-complete" if state["bootstrap"]["status"] == "complete" else "apps-script-ready"
