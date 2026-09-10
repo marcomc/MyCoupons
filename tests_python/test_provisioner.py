@@ -1068,6 +1068,16 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             "entryPoints": [{"entryPointType": "EXECUTION_API", "executionApi": {"entryPointConfig": {"access": "MYSELF"}}}],
         }
 
+    def test_private_script_inspection_rejects_nonstring_owner_identity(self) -> None:
+        metadata = self._owner_metadata()
+        metadata["owners"] = [{"emailAddress": None}]
+        with self.assertRaisesRegex(core.ProvisionerError, "private and owner-only"):
+            core._assert_private_owner_script(metadata, "owner@example.com")
+        metadata = self._owner_metadata()
+        metadata["permissions"] = [{"type": "user", "role": "owner", "emailAddress": None}]
+        with self.assertRaisesRegex(core.ProvisionerError, "private and owner-only"):
+            core._assert_private_owner_script(metadata, "owner@example.com")
+
     def test_deploy_creates_private_script_verifies_content_and_completes_bootstrap(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1222,6 +1232,21 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                         "owner@example.com",
                         require_owner=False,
                     )
+
+    def test_bootstrap_secret_reconciliation_disables_existing_enabled_versions(self) -> None:
+        first = "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1"
+        second = "projects/vertex-project/secrets/mycoupons-bootstrap/versions/2"
+        config = valid_cloud_config()
+        with mock.patch(
+            "provisioner.core._cloud_json",
+            return_value=[{"name": first, "state": "ENABLED"}, {"name": second, "state": "DISABLED"}],
+        ) as cloud_json, mock.patch("provisioner.core._disable_bootstrap_secret_version") as disable:
+            core._disable_enabled_bootstrap_secret_versions("/safe/gcloud", config, "owner@example.com", "654321")
+        self.assertEqual(cloud_json.call_args.args[0][1:5], ("secrets", "versions", "list", "mycoupons-bootstrap"))
+        disable.assert_called_once_with("/safe/gcloud", config, "owner@example.com", "654321", first)
+        with mock.patch("provisioner.core._cloud_json", return_value=[{"name": first, "state": []}]):
+            with self.assertRaisesRegex(core.ProvisionerError, "reconciliation returned invalid data"):
+                core._disable_enabled_bootstrap_secret_versions("/safe/gcloud", config, "owner@example.com", "654321")
 
     def test_project_secret_accessor_rejects_foreign_inherited_access(self) -> None:
         with mock.patch("provisioner.core._role_can_access_secret_versions", return_value=True):
@@ -1448,6 +1473,14 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 self.assertEqual(staged["bootstrap"], {"secretVersion": old_version, "status": "replacement-staging"})
                 raise core.ProvisionerError("simulated response loss")
 
+            disabled: list[str] = []
+
+            def record_disablement(*args: object) -> None:
+                disabled.append(args[-1])
+
+            def assert_execution_after_disablement(*_args: object) -> None:
+                self.assertEqual(disabled, [old_version])
+
             with mock.patch("provisioner.core._require_isolated_clasp_owner", return_value="private-token"), mock.patch(
                 "provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")
             ), mock.patch("provisioner.core._drive_script_metadata", return_value=self._owner_metadata()), mock.patch(
@@ -1460,9 +1493,11 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 "provisioner.core._require_active_gcloud_owner", return_value="owner@example.com"
             ), mock.patch("provisioner.core._revalidate_project_before_mutation"), mock.patch(
                 "provisioner.core._ensure_service"
-            ), mock.patch("provisioner.core._verify_execution_api_access"), mock.patch(
+            ), mock.patch("provisioner.core._verify_execution_api_access", side_effect=assert_execution_after_disablement), mock.patch(
                 "provisioner.core._bootstrap_secret_version_state", return_value="DISABLED"
-            ), mock.patch("provisioner.core._ensure_bootstrap_secret"), mock.patch(
+            ), mock.patch("provisioner.core._disable_bootstrap_secret_version", side_effect=record_disablement), mock.patch(
+                "provisioner.core._ensure_bootstrap_secret"
+            ), mock.patch(
                 "provisioner.core._stage_bootstrap_secret", side_effect=abort_after_reading_intent
             ):
                 with self.assertRaisesRegex(core.ProvisionerError, "simulated response loss"):

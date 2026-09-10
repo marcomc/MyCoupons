@@ -1698,21 +1698,27 @@ def _assert_private_owner_script(metadata: Any, owner_email: str, expected_id: s
     script_id = metadata.get("id") or metadata.get("scriptId")
     owners = metadata.get("owners")
     permissions = metadata.get("permissions")
+    owner_address = (
+        owners[0].get("emailAddress")
+        if isinstance(owners, list) and len(owners) == 1 and isinstance(owners[0], dict)
+        else None
+    )
+    permission_address = (
+        permissions[0].get("emailAddress")
+        if isinstance(permissions, list) and len(permissions) == 1 and isinstance(permissions[0], dict)
+        else None
+    )
     if (
         not isinstance(script_id, str)
         or not APPS_SCRIPT_ID_RE.fullmatch(script_id)
         or expected_id is not None and script_id != expected_id
         or metadata.get("mimeType") != "application/vnd.google-apps.script"
-        or not isinstance(owners, list)
-        or len(owners) != 1
-        or not isinstance(owners[0], dict)
-        or owners[0].get("emailAddress", "").lower() != owner_email.lower()
-        or not isinstance(permissions, list)
-        or len(permissions) != 1
-        or not isinstance(permissions[0], dict)
+        or not isinstance(owner_address, str)
+        or owner_address.lower() != owner_email.lower()
+        or not isinstance(permission_address, str)
         or permissions[0].get("type") != "user"
         or permissions[0].get("role") != "owner"
-        or permissions[0].get("emailAddress", "").lower() != owner_email.lower()
+        or permission_address.lower() != owner_email.lower()
     ):
         raise ProvisionerError("Apps Script project is not private and owner-only")
     return script_id
@@ -2073,6 +2079,33 @@ def _ensure_bootstrap_secret(gcloud: str, config: Mapping[str, Any], owner: str,
     _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=False)
     _cloud_success((gcloud, "secrets", "add-iam-policy-binding", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", f"--member=user:{owner}", "--role=roles/secretmanager.secretAccessor", "--quiet"), account=owner, operation="bootstrap secret access grant")
     _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=True)
+    _disable_enabled_bootstrap_secret_versions(gcloud, config, owner, project_number)
+
+
+def _disable_enabled_bootstrap_secret_versions(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str) -> None:
+    versions = _cloud_json(
+        (gcloud, "secrets", "versions", "list", BOOTSTRAP_SECRET_NAME, f"--project={config['vertexProject']}", "--format=json", "--quiet"),
+        account=owner,
+        operation="bootstrap secret version reconciliation",
+    )
+    expected = _secret_resource_pattern(config["vertexProject"], project_number) + r"/versions/[1-9][0-9]*"
+    if not isinstance(versions, list):
+        raise ProvisionerError("bootstrap secret version reconciliation returned invalid data")
+    names: set[str] = set()
+    for version in versions:
+        name = version.get("name") if isinstance(version, dict) else None
+        state = version.get("state") if isinstance(version, dict) else None
+        if (
+            not isinstance(name, str)
+            or name in names
+            or not re.fullmatch(expected, name)
+            or not isinstance(state, str)
+            or state not in {"ENABLED", "DISABLED", "DESTROYED"}
+        ):
+            raise ProvisionerError("bootstrap secret version reconciliation returned invalid data")
+        names.add(name)
+        if state == "ENABLED":
+            _disable_bootstrap_secret_version(gcloud, config, owner, project_number, name)
 
 
 def _stage_bootstrap_secret(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str, payload: bytes) -> str:
@@ -2311,6 +2344,10 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             state["bootstrap"] = {"secretVersion": bootstrap["secretVersion"], "status": "complete"}
             state["phase"] = "bootstrap-complete"
             return _persist_state_locked(state_dir, state, key)
+        if bootstrap["status"] == "staged":
+            # A prior execution might not have consumed this secret.  Make its
+            # exact persisted version unusable before any retry precondition.
+            _disable_bootstrap_secret_version(gcloud, config, owner, project_number, bootstrap["secretVersion"])
         _revalidate_project_before_mutation(
             gcloud,
             project_id=config["vertexProject"],
@@ -2327,8 +2364,6 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         _ensure_service(gcloud, config["vertexProject"], "cloudresourcemanager.googleapis.com", installation_label=config["cloudInstallationId"], role="vertex", expected_owner=owner, persisted=state["cloud"]["vertex"])
         _verify_execution_api_access(access_token, script_id)
         if bootstrap["status"] in {"staged", "verified"}:
-            if bootstrap["status"] == "staged" and _bootstrap_secret_version_state(gcloud, config, owner, project_number, bootstrap["secretVersion"]) == "ENABLED":
-                _disable_bootstrap_secret_version(gcloud, config, owner, project_number, bootstrap["secretVersion"])
             _ensure_bootstrap_secret(gcloud, config, owner, project_number)
             secret_version = bootstrap["secretVersion"]
             if bootstrap["status"] == "staged" and _bootstrap_secret_version_state(gcloud, config, owner, project_number, secret_version) != "ENABLED":
