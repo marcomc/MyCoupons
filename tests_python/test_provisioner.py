@@ -466,6 +466,27 @@ class ProvisionerCloudTests(unittest.TestCase):
                     "owner@example.com",
                 )
 
+    def test_service_inspection_rejects_duplicate_exact_identities_before_enablement(self) -> None:
+        service = "aiplatform.googleapis.com"
+        with mock.patch(
+            "provisioner.core._run_json",
+            return_value=[{"config": {"name": service}}, {"config": {"name": service}}],
+        ), mock.patch("provisioner.core._revalidate_project_before_mutation") as revalidate, mock.patch(
+            "provisioner.core._cloud_success"
+        ) as enable:
+            with self.assertRaisesRegex(core.ProvisionerError, "unexpected resources"):
+                core._ensure_service(
+                    "/safe/gcloud",
+                    "vertex-project",
+                    service,
+                    installation_label="installation-demo",
+                    role="vertex",
+                    expected_owner="owner@example.com",
+                    persisted={"projectId": "vertex-project", "projectNumber": "654321", "provenance": "created"},
+                )
+        revalidate.assert_not_called()
+        enable.assert_not_called()
+
     def test_cloud_provision_creates_resumes_and_never_relinks_billed_resources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
