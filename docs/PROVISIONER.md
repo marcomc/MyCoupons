@@ -94,7 +94,8 @@ uploading source, creating a deployment, or staging a secret.
 
 Associate that newly created project with its operator-managed standard Cloud
 project in the Apps Script editor, authorize the isolated OAuth client in that
-same project for the Execution API, then rerun the command. For an adopted
+same project for the Execution API, then rerun the command with
+`--acknowledge-association`. For an adopted
 project, complete that operator-managed association before the first command.
 Google does not expose the association through the Apps Script API. The command
 invokes the deployed, no-op

@@ -1893,7 +1893,7 @@ def _version_for_bundle(access_token: str, script_id: str, digest: str) -> int:
 def _ensure_owner_only_deployment(access_token: str, script_id: str, digest: str, persisted_deployment_id: str | None = None) -> tuple[str, int]:
     deployments = _deployment_list(access_token, script_id)
     marker = f"MyCoupons owner-only {digest}"
-    matching = [deployment for deployment in deployments if deployment.get("deploymentConfig", {}).get("description") == marker]
+    matching = [deployment for deployment in deployments if isinstance(deployment, dict) and deployment.get("deploymentId") != "HEAD" and isinstance(deployment.get("deploymentConfig"), dict) and deployment["deploymentConfig"].get("description") == marker]
     if not matching and persisted_deployment_id is not None:
         matching = [deployment for deployment in deployments if deployment.get("deploymentId") == persisted_deployment_id]
     if not matching and persisted_deployment_id is None:
@@ -2281,7 +2281,7 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         def persist_creation_intent() -> None:
             nonlocal state
             state = dict(state)
-            state["phase"] = "apps-script-creation-pending"
+            state["phase"] = "apps-script-creation-intent"
             state = _persist_state_locked(state_dir, state, key)
 
         def persist_creation_posted() -> None:
