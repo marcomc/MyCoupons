@@ -1437,7 +1437,7 @@ def _service_enabled(gcloud: str, project_id: str, service: str, account: str) -
             "list",
             "--enabled",
             f"--filter=config.name={service}",
-            "--format=json",
+            "--format=json(config.name)",
             "--quiet",
             f"--project={project_id}",
         ),
