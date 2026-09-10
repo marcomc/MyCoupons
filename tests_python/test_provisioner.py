@@ -1120,6 +1120,8 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                     return [{"type": "project", "id": "654321"}]
                 if command[1:3] == ("projects", "get-iam-policy"):
                     return {"bindings": [{"role": "roles/owner", "members": ["user:owner@example.com"]}]}
+                if command[1:3] == ("services", "list"):
+                    return [{"config": {"name": "gmail.googleapis.com"}}]
                 if command[1:3] == ("secrets", "describe"):
                     return {"name": "projects/vertex-project/secrets/mycoupons-bootstrap", "labels": {"mycoupons-installation": "installation-demo"}}
                 if command[1:4] == ("secrets", "versions", "list"):

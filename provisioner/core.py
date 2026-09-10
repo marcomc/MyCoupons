@@ -2178,13 +2178,13 @@ def _bootstrap_secret_version_state(gcloud: str, config: Mapping[str, Any], owne
         operation="bootstrap secret version inspection",
     )
     expected = _secret_resource_pattern(config["vertexProject"], project_number) + r"/versions/[1-9][0-9]*"
-    if not isinstance(result, dict) or result.get("name") != secret_version or not re.fullmatch(expected, secret_version) or result.get("state") not in {"ENABLED", "DISABLED"}:
+    if not isinstance(result, dict) or result.get("name") != secret_version or not re.fullmatch(expected, secret_version) or result.get("state") not in {"ENABLED", "DISABLED", "DESTROYED"}:
         raise ProvisionerError("bootstrap secret version inspection returned invalid data")
     return result["state"]
 
 
 def _disable_bootstrap_secret_version(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str, secret_version: str) -> None:
-    if _bootstrap_secret_version_state(gcloud, config, owner, project_number, secret_version) == "DISABLED":
+    if _bootstrap_secret_version_state(gcloud, config, owner, project_number, secret_version) in {"DISABLED", "DESTROYED"}:
         return
     version = secret_version.rsplit("/", 1)[-1]
     _cloud_success((gcloud, "secrets", "versions", "disable", version, f"--secret={BOOTSTRAP_SECRET_NAME}", f"--project={config['vertexProject']}", "--quiet"), account=owner, operation="bootstrap secret version disablement")
@@ -2313,6 +2313,11 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             installation_label=config["cloudInstallationId"],
             role="vertex",
             expected_owner=owner,
+            persisted=state["cloud"]["vertex"],
+        )
+        _ensure_service(
+            gcloud, config["vertexProject"], "gmail.googleapis.com",
+            installation_label=config["cloudInstallationId"], role="vertex", expected_owner=owner,
             persisted=state["cloud"]["vertex"],
         )
         _verify_execution_api_access(access_token, script_id)
