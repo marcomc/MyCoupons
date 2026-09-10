@@ -491,7 +491,7 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
     }:
         raise ProvisionerError("installation state has an unsupported shape")
     if state["version"] != STATE_VERSION or not isinstance(state["phase"], str) or state["phase"] not in {
-        "initialized", "bundle-validated", "cloud-projects-reconciled", "cloud-ready", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-ready", "bootstrap-complete"
+        "initialized", "bundle-validated", "cloud-projects-reconciled", "cloud-ready", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-adoption-pending", "apps-script-ready", "bootstrap-complete"
     }:
         raise ProvisionerError("installation state has an unsupported version or phase")
     _validate_common_state_identity(state)
@@ -522,7 +522,9 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
     elif not isinstance(apps_script["scriptId"], str) or not APPS_SCRIPT_ID_RE.fullmatch(apps_script["scriptId"]) or apps_script["provenance"] not in {"created", "adopted"}:
         raise ProvisionerError("installation state has an invalid Apps Script record")
     elif all(apps_script[key] is None for key in ("bundleDigest", "versionNumber", "deploymentId")):
-        if state["phase"] != "apps-script-association-required":
+        if (apps_script["provenance"] == "created" and state["phase"] != "apps-script-association-required") or (
+            apps_script["provenance"] == "adopted" and state["phase"] != "apps-script-adoption-pending"
+        ):
             raise ProvisionerError("installation state has an invalid Apps Script record")
     elif (
         not isinstance(apps_script["bundleDigest"], str)
@@ -1492,7 +1494,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
         if state["bundleDigest"] is None or state["phase"] == "initialized":
             raise ProvisionerError("validate the Apps Script source bundle before Cloud provisioning")
         key = _load_or_create_identity_key(state_dir)
-        app_script_pending = state["phase"] in {"apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required"}
+        app_script_pending = state["phase"] in {"apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-adoption-pending"}
         gcloud = discover_tools(("gcloud",))["gcloud"]
         if gcloud is None:
             raise ProvisionerError("gcloud is required for Cloud provisioning")
@@ -1950,7 +1952,7 @@ def _validate_bootstrap_payload(path: Path, config: Mapping[str, Any]) -> bytes:
 
 def _require_cloud_ready_state(state: Mapping[str, Any], config: Mapping[str, Any]) -> Mapping[str, Any]:
     vertex = state["cloud"].get("vertex") if isinstance(state.get("cloud"), dict) else None
-    if state["phase"] not in {"cloud-ready", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-ready", "bootstrap-complete"} or not isinstance(vertex, dict):
+    if state["phase"] not in {"cloud-ready", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-adoption-pending", "apps-script-ready", "bootstrap-complete"} or not isinstance(vertex, dict):
         raise ProvisionerError("Cloud provisioning must complete before Apps Script deployment")
     if vertex.get("projectId") != config["vertexProject"] or vertex.get("provenance") not in {"created", "adopted"}:
         raise ProvisionerError("persisted Vertex project identity does not match the installation")
@@ -2010,7 +2012,7 @@ def _role_can_access_secret_versions(gcloud: str, role: str, owner: str) -> bool
     if not isinstance(permissions, list) or any(not isinstance(permission, str) for permission in permissions):
         raise ProvisionerError("Cloud role access inspection returned invalid data")
     return bool(
-        {"secretmanager.versions.access", "secretmanager.secrets.setIamPolicy", "resourcemanager.projects.setIamPolicy", "resourcemanager.folders.setIamPolicy", "resourcemanager.organizations.setIamPolicy", "*"}
+        {"secretmanager.versions.access", "secretmanager.secrets.setIamPolicy", "resourcemanager.projects.setIamPolicy", "resourcemanager.folders.setIamPolicy", "resourcemanager.organizations.setIamPolicy", "iam.roles.update", "*"}
         & set(permissions)
     )
 
@@ -2076,12 +2078,12 @@ def _project_ancestor_secret_policies(gcloud: str, project_id: str, project_numb
 def _ensure_bootstrap_secret(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str) -> None:
     _assert_bootstrap_secret_owned(gcloud, config, owner, project_number, create=True)
     project_id = config["vertexProject"]
+    _disable_enabled_bootstrap_secret_versions(gcloud, config, owner, project_number)
     for policy in _project_ancestor_secret_policies(gcloud, project_id, project_number, owner):
         _assert_owner_only_project_secret_accessor(gcloud, policy, owner)
     _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=False)
     _cloud_success((gcloud, "secrets", "add-iam-policy-binding", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", f"--member=user:{owner}", "--role=roles/secretmanager.secretAccessor", "--quiet"), account=owner, operation="bootstrap secret access grant")
     _assert_owner_only_secret_accessor(_secret_access_policy(gcloud, project_id, owner), owner, require_owner=True)
-    _disable_enabled_bootstrap_secret_versions(gcloud, config, owner, project_number)
 
 
 def _assert_bootstrap_secret_owned(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str, *, create: bool) -> None:
@@ -2333,6 +2335,17 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             }
             state["phase"] = "apps-script-association-required"
             return _persist_state_locked(state_dir, state, key)
+        if state["appsScript"]["scriptId"] is None and provenance == "adopted":
+            state = dict(state)
+            state["appsScript"] = {
+                "scriptId": script_id,
+                "provenance": "adopted",
+                "bundleDigest": None,
+                "versionNumber": None,
+                "deploymentId": None,
+            }
+            state["phase"] = "apps-script-adoption-pending"
+            state = _persist_state_locked(state_dir, state, key)
         # A project we can adopt may still have a deployment that violates the
         # owner-only contract.  Reject it before replacing any remote source.
         _deployment_list(access_token, script_id)

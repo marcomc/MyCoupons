@@ -1234,6 +1234,14 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 with self.assertRaisesRegex(core.ProvisionerError, "owner-only"):
                     core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
 
+            with core.InstallationLock(state_dir):
+                persisted = core._load_state_locked(state_dir, core._load_or_create_identity_key(state_dir))
+            self.assertEqual(persisted["phase"], "apps-script-adoption-pending")
+            self.assertEqual(
+                persisted["appsScript"],
+                {"scriptId": "script-1", "provenance": "adopted", "bundleDigest": None, "versionNumber": None, "deploymentId": None},
+            )
+
     def test_deployment_discovery_rejects_an_unsafe_later_page(self) -> None:
         safe = self._deployment()
         unsafe = self._deployment(deployment_id="deployment-2")
@@ -1280,6 +1288,23 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "reconciliation returned invalid data"):
                 core._disable_enabled_bootstrap_secret_versions("/safe/gcloud", config, "owner@example.com", "654321")
 
+    def test_bootstrap_secret_disables_adopted_versions_before_iam_rejection(self) -> None:
+        config = valid_cloud_config()
+        events: list[str] = []
+
+        def reject_unsafe_ancestor(*_args: object) -> list[object]:
+            events.append("ancestor-check")
+            raise core.ProvisionerError("unsafe inherited access")
+
+        with mock.patch(
+            "provisioner.core._assert_bootstrap_secret_owned", side_effect=lambda *_args, **_kwargs: events.append("ownership-check")
+        ), mock.patch(
+            "provisioner.core._disable_enabled_bootstrap_secret_versions", side_effect=lambda *_args: events.append("disable-enabled-versions")
+        ), mock.patch("provisioner.core._project_ancestor_secret_policies", side_effect=reject_unsafe_ancestor):
+            with self.assertRaisesRegex(core.ProvisionerError, "unsafe inherited"):
+                core._ensure_bootstrap_secret("/safe/gcloud", config, "owner@example.com", "654321")
+        self.assertEqual(events, ["ownership-check", "disable-enabled-versions", "ancestor-check"])
+
     def test_project_secret_accessor_rejects_foreign_inherited_access(self) -> None:
         with mock.patch("provisioner.core._role_can_access_secret_versions", return_value=True):
             with self.assertRaisesRegex(core.ProvisionerError, "unsafe inherited"):
@@ -1291,7 +1316,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
 
     def test_project_secret_accessor_rejects_foreign_iam_escalation_role(self) -> None:
         policy = {"bindings": [{"role": "projects/vertex-project/roles/iam-mutator", "members": ["user:other@example.com"]}]}
-        for permission in ("resourcemanager.projects.setIamPolicy", "resourcemanager.folders.setIamPolicy", "resourcemanager.organizations.setIamPolicy"):
+        for permission in ("resourcemanager.projects.setIamPolicy", "resourcemanager.folders.setIamPolicy", "resourcemanager.organizations.setIamPolicy", "iam.roles.update"):
             with self.subTest(permission=permission), mock.patch(
                 "provisioner.core._cloud_json", return_value={"includedPermissions": [permission]}
             ):
