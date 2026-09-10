@@ -482,7 +482,7 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
     }:
         raise ProvisionerError("installation state has an unsupported shape")
     if state["version"] != STATE_VERSION or not isinstance(state["phase"], str) or state["phase"] not in {
-        "initialized", "bundle-validated", "cloud-projects-reconciled", "cloud-ready", "apps-script-association-required", "apps-script-ready", "bootstrap-complete"
+        "initialized", "bundle-validated", "cloud-projects-reconciled", "cloud-ready", "apps-script-creation-pending", "apps-script-association-required", "apps-script-ready", "bootstrap-complete"
     }:
         raise ProvisionerError("installation state has an unsupported version or phase")
     _validate_common_state_identity(state)
@@ -835,7 +835,8 @@ def _has_bootstrap_entry_point(content: bytes, entry_point: str) -> bool:
     )
     for match in re.finditer(rf"(?m)^[ \t]*function[ \t]+{re.escape(entry_point)}[ \t]*\(", visible_source):
         prefix = visible_source[: match.start()]
-        if prefix.count("{") == prefix.count("}"):
+        preceding = prefix.rstrip()
+        if prefix.count("{") == prefix.count("}") and (not preceding or preceding[-1] in ";}"):
             return True
     return False
 
@@ -1480,7 +1481,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
         if state["bundleDigest"] is None or state["phase"] == "initialized":
             raise ProvisionerError("validate the Apps Script source bundle before Cloud provisioning")
         key = _load_or_create_identity_key(state_dir)
-        association_required = state["phase"] == "apps-script-association-required"
+        app_script_pending = state["phase"] in {"apps-script-creation-pending", "apps-script-association-required"}
         gcloud = discover_tools(("gcloud",))["gcloud"]
         if gcloud is None:
             raise ProvisionerError("gcloud is required for Cloud provisioning")
@@ -1531,8 +1532,8 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
         state["phase"] = (
             "bootstrap-complete"
             if state["bootstrap"]["status"] == "complete"
-            else "apps-script-association-required"
-            if association_required
+            else state["phase"]
+            if app_script_pending
             else "cloud-projects-reconciled"
         )
         state["cloud"] = cloud
@@ -1562,8 +1563,8 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
         state["phase"] = (
             "bootstrap-complete"
             if state["bootstrap"]["status"] == "complete"
-            else "apps-script-association-required"
-            if association_required
+            else state["phase"]
+            if app_script_pending
             else "cloud-ready"
         )
         return _persist_state_locked(state_dir, state, key)
@@ -1623,6 +1624,12 @@ def _require_isolated_clasp_owner(auth_path: Path, owner_email: str) -> str:
     except OSError as exc:
         raise ProvisionerError("isolated Apps Script authorization cannot be resolved") from exc
     _assert_outside_worktree(auth_path)
+    try:
+        auth_stat = auth_path.stat()
+    except OSError as exc:
+        raise ProvisionerError("isolated Apps Script authorization cannot be resolved") from exc
+    if not stat.S_ISREG(auth_stat.st_mode) or not _is_private_mode(auth_stat.st_mode, 0o600):
+        raise ProvisionerError("isolated Apps Script authorization must be a regular mode-0600 file")
     clasp = discover_tools(("clasp",))["clasp"]
     if clasp is None:
         raise ProvisionerError("clasp is required to refresh isolated Apps Script authorization")
@@ -1705,7 +1712,7 @@ def _drive_script_metadata(access_token: str, script_id: str) -> Any:
     return _apps_script_json(access_token, "GET", f"https://www.googleapis.com/drive/v3/files/{script_id}?fields={fields}")
 
 
-def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapping[str, Any]) -> tuple[str, str]:
+def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapping[str, Any], persist_creation_intent: Callable[[], None]) -> tuple[str, str]:
     record = state["appsScript"]
     if record["scriptId"] is not None:
         script_id = _assert_private_owner_script(_drive_script_metadata(access_token, record["scriptId"]), owner_email, record["scriptId"])
@@ -1720,7 +1727,10 @@ def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapp
     if len(files) > 1:
         raise ProvisionerError("Apps Script project adoption is ambiguous")
     if len(files) == 1:
-        return _assert_private_owner_script(files[0], owner_email), "adopted"
+        return _assert_private_owner_script(files[0], owner_email), "created" if state["phase"] == "apps-script-creation-pending" else "adopted"
+    if state["phase"] == "apps-script-creation-pending":
+        raise ProvisionerError("Apps Script project creation is pending Drive visibility")
+    persist_creation_intent()
     created = _apps_script_json(access_token, "POST", "https://script.googleapis.com/v1/projects", {"title": APPS_SCRIPT_TITLE})
     script_id = created.get("scriptId") if isinstance(created, dict) else None
     if not isinstance(script_id, str) or not APPS_SCRIPT_ID_RE.fullmatch(script_id):
@@ -1885,7 +1895,7 @@ def _validate_bootstrap_payload(path: Path, config: Mapping[str, Any]) -> bytes:
 
 def _require_cloud_ready_state(state: Mapping[str, Any], config: Mapping[str, Any]) -> Mapping[str, Any]:
     vertex = state["cloud"].get("vertex") if isinstance(state.get("cloud"), dict) else None
-    if state["phase"] not in {"cloud-ready", "apps-script-association-required", "apps-script-ready", "bootstrap-complete"} or not isinstance(vertex, dict):
+    if state["phase"] not in {"cloud-ready", "apps-script-creation-pending", "apps-script-association-required", "apps-script-ready", "bootstrap-complete"} or not isinstance(vertex, dict):
         raise ProvisionerError("Cloud provisioning must complete before Apps Script deployment")
     if vertex.get("projectId") != config["vertexProject"] or vertex.get("provenance") not in {"created", "adopted"}:
         raise ProvisionerError("persisted Vertex project identity does not match the installation")
@@ -2162,7 +2172,13 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         state = _mark_bundle_validated_locked(state_dir, config, digest)
         key = _load_or_create_identity_key(state_dir)
         access_token = _require_isolated_clasp_owner(clasp_auth, config["ownerEmail"])
-        script_id, provenance = _find_or_create_apps_script(access_token, config["ownerEmail"], state)
+        def persist_creation_intent() -> None:
+            nonlocal state
+            state = dict(state)
+            state["phase"] = "apps-script-creation-pending"
+            state = _persist_state_locked(state_dir, state, key)
+
+        script_id, provenance = _find_or_create_apps_script(access_token, config["ownerEmail"], state, persist_creation_intent)
         _assert_private_owner_script(_drive_script_metadata(access_token, script_id), config["ownerEmail"], script_id)
         if state["appsScript"]["scriptId"] is None and provenance == "created":
             state = dict(state)
