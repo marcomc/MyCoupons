@@ -8,6 +8,7 @@ import stat
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -269,6 +270,36 @@ class ProvisionerStateTests(unittest.TestCase):
             changed_cloud_config["cloudInstallationId"] = "another-installation"
             with self.assertRaisesRegex(core.ProvisionerError, "does not match"):
                 core.initialize_state(state_dir, changed_cloud_config)
+
+    def test_signed_v2_cloud_ready_state_requires_current_service_reconciliation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = root / "state"
+            core.initialize_state(state_dir, config)
+            state_path = state_dir / "state.json"
+            key = core._read_private_bytes(state_dir / "identity.key", maximum_bytes=32)
+            legacy = {
+                "version": 2,
+                "installationId": str(uuid.uuid4()),
+                "configDigest": core.config_digest(config),
+                "identityProof": "",
+                "phase": "cloud-ready",
+                "bundleDigest": "a" * 64,
+                "cloud": {
+                    "developer": {"projectId": "developer-project", "projectNumber": "123456", "provenance": "adopted"},
+                    "vertex": {"projectId": "vertex-project", "projectNumber": "654321", "provenance": "adopted"},
+                },
+            }
+            legacy["identityProof"] = core._identity_proof_v2(key, legacy)
+            private_json(state_path, legacy)
+
+            migrated = core.initialize_state(state_dir, config)
+
+            self.assertEqual(migrated["version"], core.STATE_VERSION)
+            self.assertEqual(migrated["phase"], "cloud-projects-reconciled")
+            with self.assertRaisesRegex(core.ProvisionerError, "Cloud provisioning"):
+                core._require_cloud_ready_state(migrated, config)
 
             existing_developer = valid_config()
             existing_developer["developerProject"] = "developer-project"
@@ -1022,6 +1053,31 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 with self.assertRaisesRegex(core.ProvisionerError, "ambiguous"):
                     core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
 
+    def test_deployment_rejects_existing_unsafe_deployment_before_source_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            auth = root / "auth.json"
+            private_json(auth, {"tokens": {"default": {"access_token": "private-token"}}})
+            payload = root / "payload.json"
+            self._payload(payload, config)
+
+            def command(command: tuple[str, ...], **_kwargs: object) -> object:
+                if command[0] == "/safe/clasp":
+                    return {"loggedIn": True, "email": "owner@example.com"}
+                raise AssertionError(command)
+
+            with mock.patch("provisioner.core.discover_tools", return_value={"clasp": "/safe/clasp"}), mock.patch(
+                "provisioner.core._run_json", side_effect=command
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", side_effect=core.ProvisionerError("Apps Script deployment is not an owner-only API executable")), mock.patch(
+                "provisioner.core._remote_bundle_digest", side_effect=AssertionError("source must not be inspected")
+            ):
+                with self.assertRaisesRegex(core.ProvisionerError, "owner-only"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
+
     def test_deployment_discovery_rejects_an_unsafe_later_page(self) -> None:
         safe = self._deployment()
         unsafe = self._deployment(deployment_id="deployment-2")
@@ -1060,6 +1116,47 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                     "/safe/gcloud",
                 {"bindings": [{"role": "roles/secretmanager.secretAccessor", "members": ["user:other@example.com"]}]},
                 "owner@example.com",
+                )
+
+    def test_project_secret_accessor_allows_policy_without_bindings(self) -> None:
+        core._assert_owner_only_project_secret_accessor(
+            "/safe/gcloud",
+            {},
+            "owner@example.com",
+        )
+
+    def test_project_secret_accessor_allows_unrelated_conditional_binding(self) -> None:
+        with mock.patch("provisioner.core._role_can_access_secret_versions", return_value=False) as role_access:
+            core._assert_owner_only_project_secret_accessor(
+                "/safe/gcloud",
+                {
+                    "bindings": [
+                        {
+                            "role": "roles/viewer",
+                            "members": ["user:other@example.com"],
+                            "condition": {"expression": "request.time < timestamp('2030-01-01T00:00:00Z')"},
+                        }
+                    ]
+                },
+                "owner@example.com",
+            )
+        role_access.assert_called_once_with("/safe/gcloud", "roles/viewer", "owner@example.com")
+
+    def test_project_secret_accessor_rejects_conditional_secret_access(self) -> None:
+        with mock.patch("provisioner.core._role_can_access_secret_versions", return_value=True):
+            with self.assertRaisesRegex(core.ProvisionerError, "unsafe inherited"):
+                core._assert_owner_only_project_secret_accessor(
+                    "/safe/gcloud",
+                    {
+                        "bindings": [
+                            {
+                                "role": "roles/secretmanager.secretAccessor",
+                                "members": ["user:owner@example.com"],
+                                "condition": {"expression": "true"},
+                            }
+                        ]
+                    },
+                    "owner@example.com",
                 )
 
     def test_project_hierarchy_rejects_foreign_secret_access_before_staging(self) -> None:
@@ -1179,3 +1276,16 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             with mock.patch("provisioner.core.discover_tools", return_value={"clasp": "/safe/clasp", "gcloud": "/safe/gcloud"}), mock.patch("provisioner.core._run_json", side_effect=command), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch("provisioner.core._cloud_success"), mock.patch("provisioner.core._invoke_bootstrap", side_effect=AssertionError("must not run")):
                 resumed = core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
             self.assertEqual(resumed["phase"], "bootstrap-complete")
+
+            def clasp_only(command: tuple[str, ...], **_kwargs: object) -> object:
+                if command[0] == "/safe/clasp":
+                    return {"loggedIn": True, "email": "owner@example.com"}
+                raise AssertionError("completed source reconciliation must not invoke gcloud")
+
+            with mock.patch("provisioner.core.discover_tools", return_value={"clasp": "/safe/clasp"}), mock.patch(
+                "provisioner.core._run_json", side_effect=clasp_only
+            ), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch(
+                "provisioner.core._invoke_bootstrap", side_effect=AssertionError("must not run")
+            ):
+                completed = core.deploy_apps_script(state_dir, config, ROOT / "src", auth, None)
+            self.assertEqual(completed["phase"], "bootstrap-complete")

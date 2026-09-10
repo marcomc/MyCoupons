@@ -571,6 +571,11 @@ def _migrate_v2_state(state: Any, key: bytes) -> dict[str, Any]:
         raise ProvisionerError("installation state is not bound to this local installation")
     migrated = dict(state)
     migrated["version"] = STATE_VERSION
+    # Version 2 considered the Cloud setup ready before deployment required
+    # Cloud Resource Manager and Drive.  Make an upgraded ready state repeat
+    # service reconciliation before it can deploy.
+    if migrated["phase"] == "cloud-ready":
+        migrated["phase"] = "cloud-projects-reconciled"
     migrated["appsScript"] = {"scriptId": None, "provenance": None, "bundleDigest": None, "versionNumber": None, "deploymentId": None}
     migrated["bootstrap"] = {"secretVersion": None, "status": "not-started"}
     migrated["identityProof"] = _identity_proof(key, migrated)
@@ -1929,7 +1934,7 @@ def _role_can_access_secret_versions(gcloud: str, role: str, owner: str) -> bool
 
 def _assert_owner_only_project_secret_accessor(gcloud: str, policy: Any, owner: str) -> None:
     """Reject foreign effective secret-version access on one Cloud resource."""
-    bindings = policy.get("bindings") if isinstance(policy, dict) else None
+    bindings = policy.get("bindings", []) if isinstance(policy, dict) else None
     expected_member = f"user:{owner.lower()}"
     if not isinstance(bindings, list):
         raise ProvisionerError("Cloud project access inspection returned invalid data")
@@ -1937,9 +1942,14 @@ def _assert_owner_only_project_secret_accessor(gcloud: str, policy: Any, owner: 
         if not isinstance(binding, dict):
             raise ProvisionerError("Cloud project access inspection returned invalid data")
         members = binding.get("members")
-        if "condition" in binding or not isinstance(members, list) or any(not isinstance(member, str) for member in members):
+        if not isinstance(members, list) or any(not isinstance(member, str) for member in members):
             raise ProvisionerError("Cloud project has unsafe inherited secret access")
-        if any(member.lower() != expected_member for member in members) and _role_can_access_secret_versions(gcloud, binding.get("role"), owner):
+        foreign_member = any(member.lower() != expected_member for member in members)
+        if "condition" in binding:
+            if _role_can_access_secret_versions(gcloud, binding.get("role"), owner):
+                raise ProvisionerError("Cloud project has unsafe inherited secret access")
+            continue
+        if foreign_member and _role_can_access_secret_versions(gcloud, binding.get("role"), owner):
             raise ProvisionerError("Cloud project has unsafe inherited secret access")
 
 
@@ -2140,6 +2150,9 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         access_token = _require_isolated_clasp_owner(clasp_auth, config["ownerEmail"])
         script_id, provenance = _find_or_create_apps_script(access_token, config["ownerEmail"], state)
         _assert_private_owner_script(_drive_script_metadata(access_token, script_id), config["ownerEmail"], script_id)
+        # A project we can adopt may still have a deployment that violates the
+        # owner-only contract.  Reject it before replacing any remote source.
+        _deployment_list(access_token, script_id)
         if _remote_bundle_digest(access_token, script_id) != digest:
             _apps_script_json(
                 access_token,
@@ -2155,6 +2168,8 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         state["appsScript"] = {"scriptId": script_id, "provenance": provenance, "bundleDigest": digest, "versionNumber": version_number, "deploymentId": deployment_id}
         state["phase"] = "bootstrap-complete" if state["bootstrap"]["status"] == "complete" else "apps-script-ready"
         state = _persist_state_locked(state_dir, state, key)
+        if state["bootstrap"]["status"] == "complete":
+            return state
         gcloud = discover_tools(("gcloud",))["gcloud"]
         if gcloud is None:
             raise ProvisionerError("gcloud is required for secure bootstrap")
@@ -2169,8 +2184,6 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         )
         project_number = state["cloud"]["vertex"]["projectNumber"]
         bootstrap = state["bootstrap"]
-        if bootstrap["status"] == "complete":
-            return state
         _verify_execution_api_access(access_token, script_id)
         _ensure_bootstrap_secret(gcloud, config, owner, project_number)
         if bootstrap["status"] in {"staged", "verified"}:
