@@ -1589,7 +1589,7 @@ def _read_private_oauth_token(path: Path) -> str:
     tokens = auth.get("tokens")
     default = tokens.get("default") if isinstance(tokens, dict) else None
     token = default.get("access_token") if isinstance(default, dict) else None
-    if not isinstance(token, str) or not token:
+    if not isinstance(token, str) or not token or "\r" in token or "\n" in token:
         raise ProvisionerError("isolated Apps Script authorization has no usable access token")
     return token
 
@@ -1771,6 +1771,7 @@ def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapp
         raise
     script_id = created.get("scriptId") if isinstance(created, dict) else None
     if not isinstance(script_id, str) or not APPS_SCRIPT_ID_RE.fullmatch(script_id):
+        persist_creation_posted()
         raise ProvisionerError("Apps Script project creation returned invalid data")
     # A successful create response is the durable creation boundary.  Record
     # its opaque ID before any Drive metadata request so retries cannot create
@@ -2245,7 +2246,7 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
     with InstallationLock(state_dir):
         state = _initialize_state_locked(state_dir, config)
         key = _load_or_create_identity_key(state_dir)
-        if state["bootstrap"]["status"] == "verified":
+        if state["bootstrap"]["status"] in {"staged", "verified", "staging", "replacement-staging"}:
             vertex = state["cloud"].get("vertex")
             if not isinstance(vertex, dict) or vertex.get("projectId") != config["vertexProject"] or not isinstance(vertex.get("projectNumber"), str):
                 raise ProvisionerError("persisted Vertex project identity does not match the installation")
@@ -2253,12 +2254,18 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             if gcloud is None:
                 raise ProvisionerError("gcloud is required for secure bootstrap")
             owner = _require_active_gcloud_owner(gcloud, config["ownerEmail"])
-            secret_version = state["bootstrap"]["secretVersion"]
-            _disable_bootstrap_secret_version(gcloud, config, owner, vertex["projectNumber"], secret_version)
-            state = dict(state)
-            state["bootstrap"] = {"secretVersion": secret_version, "status": "complete"}
-            state["phase"] = "bootstrap-complete"
-            return _persist_state_locked(state_dir, state, key)
+            status = state["bootstrap"]["status"]
+            if status == "staged":
+                _disable_bootstrap_secret_version(gcloud, config, owner, vertex["projectNumber"], state["bootstrap"]["secretVersion"])
+            elif status in {"staging", "replacement-staging"}:
+                _disable_enabled_bootstrap_secret_versions(gcloud, config, owner, vertex["projectNumber"])
+            else:
+                secret_version = state["bootstrap"]["secretVersion"]
+                _disable_bootstrap_secret_version(gcloud, config, owner, vertex["projectNumber"], secret_version)
+                state = dict(state)
+                state["bootstrap"] = {"secretVersion": secret_version, "status": "complete"}
+                state["phase"] = "bootstrap-complete"
+                state = _persist_state_locked(state_dir, state, key)
         _require_cloud_ready_state(state, config)
         digest, files = _deployment_bundle(source_dir)
         # Reject every private input before any Apps Script or Cloud mutation.
@@ -2353,10 +2360,6 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             state["bootstrap"] = {"secretVersion": bootstrap["secretVersion"], "status": "complete"}
             state["phase"] = "bootstrap-complete"
             return _persist_state_locked(state_dir, state, key)
-        if bootstrap["status"] == "staged":
-            # A prior execution might not have consumed this secret.  Make its
-            # exact persisted version unusable before any retry precondition.
-            _disable_bootstrap_secret_version(gcloud, config, owner, project_number, bootstrap["secretVersion"])
         _revalidate_project_before_mutation(
             gcloud,
             project_id=config["vertexProject"],
