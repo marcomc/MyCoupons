@@ -12,6 +12,7 @@ from typing import Sequence
 from .core import (
     ProvisionerError,
     authenticated_identity_preflight,
+    deploy_apps_script,
     discover_tools,
     initialize_state_with_status,
     load_config,
@@ -42,6 +43,11 @@ def _parser() -> argparse.ArgumentParser:
     preflight.add_argument("--project-id", required=True, help="Cloud project to inspect without mutation")
     cloud = subcommands.add_parser("provision-cloud", help="create or adopt the labelled Cloud projects and reconcile required services")
     cloud.add_argument("--config", type=Path, required=True)
+    deploy = subcommands.add_parser("deploy-apps-script", help="deploy and securely bootstrap one private Apps Script installation")
+    deploy.add_argument("--config", type=Path, required=True)
+    deploy.add_argument("--source-dir", type=Path, default=Path("src"))
+    deploy.add_argument("--clasp-auth", type=Path, required=True, help="private isolated clasp authorization file")
+    deploy.add_argument("--bootstrap-payload", type=Path, required=True, help="private one-time Secret Manager bootstrap payload")
     return parser
 
 
@@ -74,6 +80,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if args.command == "provision-cloud":
             state = provision_cloud(args.state_dir, config)
             _emit({"cloudReady": state["phase"] == "cloud-ready", "phase": state["phase"]})
+            return 0
+        if args.command == "deploy-apps-script":
+            state = deploy_apps_script(args.state_dir, config, args.source_dir, args.clasp_auth, args.bootstrap_payload)
+            _emit({"appsScriptReady": state["phase"] in {"apps-script-ready", "bootstrap-complete"}, "bootstrapComplete": state["phase"] == "bootstrap-complete"})
             return 0
         raise AssertionError("unhandled command")
     except ProvisionerError as exc:

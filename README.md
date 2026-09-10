@@ -20,7 +20,9 @@ Gmail-label resource setup, a private per-message journal, bounded read-only
 Gmail message ingestion, and local deterministic import-row persistence.
 Review actions now expose an installable-edit-compatible `onReviewEdit` entry
 point for Confirm, Ignore, and Retry with AI, with row/source validation and
-message-level archive checkpoints. There is no deployment.
+message-level archive checkpoints. The local provisioner can deploy and
+bootstrap the private Apps Script installation; live deployment remains
+operator-authorized and unverified.
 
 Private installation identifiers and credentials belong outside version control.
 The example configuration contains product defaults only.
@@ -189,9 +191,13 @@ state to the configured Generic Billing Account. It then reconciles the limited
 required APIs without printing identifiers, raw diagnostics, credentials, or
 command output.
 
-It does not create API keys, OAuth clients, secrets, Apps Script projects, or
-deployments. See the provisioner guide for the label/adoption and retry
-contract.
+`deploy-apps-script` then uses a private isolated clasp authorization to create
+or adopt one sole-owner private Apps Script project, upload/read-back the exact
+source digest, and create/recover only owner-only Execution API deployments. It
+passes an in-memory bootstrap payload through an installation-owned Secret
+Manager version, validates the non-secret `bootstrapFromSecret` result, disables
+that version, and persists only signed non-secret metadata. Unsafe deployments,
+ambiguous projects, or foreign sharing fail closed.
 
 See [the provisioner guide](docs/PROVISIONER.md) for the implemented commands
 and deferred steps.

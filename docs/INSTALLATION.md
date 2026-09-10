@@ -41,29 +41,27 @@ Run `scripts/prepare-deployment.sh --auth-json PATH --project-id PROJECT_ID`.
 The helper validates inputs and tool availability only. It does not print or
 read the secret contents, deploy code, create OAuth clients, or provision cloud
 resources. `clasp` authorization must remain in an operator-owned private file.
+After Cloud provisioning, run `python3 -m provisioner.cli deploy-apps-script`
+with an isolated mode-0600 clasp authorization file and a mode-0600 bootstrap
+payload outside the checkout; see [the provisioner guide](PROVISIONER.md#apps-script-deployment-and-bootstrap).
 
 ## Apps Script setup
 
-Create or select the private Apps Script project, upload `src/`, inspect the
-manifest scopes, and configure the owner email, private Sheet name/ID, Gmail
-label, locale, time zone, model, and optional Vertex fallback through the
-installer. On a fresh project, call `beginMyCouponsInstallation` with the
-validated fields from `config/example.json`; it persists non-secret
-configuration and continues through the installer. On later runs,
-`installMyCoupons` resumes from persisted configuration. The installer creates
+The provisioner creates or adopts one private owner-only Apps Script project,
+uploads `src`, verifies the immutable owner-only Execution API deployment, and
+configures the installer through its secure bootstrap. The installer creates
 only missing Sheet tabs, nested Gmail label prefixes, the owned daily trigger,
 and the installable `onReviewEdit` trigger; it rejects ambiguous matches and
 non-private sharing, and preserves existing headers and rows. Store secrets
 only in Script Properties.
 
-The Apps Script editor does not pass arguments to functions. For direct manual
-setup, deploy the owner-only Execution API deployment, authenticate as the
-owner, and invoke `beginMyCouponsInstallation` with the non-secret fields from
-`config/example.json`.
+The Apps Script editor does not pass arguments to functions. Do not replace the
+provisioner's owner-only bootstrap with a manual editor run that could expose a
+credential.
 
 ## Secret Manager bootstrap
 
-The future operator CLI uses the owner-only Execution API function
+The operator CLI uses the owner-only Execution API function
 `bootstrapFromSecret(secretVersion)`. It writes one immutable, numeric Secret
 Manager version named
 `projects/VERTEX_PROJECT/secrets/mycoupons-bootstrap/versions/NUMBER`; aliases

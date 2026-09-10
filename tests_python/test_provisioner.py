@@ -251,7 +251,7 @@ class ProvisionerStateTests(unittest.TestCase):
             core.mark_bundle_validated(state_dir, config, "a" * 64)
             state_path = state_dir / "state.json"
             v2 = json.loads(state_path.read_text(encoding="utf-8"))
-            v1 = {key: value for key, value in v2.items() if key != "cloud"}
+            v1 = {key: value for key, value in v2.items() if key not in {"cloud", "appsScript", "bootstrap"}}
             v1["version"] = 1
             key = core._read_private_bytes(state_dir / "identity.key", maximum_bytes=32)
             v1["configDigest"] = core._legacy_installer_config_digest(config)
@@ -873,3 +873,202 @@ class ProvisionerCommandTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
+    def _cloud_ready_state(self, root: Path, config: dict[str, object]) -> Path:
+        state_dir = root / "state"
+        core.initialize_state(state_dir, config)
+        core.mark_bundle_validated(state_dir, config, "a" * 64)
+        with core.InstallationLock(state_dir):
+            key = core._load_or_create_identity_key(state_dir)
+            state = core._load_state_locked(state_dir, key)
+            state["cloud"] = {
+                "developer": {"projectId": "developer-project", "projectNumber": "123456", "provenance": "adopted"},
+                "vertex": {"projectId": "vertex-project", "projectNumber": "654321", "provenance": "adopted"},
+            }
+            state["phase"] = "cloud-ready"
+            core._persist_state_locked(state_dir, state, key)
+        return state_dir
+
+    def _payload(self, path: Path, config: dict[str, object]) -> None:
+        private_json(path, {"version": 1, "config": {key: config[key] for key in core.INSTALLER_CONFIG_KEYS}, "geminiApiKey": "AIza" + "a" * 24})
+
+    def _owner_metadata(self, script_id: str = "script-1") -> dict[str, object]:
+        return {
+            "id": script_id,
+            "mimeType": "application/vnd.google-apps.script",
+            "owners": [{"emailAddress": "owner@example.com"}],
+            "permissions": [{"type": "user", "role": "owner", "emailAddress": "owner@example.com"}],
+        }
+
+    def _deployment(self, script_id: str = "script-1", deployment_id: str = "deployment-1", version: int = 1) -> dict[str, object]:
+        return {
+            "deploymentId": deployment_id,
+            "deploymentConfig": {"scriptId": script_id, "versionNumber": version, "manifestFileName": "appsscript", "description": "ignored"},
+            "entryPoints": [{"entryPointType": "EXECUTION_API", "executionApi": {"entryPointConfig": {"access": "MYSELF"}}}],
+        }
+
+    def test_deploy_creates_private_script_verifies_content_and_completes_bootstrap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            auth = root / "auth.json"
+            private_json(auth, {"tokens": {"default": {"access_token": "private-token"}}})
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            deployed_files: list[dict[str, str]] = []
+            deployment = self._deployment()
+            deployment["deploymentConfig"]["description"] = "MyCoupons owner-only " + core.validate_bundle(ROOT / "src")
+
+            def api(_token: str, method: str, resource: str, body: object = None) -> object:
+                if resource.startswith("https://www.googleapis.com/drive/v3/files?"):
+                    return {"files": []}
+                if resource == "https://script.googleapis.com/v1/projects" and method == "POST":
+                    return {"scriptId": "script-1"}
+                if resource.startswith("https://www.googleapis.com/drive/v3/files/script-1"):
+                    return self._owner_metadata()
+                if "/content" in resource and method == "GET":
+                    return {"files": deployed_files}
+                if resource.endswith("/content") and method == "PUT":
+                    deployed_files[:] = body["files"]  # type: ignore[index]
+                    return {"files": deployed_files}
+                if resource.endswith("/deployments") and method == "GET":
+                    return {"deployments": []}
+                if resource.endswith("/versions") and method == "GET":
+                    return {"versions": []}
+                if resource.endswith("/versions") and method == "POST":
+                    return {"versionNumber": 1, "description": body["description"]}  # type: ignore[index]
+                if resource.endswith("/deployments") and method == "POST":
+                    return deployment
+                if resource.endswith("/deployments/deployment-1"):
+                    return deployment
+                if resource.endswith(":run"):
+                    return {"done": True, "response": {"result": {"version": 1, "installed": True, "resumed": False, "spreadsheetId": "sheet-1", "labelId": "label-1", "triggerCreated": True, "reviewTriggerCreated": True, "locale": "en", "timeZone": "Europe/Rome"}}}
+                raise AssertionError((method, resource, body))
+
+            def command(command: tuple[str, ...], **_kwargs: object) -> object:
+                if command[0] == "/safe/clasp":
+                    return {"loggedIn": True, "email": "owner@example.com"}
+                if command[1:3] == ("auth", "list"):
+                    return [{"account": "owner@example.com", "status": "ACTIVE"}]
+                if command[1:3] == ("projects", "describe"):
+                    return {"projectId": "vertex-project", "projectNumber": "654321", "lifecycleState": "ACTIVE", "labels": {"mycoupons-installation": "installation-demo", "mycoupons-role": "vertex"}}
+                if command[1:3] == ("projects", "get-iam-policy"):
+                    return {"bindings": [{"role": "roles/owner", "members": ["user:owner@example.com"]}]}
+                if command[1:3] == ("secrets", "describe"):
+                    return {"name": "projects/vertex-project/secrets/mycoupons-bootstrap", "labels": {"mycoupons-installation": "installation-demo"}}
+                if command[1:4] == ("secrets", "versions", "list"):
+                    return []
+                if command[1:4] == ("secrets", "versions", "describe"):
+                    return {"name": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1", "state": "DISABLED"}
+                if command[1:4] == ("secrets", "get-iam-policy", "mycoupons-bootstrap"):
+                    return {"bindings": [{"role": "roles/secretmanager.secretAccessor", "members": ["user:owner@example.com"]}]}
+                raise AssertionError(command)
+
+            with mock.patch("provisioner.core.discover_tools", return_value={"clasp": "/safe/clasp", "gcloud": "/safe/gcloud"}), mock.patch("provisioner.core._run_json", side_effect=command), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch("provisioner.core._cloud_success"), mock.patch("provisioner.core._run_json_with_input", return_value={"name": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1"}):
+                state = core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
+            self.assertEqual(state["phase"], "bootstrap-complete")
+            self.assertEqual(state["appsScript"]["scriptId"], "script-1")
+            self.assertEqual(state["bootstrap"], {"secretVersion": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1", "status": "complete"})
+            self.assertTrue(deployed_files)
+
+    def test_deployment_rejects_ambiguous_or_nonprivate_adoption_before_source_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            auth = root / "auth.json"
+            private_json(auth, {"tokens": {"default": {"access_token": "private-token"}}})
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            candidates = [self._owner_metadata("script-1"), self._owner_metadata("script-2")]
+
+            def command(command: tuple[str, ...], **_kwargs: object) -> object:
+                if command[0] == "/safe/clasp":
+                    return {"loggedIn": True, "email": "owner@example.com"}
+                raise AssertionError(command)
+
+            with mock.patch("provisioner.core.discover_tools", return_value={"clasp": "/safe/clasp"}), mock.patch("provisioner.core._run_json", side_effect=command), mock.patch("provisioner.core._apps_script_json", return_value={"files": candidates}):
+                with self.assertRaisesRegex(core.ProvisionerError, "ambiguous"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
+
+    def test_deployment_discovery_rejects_an_unsafe_later_page(self) -> None:
+        safe = self._deployment()
+        unsafe = self._deployment(deployment_id="deployment-2")
+        unsafe["entryPoints"] = [{"entryPointType": "WEB_APP"}]
+
+        def api(_token: str, _method: str, resource: str, _body: object = None) -> object:
+            if "pageToken=second" in resource:
+                return {"deployments": [unsafe]}
+            return {"deployments": [safe], "nextPageToken": "second"}
+
+        with mock.patch("provisioner.core._apps_script_json", side_effect=api):
+            with self.assertRaisesRegex(core.ProvisionerError, "owner-only"):
+                core._deployment_list("private-token", "script-1")
+
+    def test_bootstrap_secret_rejects_public_or_foreign_accessor_bindings(self) -> None:
+        for member, role in (("allUsers", "roles/secretmanager.secretAccessor"), ("allAuthenticatedUsers", "roles/secretmanager.secretAccessor"), ("group:operators@example.com", "roles/secretmanager.secretAccessor"), ("user:other@example.com", "roles/secretmanager.secretAccessor"), ("user:other@example.com", "roles/owner")):
+            with self.subTest(member=member, role=role):
+                with self.assertRaisesRegex(core.ProvisionerError, "unsafe"):
+                    core._assert_owner_only_secret_accessor(
+                        {"bindings": [{"role": role, "members": [member]}]},
+                        "owner@example.com",
+                        require_owner=False,
+                    )
+
+    def test_secret_inputs_inside_the_checkout_are_rejected_before_reading(self) -> None:
+        config = valid_cloud_config()
+        with self.assertRaisesRegex(core.ProvisionerError, "outside the Git worktree"):
+            core._validate_bootstrap_payload(ROOT / "config" / "provisioner.example.json", config)
+
+    def test_verified_bootstrap_resume_never_reinvokes_a_disabled_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                digest = core.validate_bundle(ROOT / "src")
+                state["appsScript"] = {"scriptId": "script-1", "provenance": "adopted", "bundleDigest": digest, "versionNumber": 1, "deploymentId": "deployment-1"}
+                state["bootstrap"] = {"secretVersion": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1", "status": "verified"}
+                state["phase"] = "apps-script-ready"
+                core._persist_state_locked(state_dir, state, key)
+            auth = root / "auth.json"
+            private_json(auth, {"tokens": {"default": {"access_token": "private-token"}}})
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            files = [
+                {
+                    "name": "appsscript" if relative.name == "appsscript.json" else str(relative.with_suffix("")),
+                    "type": "JSON" if relative.name == "appsscript.json" else "SERVER_JS",
+                    "source": path.read_text(encoding="utf-8"),
+                }
+                for path in sorted((ROOT / "src").rglob("*.gs")) + [ROOT / "src" / "appsscript.json"]
+                for relative in [path.relative_to(ROOT / "src")]
+            ]
+            deployment = self._deployment()
+            deployment["deploymentConfig"]["description"] = "MyCoupons owner-only " + core.validate_bundle(ROOT / "src")
+
+            def command(command: tuple[str, ...], **_kwargs: object) -> object:
+                if command[0] == "/safe/clasp": return {"loggedIn": True, "email": "owner@example.com"}
+                if command[1:3] == ("auth", "list"): return [{"account": "owner@example.com", "status": "ACTIVE"}]
+                if command[1:3] == ("projects", "describe"): return {"projectId": "vertex-project", "projectNumber": "654321", "lifecycleState": "ACTIVE", "labels": {"mycoupons-installation": "installation-demo", "mycoupons-role": "vertex"}}
+                if command[1:3] == ("projects", "get-iam-policy"): return {"bindings": [{"role": "roles/owner", "members": ["user:owner@example.com"]}]}
+                if command[1:3] == ("secrets", "describe"): return {"name": "projects/vertex-project/secrets/mycoupons-bootstrap", "labels": {"mycoupons-installation": "installation-demo"}}
+                if command[1:4] == ("secrets", "get-iam-policy", "mycoupons-bootstrap"): return {"bindings": [{"role": "roles/secretmanager.secretAccessor", "members": ["user:owner@example.com"]}]}
+                if command[1:4] == ("secrets", "versions", "describe"): return {"name": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1", "state": "DISABLED"}
+                raise AssertionError(command)
+
+            def api(_token: str, method: str, resource: str, _body: object = None) -> object:
+                if resource.startswith("https://www.googleapis.com/drive/v3/files/script-1"): return self._owner_metadata()
+                if "/content" in resource: return {"files": files}
+                if resource.endswith("/deployments"): return {"deployments": [deployment]}
+                if resource.endswith("/versions"): return {"versions": [{"versionNumber": 1, "description": deployment["deploymentConfig"]["description"]}]}
+                raise AssertionError((method, resource))
+
+            with mock.patch("provisioner.core.discover_tools", return_value={"clasp": "/safe/clasp", "gcloud": "/safe/gcloud"}), mock.patch("provisioner.core._run_json", side_effect=command), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch("provisioner.core._cloud_success"), mock.patch("provisioner.core._invoke_bootstrap", side_effect=AssertionError("must not run")):
+                resumed = core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
+            self.assertEqual(resumed["phase"], "bootstrap-complete")

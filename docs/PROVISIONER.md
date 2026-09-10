@@ -8,16 +8,15 @@
 - [Authentication preflight](#authentication-preflight)
 - [Source bundle contract](#source-bundle-contract)
 - [Cloud provisioning](#cloud-provisioning)
-- [Deferred deployment actions](#deferred-deployment-actions)
+- [Apps Script deployment and bootstrap](#apps-script-deployment-and-bootstrap)
 
 ## Scope
 
 `python3 -m provisioner.cli` is a standard-library-only local provisioner. Its
 `provision-cloud` command creates or adopts the two labelled Cloud projects,
 links the eligible Vertex project to its configured billing account, and enables
-the documented services. It does not deploy Apps Script, call the bootstrap
-endpoint, create an API key or OAuth client, access Secret Manager, or read
-credentials.
+the documented services. `deploy-apps-script` then deploys one validated source
+snapshot through the Apps Script API and completes the owner-only bootstrap.
 
 Do not use a shared global `clasp` profile. Later deployment work must instead
 use an installation-owned, private authorization location.
@@ -51,7 +50,7 @@ python3 -m provisioner.cli initialize --config /private/path/mycoupons.local.jso
 python3 -m provisioner.cli validate-bundle \
   --config /private/path/mycoupons.local.json --source-dir src
 
-# Safely inspect whether the later deployment tools are available locally.
+# Safely inspect deployment-tool availability.
 python3 -m provisioner.cli tools
 
 # Print, but do not execute, the OAuth command for local gcloud preflight.
@@ -62,6 +61,55 @@ python3 -m provisioner.cli oauth-command
 manifest OAuth scopes, the required Gmail/Drive advanced services, and a stable
 SHA-256 digest over deployable source paths and bytes. A later deployment step
 can use that digest to bind a reviewed source snapshot to its action.
+
+## Apps Script deployment and bootstrap
+
+After `provision-cloud` succeeds, run one combined, resumable deployment. The
+isolated `clasp` authorization file and bootstrap payload are private mode-0600
+files outside the checkout. The payload is one exact JSON object with `version`,
+the complete Installer-compatible `config`, and `geminiApiKey`; it is read into
+memory, passed to Secret Manager over stdin, and is never written to local
+state or command output.
+
+```sh
+python3 -m provisioner.cli deploy-apps-script \
+  --config /private/path/mycoupons.local.json \
+  --source-dir src \
+  --clasp-auth /private/path/clasp-auth.json \
+  --bootstrap-payload /private/path/bootstrap-payload.json
+```
+
+The command refreshes and verifies the isolated `clasp` identity against
+`ownerEmail`; it never uses a shared global `clasp` profile. It adopts one
+exactly titled `MyCoupons` project only when Drive confirms that the configured
+owner is its sole owner and sole permission. More than one candidate, any
+foreign permission, or inaccessible/invalid metadata fails before source
+mutation. If no candidate exists, it creates one standalone project and checks
+the same ownership condition before continuing.
+
+The source is captured as one validated digest, uploaded only when the remote
+content differs, then read back. Every existing deployment must be exactly one
+`EXECUTION_API` entry point with `MYSELF` access; public, web, or malformed
+deployments stop the command. A digest-bound immutable source version and
+owner-only deployment are created or recovered uniquely and read back before
+the bootstrap runs.
+
+For bootstrap, the command creates or adopts only the Vertex-project secret
+`mycoupons-bootstrap` bearing this installation label, rejects public or foreign
+Secret Accessor bindings, grants the verified owner secret access, stages one
+numeric version, and calls the deployed
+`bootstrapFromSecret(secretVersion)` endpoint. It validates the complete
+non-secret result, disables that exact version, and stores only signed,
+non-secret resource IDs, provenance, version/deployment IDs, digests, and
+completion state. An interrupted run resumes only its exact persisted resource;
+it never prints API keys, OAuth tokens, secret payloads, or raw API diagnostics.
+
+Apps Script's public API does not expose a mutable standard-Cloud-project
+association. The bootstrap instead names the Vertex project in its exact Secret
+Manager resource, resolves that project's number, and uses the verified owner's
+explicit Secret Accessor binding. Vertex runtime calls use the same configured
+project. The provisioner does not claim to alter the script's separate standard
+Cloud-project association.
 
 ## Authentication preflight
 
@@ -146,7 +194,7 @@ After verified ownership, the command enables only the required services:
 | Project | Services |
 | --- | --- |
 | Gemini Developer API | `apikeys.googleapis.com`, `generativelanguage.googleapis.com` |
-| Vertex fallback | `aiplatform.googleapis.com`, `script.googleapis.com`, `secretmanager.googleapis.com` |
+| Vertex fallback | `aiplatform.googleapis.com`, `script.googleapis.com`, `secretmanager.googleapis.com`, `cloudresourcemanager.googleapis.com` |
 
 State records a signed creation intent before project creation, then only
 project IDs, project numbers, provenance, phase, and other non-secret metadata
@@ -160,11 +208,3 @@ enabled services and the exact confirmed billing link are left unchanged.
 
 This command creates no API key, OAuth client, secret, Apps Script project, or
 deployment. It is not evidence that Google has accepted a model request.
-
-## Deferred deployment actions
-
-The next increment may use this local contract to use an isolated `clasp`
-authorization, deploy the validated digest, create an immutable temporary
-Secret Manager version, invoke
-`bootstrapFromSecret`, verify its non-secret result, and disable that version
-after success. None of those actions are implemented or authorized here.
