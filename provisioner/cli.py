@@ -79,7 +79,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "provision-cloud":
             state = provision_cloud(args.state_dir, config)
-            _emit({"cloudReady": state["phase"] == "cloud-ready", "phase": state["phase"]})
+            _emit({"cloudReady": state["phase"] in {"cloud-ready", "bootstrap-complete"}, "phase": state["phase"]})
             return 0
         if args.command == "deploy-apps-script":
             state = deploy_apps_script(args.state_dir, config, args.source_dir, args.clasp_auth, args.bootstrap_payload)

@@ -511,6 +511,24 @@ class ProvisionerCloudTests(unittest.TestCase):
                 resumed = core.provision_cloud(state_dir, config)
             self.assertEqual(resumed["phase"], "bootstrap-complete")
             self.assertEqual(commands, [])
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                association = core._load_state_locked(state_dir, key)
+                association["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "created",
+                    "bundleDigest": None,
+                    "versionNumber": None,
+                    "deploymentId": None,
+                }
+                association["bootstrap"] = {"secretVersion": None, "status": "not-started"}
+                association["phase"] = "apps-script-association-required"
+                core._persist_state_locked(state_dir, association, key)
+            with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+                "provisioner.core._run_json", side_effect=responder
+            ), mock.patch("provisioner.core._run_success", side_effect=mutate):
+                association_resumed = core.provision_cloud(state_dir, config)
+            self.assertEqual(association_resumed["phase"], "apps-script-association-required")
 
     def test_cloud_provision_rejects_foreign_labels_and_billed_developer_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -838,6 +856,15 @@ def shutil_copytree(source: Path, target: Path) -> None:
 
 
 class ProvisionerCommandTests(unittest.TestCase):
+    def test_cloud_command_reports_completed_bootstrap_as_cloud_ready(self) -> None:
+        with mock.patch("provisioner.cli.load_config", return_value=valid_cloud_config()), mock.patch(
+            "provisioner.cli.provision_cloud", return_value={"phase": "bootstrap-complete"}
+        ), mock.patch("sys.stdout") as stdout:
+            exit_code = main(["--state-dir", "/private/state", "provision-cloud", "--config", "/private/config.json"])
+        self.assertEqual(exit_code, 0)
+        emitted = json.loads("".join(str(call.args[0]) for call in stdout.write.call_args_list))
+        self.assertEqual(emitted, {"cloudReady": True, "phase": "bootstrap-complete"})
+
     def test_oauth_command_targets_the_active_gcloud_credential_store(self) -> None:
         self.assertEqual(
             core.oauth_authorization_command(),

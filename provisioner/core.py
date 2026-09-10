@@ -1480,6 +1480,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
         if state["bundleDigest"] is None or state["phase"] == "initialized":
             raise ProvisionerError("validate the Apps Script source bundle before Cloud provisioning")
         key = _load_or_create_identity_key(state_dir)
+        association_required = state["phase"] == "apps-script-association-required"
         gcloud = discover_tools(("gcloud",))["gcloud"]
         if gcloud is None:
             raise ProvisionerError("gcloud is required for Cloud provisioning")
@@ -1527,7 +1528,13 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
                 cloud[role] = record
                 state["cloud"] = cloud
                 state = _persist_state_locked(state_dir, state, key)
-        state["phase"] = "bootstrap-complete" if state["bootstrap"]["status"] == "complete" else "cloud-projects-reconciled"
+        state["phase"] = (
+            "bootstrap-complete"
+            if state["bootstrap"]["status"] == "complete"
+            else "apps-script-association-required"
+            if association_required
+            else "cloud-projects-reconciled"
+        )
         state["cloud"] = cloud
         state = _persist_state_locked(state_dir, state, key)
         _reconcile_vertex_billing(
@@ -1552,7 +1559,13 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
                     expected_owner=owner_account,
                     persisted=cloud[role],
                 )
-        state["phase"] = "bootstrap-complete" if state["bootstrap"]["status"] == "complete" else "cloud-ready"
+        state["phase"] = (
+            "bootstrap-complete"
+            if state["bootstrap"]["status"] == "complete"
+            else "apps-script-association-required"
+            if association_required
+            else "cloud-ready"
+        )
         return _persist_state_locked(state_dir, state, key)
 
 
@@ -2011,7 +2024,6 @@ def _ensure_bootstrap_secret(gcloud: str, config: Mapping[str, Any], owner: str,
 
 
 def _stage_bootstrap_secret(gcloud: str, config: Mapping[str, Any], owner: str, project_number: str, payload: bytes) -> str:
-    _ensure_bootstrap_secret(gcloud, config, owner, project_number)
     result = _run_json_with_input(
         (gcloud, "secrets", "versions", "add", BOOTSTRAP_SECRET_NAME, f"--project={config['vertexProject']}", "--data-file=-", "--format=json", "--quiet", f"--account={owner}"),
         payload,
@@ -2198,8 +2210,8 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         project_number = state["cloud"]["vertex"]["projectNumber"]
         bootstrap = state["bootstrap"]
         _verify_execution_api_access(access_token, script_id)
-        _ensure_bootstrap_secret(gcloud, config, owner, project_number)
         if bootstrap["status"] in {"staged", "verified"}:
+            _ensure_bootstrap_secret(gcloud, config, owner, project_number)
             secret_version = bootstrap["secretVersion"]
         else:
             if bootstrap["status"] == "staging":
@@ -2209,6 +2221,7 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             if bootstrap["status"] != "not-started":
                 raise ProvisionerError("bootstrap state is invalid")
             if bootstrap["status"] == "not-started":
+                _ensure_bootstrap_secret(gcloud, config, owner, project_number)
                 state = dict(state)
                 state["bootstrap"] = {"secretVersion": None, "status": "staging"}
                 state = _persist_state_locked(state_dir, state, key)
