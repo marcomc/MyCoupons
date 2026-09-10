@@ -42,6 +42,14 @@ class BootstrapSecretNotFound(ProvisionerError):
     """An internal, narrowly classified absent bootstrap-secret result."""
 
 
+class AppsScriptHttpError(ProvisionerError):
+    """An Apps Script HTTP failure whose status is safe to classify locally."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__("Apps Script API request was rejected")
+        self.status = status
+
+
 INSTALLER_CONFIG_KEYS = frozenset(
     {
         "ownerEmail",
@@ -1604,7 +1612,9 @@ def _apps_script_json(
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             raw = response.read(maximum_bytes + 1)
-    except (OSError, urllib.error.HTTPError) as exc:
+    except urllib.error.HTTPError as exc:
+        raise AppsScriptHttpError(exc.code) from exc
+    except OSError as exc:
         raise ProvisionerError("Apps Script API request was rejected") from exc
     if len(raw) > maximum_bytes:
         raise ProvisionerError("Apps Script API returned unexpected output")
@@ -1727,15 +1737,18 @@ def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapp
     if len(files) > 1:
         raise ProvisionerError("Apps Script project adoption is ambiguous")
     if len(files) == 1:
-        return _assert_private_owner_script(files[0], owner_email), "created" if state["phase"] == "apps-script-creation-pending" else "adopted"
+        return _assert_private_owner_script(files[0], owner_email), "created" if state["phase"] in {"apps-script-creation-pending", "apps-script-creation-posted"} else "adopted"
     if state["phase"] == "apps-script-creation-posted":
         raise ProvisionerError("Apps Script project creation is pending Drive visibility")
     persist_creation_intent()
     persist_creation_posted()
     try:
         created = _apps_script_json(access_token, "POST", "https://script.googleapis.com/v1/projects", {"title": APPS_SCRIPT_TITLE})
+    except AppsScriptHttpError as exc:
+        if 400 <= exc.status < 500:
+            clear_creation_intent()
+        raise
     except ProvisionerError:
-        clear_creation_intent()
         raise
     script_id = created.get("scriptId") if isinstance(created, dict) else None
     if not isinstance(script_id, str) or not APPS_SCRIPT_ID_RE.fullmatch(script_id):
