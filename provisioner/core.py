@@ -2239,7 +2239,7 @@ def _disable_bootstrap_secret_version(gcloud: str, config: Mapping[str, Any], ow
         raise ProvisionerError("bootstrap secret version disablement could not be verified")
 
 
-def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: Path, clasp_auth: Path, bootstrap_payload: Path | None) -> dict[str, Any]:
+def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: Path, clasp_auth: Path, bootstrap_payload: Path | None, *, association_acknowledged: bool = False) -> dict[str, Any]:
     """Deploy one verified private source snapshot and complete its secret bootstrap."""
     validate_cloud_config(config)
     state_dir = ensure_state_dir(state_dir)
@@ -2312,7 +2312,7 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
 
         script_id, provenance = _find_or_create_apps_script(access_token, config["ownerEmail"], state, persist_creation_intent, persist_creation_posted, persist_created_script, clear_creation_intent)
         _assert_private_owner_script(_drive_script_metadata(access_token, script_id), config["ownerEmail"], script_id)
-        if created_this_run:
+        if created_this_run or (state["phase"] == "apps-script-association-required" and not association_acknowledged):
             return state
         if state["appsScript"]["scriptId"] is None and provenance == "created":
             state = dict(state)

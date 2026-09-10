@@ -48,6 +48,7 @@ def _parser() -> argparse.ArgumentParser:
     deploy.add_argument("--source-dir", type=Path, default=Path("src"))
     deploy.add_argument("--clasp-auth", type=Path, required=True, help="private isolated clasp authorization file")
     deploy.add_argument("--bootstrap-payload", type=Path, help="private one-time Secret Manager bootstrap payload; required until bootstrap completes")
+    deploy.add_argument("--acknowledge-association", action="store_true", help="confirm the operator completed the required Apps Script Cloud association")
     return parser
 
 
@@ -82,7 +83,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             _emit({"cloudReady": state["phase"] in {"cloud-ready", "bootstrap-complete", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required"}, "phase": state["phase"]})
             return 0
         if args.command == "deploy-apps-script":
-            state = deploy_apps_script(args.state_dir, config, args.source_dir, args.clasp_auth, args.bootstrap_payload)
+            state = deploy_apps_script(args.state_dir, config, args.source_dir, args.clasp_auth, args.bootstrap_payload, association_acknowledged=args.acknowledge_association)
             _emit(
                 {
                     "appsScriptReady": state["phase"] in {"apps-script-ready", "bootstrap-complete"},

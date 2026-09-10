@@ -1183,7 +1183,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                     {"scriptId": "script-1", "provenance": "created", "bundleDigest": None, "versionNumber": None, "deploymentId": None},
                 )
                 self.assertFalse(deployed_files)
-                state = core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
+                state = core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload, association_acknowledged=True)
             self.assertEqual(state["phase"], "bootstrap-complete")
             self.assertEqual(state["appsScript"]["scriptId"], "script-1")
             self.assertEqual(state["bootstrap"], {"secretVersion": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1", "status": "complete"})
