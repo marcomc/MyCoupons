@@ -361,6 +361,14 @@ def _legacy_installer_config_digest(config: Mapping[str, Any]) -> str:
     return _sha256(_canonical_json({key: config[key] for key in INSTALLER_CONFIG_KEYS}))
 
 
+def _precloud_config_digest(config: Mapping[str, Any]) -> str:
+    """Identify the installation before its one allowed Cloud-only upgrade."""
+    precloud = dict(config)
+    precloud.update({key: CONFIG_DEFAULTS[key] for key in CLOUD_CONFIG_KEYS})
+    precloud["developerProject"] = CONFIG_DEFAULTS["developerProject"]
+    return config_digest(precloud)
+
+
 def _write_private_atomic(path: Path, content: bytes) -> None:
     _assert_private_directory(path.parent)
     _assert_not_symlink(path)
@@ -570,7 +578,10 @@ def _initialize_state_locked(state_dir: Path, config: Mapping[str, Any]) -> dict
             if (
                 state["cloud"] == {"developer": None, "vertex": None}
                 and state["phase"] in {"initialized", "bundle-validated"}
-                and state["configDigest"] == _legacy_installer_config_digest(config)
+                and state["configDigest"] in {
+                    _legacy_installer_config_digest(config),
+                    _precloud_config_digest(config),
+                }
             ):
                 state = dict(state)
                 state["configDigest"] = digest
@@ -1058,10 +1069,10 @@ def authenticated_identity_preflight(expected_owner: str, project_id: str) -> di
     gcloud = discover_tools(("gcloud",))["gcloud"]
     if gcloud is None:
         raise ProvisionerError("gcloud is required for authentication preflight")
-    _require_active_gcloud_owner(gcloud, expected_owner)
+    account = _require_active_gcloud_owner(gcloud, expected_owner)
     project = _cloud_json(
         (gcloud, "projects", "describe", project_id, "--format=json", "--quiet"),
-        account=expected_owner,
+        account=account,
         operation="read-only authentication preflight",
         absent_project=project_id,
     )
@@ -1070,7 +1081,7 @@ def authenticated_identity_preflight(expected_owner: str, project_id: str) -> di
     return {"ownerMatched": True, "projectReadable": True}
 
 
-def _require_active_gcloud_owner(gcloud: str, expected_owner: str) -> None:
+def _require_active_gcloud_owner(gcloud: str, expected_owner: str) -> str:
     accounts = _run_json((gcloud, "auth", "list", "--format=json", "--quiet"))
     if not isinstance(accounts, list) or any(
         not isinstance(entry, dict) or not isinstance(entry.get("account"), str) or not isinstance(entry.get("status"), str)
@@ -1080,13 +1091,18 @@ def _require_active_gcloud_owner(gcloud: str, expected_owner: str) -> None:
     active = [entry for entry in accounts if entry["status"] == "ACTIVE"]
     if len(active) != 1 or active[0]["account"].lower() != expected_owner.lower():
         raise ProvisionerError("active gcloud identity is absent, ambiguous, or does not match ownerEmail")
+    return active[0]["account"]
 
 
-def _canonical_billing_account(value: str) -> str:
+def _billing_account_id(value: str) -> str:
     identifier = value.removeprefix("billingAccounts/")
     if not BILLING_ACCOUNT_RE.fullmatch(identifier):
         raise ProvisionerError("installation config vertexBillingAccount is invalid")
-    return f"billingAccounts/{identifier}"
+    return identifier
+
+
+def _canonical_billing_account(value: str) -> str:
+    return f"billingAccounts/{_billing_account_id(value)}"
 
 
 def _cloud_json(command: Sequence[str], *, account: str, operation: str, absent_project: str | None = None) -> Any:
@@ -1250,9 +1266,10 @@ def _reconcile_vertex_billing(
     expected_owner: str,
     persisted: Mapping[str, Any],
 ) -> None:
-    selected = _canonical_billing_account(billing_account)
+    selected_id = _billing_account_id(billing_account)
+    selected = f"billingAccounts/{selected_id}"
     account = _cloud_json(
-        (gcloud, "billing", "accounts", "describe", selected, "--format=json", "--quiet"),
+        (gcloud, "billing", "accounts", "describe", selected_id, "--format=json", "--quiet"),
         account=expected_owner,
         operation="selected billing account inspection",
     )
@@ -1279,7 +1296,7 @@ def _reconcile_vertex_billing(
         persisted=persisted,
     )
     _cloud_success(
-        (gcloud, "billing", "projects", "link", project_id, f"--billing-account={selected}", "--quiet"),
+        (gcloud, "billing", "projects", "link", project_id, f"--billing-account={selected_id}", "--quiet"),
         account=expected_owner,
         operation="Vertex fallback billing linkage",
     )
@@ -1356,7 +1373,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
         gcloud = discover_tools(("gcloud",))["gcloud"]
         if gcloud is None:
             raise ProvisionerError("gcloud is required for Cloud provisioning")
-        _require_active_gcloud_owner(gcloud, config["ownerEmail"])
+        owner_account = _require_active_gcloud_owner(gcloud, config["ownerEmail"])
         state = dict(state)
         cloud = dict(state["cloud"])
         for role, project_id in (("developer", config["developerProject"]),):
@@ -1371,7 +1388,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
                 project_id=project_id,
                 installation_label=config["cloudInstallationId"],
                 role=role,
-                expected_owner=config["ownerEmail"],
+                expected_owner=owner_account,
                 persisted=cloud[role],
                 persist_creation_intent=persist_developer_creation_intent,
             )
@@ -1379,7 +1396,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
                 cloud[role] = record
                 state["cloud"] = cloud
                 state = _persist_state_locked(state_dir, state, key)
-        _require_unbilled_developer_project(gcloud, config["developerProject"], config["ownerEmail"])
+        _require_unbilled_developer_project(gcloud, config["developerProject"], owner_account)
         for role, project_id in (("vertex", config["vertexProject"]),):
             def persist_vertex_creation_intent() -> None:
                 nonlocal state, cloud
@@ -1392,7 +1409,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
                 project_id=project_id,
                 installation_label=config["cloudInstallationId"],
                 role=role,
-                expected_owner=config["ownerEmail"],
+                expected_owner=owner_account,
                 persisted=cloud[role],
                 persist_creation_intent=persist_vertex_creation_intent,
             )
@@ -1408,7 +1425,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
             config["vertexProject"],
             config["vertexBillingAccount"],
             installation_label=config["cloudInstallationId"],
-            expected_owner=config["ownerEmail"],
+            expected_owner=owner_account,
             persisted=cloud["vertex"],
         )
         for role, project_id, services in (
@@ -1422,7 +1439,7 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
                     service,
                     installation_label=config["cloudInstallationId"],
                     role=role,
-                    expected_owner=config["ownerEmail"],
+                    expected_owner=owner_account,
                     persisted=cloud[role],
                 )
         state["phase"] = "cloud-ready"

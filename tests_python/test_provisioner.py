@@ -262,6 +262,13 @@ class ProvisionerStateTests(unittest.TestCase):
             self.assertEqual(migrated["phase"], "bundle-validated")
             self.assertEqual(migrated["cloud"], {"developer": None, "vertex": None})
             self.assertEqual(migrated["configDigest"], core.config_digest(config))
+            cloud_config = valid_cloud_config()
+            upgraded = core.initialize_state(state_dir, cloud_config)
+            self.assertEqual(upgraded["configDigest"], core.config_digest(cloud_config))
+            changed_cloud_config = valid_cloud_config()
+            changed_cloud_config["cloudInstallationId"] = "another-installation"
+            with self.assertRaisesRegex(core.ProvisionerError, "does not match"):
+                core.initialize_state(state_dir, changed_cloud_config)
 
     def test_state_resume_status_is_decided_under_the_installation_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -379,7 +386,7 @@ class ProvisionerCloudTests(unittest.TestCase):
             if command[1:4] == ("billing", "projects", "describe"):
                 return {"projectId": command[4], **billing[command[4]]}
             if command[1:4] == ("billing", "accounts", "describe"):
-                return {"name": command[4], "open": True}
+                return {"name": f"billingAccounts/{command[4]}", "open": True}
             if command[1:3] == ("services", "list"):
                 project_id = next(part.removeprefix("--project=") for part in command if part.startswith("--project="))
                 service = next(part.removeprefix("--filter=config.name=") for part in command if part.startswith("--filter=config.name="))
@@ -392,6 +399,7 @@ class ProvisionerCloudTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             config = valid_cloud_config()
+            config["ownerEmail"] = "Owner@example.com"
             state_dir = self._bundle_validated_state(root, config)
             resources: dict[str, dict[str, object]] = {}
             billing = {
@@ -415,7 +423,10 @@ class ProvisionerCloudTests(unittest.TestCase):
                     return
                 if command[1:4] == ("billing", "projects", "link"):
                     project_id = command[4]
-                    billing[project_id] = {"billingEnabled": True, "billingAccountName": command[5].removeprefix("--billing-account=")}
+                    billing[project_id] = {
+                        "billingEnabled": True,
+                        "billingAccountName": f"billingAccounts/{command[5].removeprefix('--billing-account=')}",
+                    }
                     return
                 if command[1:3] == ("services", "enable"):
                     services.add((next(part.removeprefix("--project=") for part in command if part.startswith("--project=")), command[3]))
@@ -437,7 +448,7 @@ class ProvisionerCloudTests(unittest.TestCase):
                     "projects",
                     "link",
                     "vertex-project",
-                    "--billing-account=billingAccounts/ABCDEF-123456-ABCDEF",
+                    "--billing-account=ABCDEF-123456-ABCDEF",
                     "--quiet",
                     "--account=owner@example.com",
                 ),
