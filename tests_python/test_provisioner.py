@@ -1308,12 +1308,74 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             with self.assertRaisesRegex(core.ProvisionerError, "owner-only"):
                 core._deployment_list("private-token", "script-1")
 
-    def test_deployment_discovery_ignores_automatic_head_and_empty_collections(self) -> None:
-        head = {"deploymentId": "HEAD", "deploymentConfig": {"scriptId": "script-1"}}
-        with mock.patch("provisioner.core._apps_script_json", return_value={"deployments": [head]}):
-            self.assertEqual(core._deployment_list("private-token", "script-1"), [head])
+    def test_deployment_discovery_allows_empty_collections(self) -> None:
         with mock.patch("provisioner.core._apps_script_json", return_value={}):
             self.assertEqual(core._apps_script_list("private-token", "https://example.invalid", "versions"), [])
+
+    def test_deployment_discovery_ignores_the_opaque_automatic_head_deployment(self) -> None:
+        head = {
+            "deploymentId": "AKfycbx4PV5RDnduc8dCEimzaYK2_oxTK5ew8-FHrLBZP7E",
+            "deploymentConfig": {"scriptId": "script-1", "manifestFileName": "appsscript"},
+            "entryPoints": [
+                {
+                    "entryPointType": "EXECUTION_API",
+                    "executionApi": {"entryPointConfig": {"access": "MYSELF"}},
+                }
+            ],
+        }
+        with mock.patch("provisioner.core._apps_script_json", return_value={"deployments": [head]}):
+            self.assertEqual(core._deployment_list("private-token", "script-1"), [head])
+
+    def test_deployment_discovery_rejects_nonhead_and_duplicate_automatic_records(self) -> None:
+        automatic_head = {
+            "deploymentId": "AKfycbx4PV5RDnduc8dCEimzaYK2_oxTK5ew8-FHrLBZP7E",
+            "deploymentConfig": {"scriptId": "script-1", "manifestFileName": "appsscript"},
+        }
+        literal_head = {
+            "deploymentId": "HEAD",
+            "deploymentConfig": {"scriptId": "script-1", "manifestFileName": "appsscript"},
+        }
+        versioned = {
+            "deploymentId": "AKfycbx4PV5RDnduc8dCEimzaYK2_oxTK5ew8-FHrLBZP7D",
+            "deploymentConfig": {"scriptId": "script-1", "versionNumber": 1, "manifestFileName": "appsscript"},
+        }
+        unexpected_entry_point = {
+            "deploymentId": "AKfycbx4PV5RDnduc8dCEimzaYK2_oxTK5ew8-FHrLBZP7C",
+            "deploymentConfig": {"scriptId": "script-1", "manifestFileName": "appsscript"},
+            "entryPoints": [{"entryPointType": "WEB_APP"}],
+        }
+        null_entry_points = {
+            "deploymentId": "AKfycbx4PV5RDnduc8dCEimzaYK2_oxTK5ew8-FHrLBZP7B",
+            "deploymentConfig": {"scriptId": "script-1", "manifestFileName": "appsscript"},
+            "entryPoints": None,
+        }
+        duplicate = {
+            "deploymentId": "AKfycbx4PV5RDnduc8dCEimzaYK2_oxTK5ew8-FHrLBZP7F",
+            "deploymentConfig": {"scriptId": "script-1", "manifestFileName": "appsscript"},
+        }
+        for deployments, error in (([literal_head], "owner-only"), ([versioned], "owner-only"), ([unexpected_entry_point], "owner-only"), ([null_entry_points], "owner-only"), ([automatic_head, duplicate], "ambiguous")):
+            with self.subTest(deployments=deployments), mock.patch(
+                "provisioner.core._apps_script_json", return_value={"deployments": deployments}
+            ):
+                with self.assertRaisesRegex(core.ProvisionerError, error):
+                    core._deployment_list("private-token", "script-1")
+
+    def test_deployment_discovery_rejects_duplicate_automatic_records_across_pages(self) -> None:
+        first = {
+            "deploymentId": "AKfycbx4PV5RDnduc8dCEimzaYK2_oxTK5ew8-FHrLBZP7E",
+            "deploymentConfig": {"scriptId": "script-1", "manifestFileName": "appsscript"},
+        }
+        second = {
+            "deploymentId": "AKfycbx4PV5RDnduc8dCEimzaYK2_oxTK5ew8-FHrLBZP7F",
+            "deploymentConfig": {"scriptId": "script-1", "manifestFileName": "appsscript"},
+        }
+
+        def api(_token: str, _method: str, resource: str, _body: object = None) -> object:
+            return {"deployments": [second]} if "pageToken=second" in resource else {"deployments": [first], "nextPageToken": "second"}
+
+        with mock.patch("provisioner.core._apps_script_json", side_effect=api):
+            with self.assertRaisesRegex(core.ProvisionerError, "ambiguous"):
+                core._deployment_list("private-token", "script-1")
 
     def test_bootstrap_secret_rejects_public_or_foreign_accessor_bindings(self) -> None:
         for member, role in (("allUsers", "roles/secretmanager.secretAccessor"), ("allAuthenticatedUsers", "roles/secretmanager.secretAccessor"), ("group:operators@example.com", "roles/secretmanager.secretAccessor"), ("user:other@example.com", "roles/secretmanager.secretAccessor"), ("user:other@example.com", "roles/owner")):
