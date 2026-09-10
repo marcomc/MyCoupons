@@ -73,6 +73,8 @@ MAX_CONFIG_BYTES = 8000
 MAX_COMMAND_OUTPUT_BYTES = 65536
 MAX_BUNDLE_FILE_BYTES = 1024 * 1024
 MAX_BUNDLE_TOTAL_BYTES = 8 * 1024 * 1024
+MAX_BUNDLE_FILES = 1000
+MAX_BUNDLE_PATH_BYTES = 128 * 1024
 PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 EMAIL_RE = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
 MODEL_RE = re.compile(r"^gemini-[a-z0-9._-]+$")
@@ -499,6 +501,7 @@ def _iter_bundle_files(source_dir: Path) -> Iterable[Path]:
         raise ProvisionerError("Apps Script source bundle cannot be traversed") from error
 
     bundle_files: list[Path] = []
+    bundle_path_bytes = 0
     for directory_name, directory_names, file_names in os.walk(
         source_dir,
         topdown=True,
@@ -514,7 +517,14 @@ def _iter_bundle_files(source_dir: Path) -> Iterable[Path]:
             if path.is_symlink():
                 raise ProvisionerError("Apps Script source bundle cannot contain symlinks")
             if path.is_file() and path.suffix in {".gs", ".html", ".js", ".json"}:
+                try:
+                    relative_bytes = path.relative_to(source_dir).as_posix().encode("utf-8")
+                except UnicodeEncodeError as exc:
+                    raise ProvisionerError("Apps Script source bundle path is not valid Unicode") from exc
+                if len(bundle_files) >= MAX_BUNDLE_FILES or bundle_path_bytes + len(relative_bytes) > MAX_BUNDLE_PATH_BYTES:
+                    raise ProvisionerError("Apps Script source bundle has too many files or path bytes")
                 bundle_files.append(path)
+                bundle_path_bytes += len(relative_bytes)
     yield from sorted(bundle_files)
 
 
@@ -694,8 +704,23 @@ def validate_bundle(source_dir: Path) -> str:
                 raise ProvisionerError("Apps Script source bundle must be valid UTF-8") from exc
             captured[relative] = content
             captured_bytes += len(content)
-        current_paths = {path.relative_to(source_dir).as_posix() for path in _iter_bundle_files(source_dir)}
-        if current_paths != set(captured):
+        verified_paths: set[str] = set()
+        verified_bytes = 0
+        for path in _iter_bundle_files(source_dir):
+            relative_path = path.relative_to(source_dir)
+            relative = relative_path.as_posix()
+            expected = captured.get(relative)
+            if expected is None:
+                raise ProvisionerError("Apps Script source bundle changed during validation")
+            remaining_bytes = MAX_BUNDLE_TOTAL_BYTES - verified_bytes
+            if remaining_bytes < 0:
+                raise ProvisionerError("Apps Script source bundle is too large")
+            current = _read_bundle_file(root_descriptor, relative_path, maximum_bytes=min(MAX_BUNDLE_FILE_BYTES, remaining_bytes))
+            if current != expected:
+                raise ProvisionerError("Apps Script source bundle changed during validation")
+            verified_paths.add(relative)
+            verified_bytes += len(current)
+        if verified_paths != set(captured) or verified_bytes != captured_bytes:
             raise ProvisionerError("Apps Script source bundle changed during validation")
     finally:
         os.close(root_descriptor)

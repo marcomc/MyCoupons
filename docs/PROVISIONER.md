@@ -91,7 +91,8 @@ The validated manifest contract matches the current Apps Script source:
 - Gmail v1 and Drive v3 advanced services.
 
 The digest includes deployable UTF-8 `.gs`, `.html`, `.js`, and `.json` files
-only. Each file is limited to 1 MiB and the complete bundle to 8 MiB. Manifest
+only. Each file is limited to 1 MiB and the complete bundle to 8 MiB; at most
+1,000 deployable files and 128 KiB of UTF-8 path names are accepted. Manifest
 validation and digesting consume the same captured bytes; a file or deployable
 file set that changes during capture fails validation. Vendor license files
 remain part of repository provenance but are not Apps Script deployment inputs.

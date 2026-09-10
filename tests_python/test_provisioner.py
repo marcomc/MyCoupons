@@ -461,6 +461,23 @@ class ProvisionerBundleTests(unittest.TestCase):
             (copied / "ZZEmpty.js").write_bytes(b"")
             with mock.patch.object(core, "MAX_BUNDLE_TOTAL_BYTES", base_size + 8):
                 self.assertRegex(core.validate_bundle(copied), r"^[0-9a-f]{64}$")
+            original_iter = core._iter_bundle_files
+            iterations = 0
+
+            def replace_after_capture(source_dir: Path):
+                nonlocal iterations
+                iterations += 1
+                if iterations == 2:
+                    config_source = copied / "Config.gs"
+                    config_source.write_text(config_source.read_text(encoding="utf-8") + "\nconst changed = true;\n", encoding="utf-8")
+                return original_iter(source_dir)
+
+            with mock.patch("provisioner.core._iter_bundle_files", side_effect=replace_after_capture):
+                with self.assertRaisesRegex(core.ProvisionerError, "changed during validation"):
+                    core.validate_bundle(copied)
+            with mock.patch.object(core, "MAX_BUNDLE_FILES", 1):
+                with self.assertRaisesRegex(core.ProvisionerError, "too many files"):
+                    core.validate_bundle(copied)
 
     def test_bundle_rejects_a_traversal_error(self) -> None:
         def inaccessible_walk(*_args: object, **kwargs: object) -> object:
