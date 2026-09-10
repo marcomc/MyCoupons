@@ -984,6 +984,48 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             "permissions": [{"type": "user", "role": "owner", "emailAddress": "owner@example.com"}],
         }
 
+    def test_script_create_keeps_pre_request_state_retryable_and_records_the_returned_id(self) -> None:
+        state = {
+            "phase": "cloud-ready",
+            "appsScript": {"scriptId": None, "provenance": None, "bundleDigest": None, "versionNumber": None, "deploymentId": None},
+        }
+        events: list[object] = []
+        with mock.patch("provisioner.core._apps_script_list", return_value=[]), mock.patch(
+            "provisioner.core._apps_script_json", return_value={"scriptId": "script-1"}
+        ):
+            script_id, provenance = core._find_or_create_apps_script(
+                "private-token",
+                "owner@example.com",
+                state,
+                lambda: events.append("intent"),
+                lambda: events.append("posted"),
+                lambda value: events.append(("created", value)),
+                lambda: events.append("cleared"),
+            )
+        self.assertEqual((script_id, provenance), ("script-1", "created"))
+        self.assertEqual(events, ["intent", ("created", "script-1")])
+
+    def test_script_create_transport_failure_marks_only_an_ambiguous_attempt_posted(self) -> None:
+        state = {
+            "phase": "cloud-ready",
+            "appsScript": {"scriptId": None, "provenance": None, "bundleDigest": None, "versionNumber": None, "deploymentId": None},
+        }
+        events: list[object] = []
+        with mock.patch("provisioner.core._apps_script_list", return_value=[]), mock.patch(
+            "provisioner.core._apps_script_json", side_effect=core.ProvisionerError("transport failed")
+        ):
+            with self.assertRaisesRegex(core.ProvisionerError, "transport failed"):
+                core._find_or_create_apps_script(
+                    "private-token",
+                    "owner@example.com",
+                    state,
+                    lambda: events.append("intent"),
+                    lambda: events.append("posted"),
+                    lambda value: events.append(("created", value)),
+                    lambda: events.append("cleared"),
+                )
+        self.assertEqual(events, ["intent", "posted"])
+
     def _deployment(self, script_id: str = "script-1", deployment_id: str = "deployment-1", version: int = 1) -> dict[str, object]:
         return {
             "deploymentId": deployment_id,
@@ -1307,7 +1349,15 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 if resource.endswith(":run"): return {"done": True, "response": {"result": {"version": 1, "ready": True}}}
                 raise AssertionError((method, resource))
 
-            with mock.patch("provisioner.core.discover_tools", return_value={"clasp": "/safe/clasp", "gcloud": "/safe/gcloud"}), mock.patch("provisioner.core._run_json", side_effect=command), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch("provisioner.core._cloud_success"), mock.patch("provisioner.core._invoke_bootstrap", side_effect=AssertionError("must not run")):
+            with mock.patch("provisioner.core.discover_tools", return_value={"clasp": "/safe/clasp", "gcloud": "/safe/gcloud"}), mock.patch(
+                "provisioner.core._run_json", side_effect=command
+            ), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch(
+                "provisioner.core._cloud_success"
+            ), mock.patch("provisioner.core._invoke_bootstrap", side_effect=AssertionError("must not run")), mock.patch(
+                "provisioner.core._verify_execution_api_access", side_effect=AssertionError("must not preflight")
+            ), mock.patch("provisioner.core._ensure_bootstrap_secret", side_effect=AssertionError("must not inspect secret IAM")), mock.patch(
+                "provisioner.core._revalidate_project_before_mutation", side_effect=AssertionError("must not revalidate before disablement")
+            ):
                 resumed = core.deploy_apps_script(state_dir, config, ROOT / "src", auth, payload)
             self.assertEqual(resumed["phase"], "bootstrap-complete")
 

@@ -1722,7 +1722,7 @@ def _drive_script_metadata(access_token: str, script_id: str) -> Any:
     return _apps_script_json(access_token, "GET", f"https://www.googleapis.com/drive/v3/files/{script_id}?fields={fields}")
 
 
-def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapping[str, Any], persist_creation_intent: Callable[[], None], persist_creation_posted: Callable[[], None], clear_creation_intent: Callable[[], None]) -> tuple[str, str]:
+def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapping[str, Any], persist_creation_intent: Callable[[], None], persist_creation_posted: Callable[[], None], persist_created_script: Callable[[str], None], clear_creation_intent: Callable[[], None]) -> tuple[str, str]:
     record = state["appsScript"]
     if record["scriptId"] is not None:
         script_id = _assert_private_owner_script(_drive_script_metadata(access_token, record["scriptId"]), owner_email, record["scriptId"])
@@ -1741,7 +1741,6 @@ def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapp
     if state["phase"] == "apps-script-creation-posted":
         raise ProvisionerError("Apps Script project creation is pending Drive visibility")
     persist_creation_intent()
-    persist_creation_posted()
     try:
         created = _apps_script_json(access_token, "POST", "https://script.googleapis.com/v1/projects", {"title": APPS_SCRIPT_TITLE})
     except AppsScriptHttpError as exc:
@@ -1749,11 +1748,18 @@ def _find_or_create_apps_script(access_token: str, owner_email: str, state: Mapp
             clear_creation_intent()
         raise
     except ProvisionerError:
+        # A transport failure can follow a remote project creation.  Preserve
+        # that ambiguity rather than issuing a second create request.
+        persist_creation_posted()
         raise
     script_id = created.get("scriptId") if isinstance(created, dict) else None
     if not isinstance(script_id, str) or not APPS_SCRIPT_ID_RE.fullmatch(script_id):
         raise ProvisionerError("Apps Script project creation returned invalid data")
-    return _assert_private_owner_script(_drive_script_metadata(access_token, script_id), owner_email, script_id), "created"
+    # A successful create response is the durable creation boundary.  Record
+    # its opaque ID before any Drive metadata request so retries cannot create
+    # a duplicate after an interrupted verification.
+    persist_created_script(script_id)
+    return script_id, "created"
 
 
 def _remote_bundle_digest(access_token: str, script_id: str, version_number: int | None = None) -> str:
@@ -2193,6 +2199,7 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         state = _mark_bundle_validated_locked(state_dir, config, digest)
         key = _load_or_create_identity_key(state_dir)
         access_token = _require_isolated_clasp_owner(clasp_auth, config["ownerEmail"])
+        created_this_run = False
         def persist_creation_intent() -> None:
             nonlocal state
             state = dict(state)
@@ -2205,14 +2212,30 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             state["phase"] = "apps-script-creation-posted"
             state = _persist_state_locked(state_dir, state, key)
 
+        def persist_created_script(script_id: str) -> None:
+            nonlocal created_this_run, state
+            state = dict(state)
+            state["appsScript"] = {
+                "scriptId": script_id,
+                "provenance": "created",
+                "bundleDigest": None,
+                "versionNumber": None,
+                "deploymentId": None,
+            }
+            state["phase"] = "apps-script-association-required"
+            state = _persist_state_locked(state_dir, state, key)
+            created_this_run = True
+
         def clear_creation_intent() -> None:
             nonlocal state
             state = dict(state)
             state["phase"] = "cloud-ready"
             state = _persist_state_locked(state_dir, state, key)
 
-        script_id, provenance = _find_or_create_apps_script(access_token, config["ownerEmail"], state, persist_creation_intent, persist_creation_posted, clear_creation_intent)
+        script_id, provenance = _find_or_create_apps_script(access_token, config["ownerEmail"], state, persist_creation_intent, persist_creation_posted, persist_created_script, clear_creation_intent)
         _assert_private_owner_script(_drive_script_metadata(access_token, script_id), config["ownerEmail"], script_id)
+        if created_this_run:
+            return state
         if state["appsScript"]["scriptId"] is None and provenance == "created":
             state = dict(state)
             state["appsScript"] = {
@@ -2248,6 +2271,17 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
         if gcloud is None:
             raise ProvisionerError("gcloud is required for secure bootstrap")
         owner = _require_active_gcloud_owner(gcloud, config["ownerEmail"])
+        project_number = state["cloud"]["vertex"]["projectNumber"]
+        bootstrap = state["bootstrap"]
+        if bootstrap["status"] == "verified":
+            # Bootstrap was already invoked.  Only gcloud is needed to make
+            # its exact persisted version unusable; do that before checks
+            # needed solely to stage or invoke another bootstrap request.
+            _disable_bootstrap_secret_version(gcloud, config, owner, project_number, bootstrap["secretVersion"])
+            state = dict(state)
+            state["bootstrap"] = {"secretVersion": bootstrap["secretVersion"], "status": "complete"}
+            state["phase"] = "bootstrap-complete"
+            return _persist_state_locked(state_dir, state, key)
         _revalidate_project_before_mutation(
             gcloud,
             project_id=config["vertexProject"],
@@ -2256,8 +2290,6 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             expected_owner=owner,
             persisted=state["cloud"]["vertex"],
         )
-        project_number = state["cloud"]["vertex"]["projectNumber"]
-        bootstrap = state["bootstrap"]
         _verify_execution_api_access(access_token, script_id)
         if bootstrap["status"] in {"staged", "verified"}:
             _ensure_bootstrap_secret(gcloud, config, owner, project_number)
