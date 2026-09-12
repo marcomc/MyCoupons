@@ -8,12 +8,9 @@ function runImportWorkflow_(input) {
     // complete mailbox page has been fetched.
     const streamed = {imported: 0, review: 0, errors: [], messages: [], truncated: false};
     try {
-      const scanned = readCouponMessages_(state, function (message) {
+      readCouponMessages_(state, function (message) {
         return processCouponMessage_(state, message);
-      });
-      streamed.errors = scanned.errors;
-      streamed.messages = scanned.messages;
-      streamed.truncated = scanned.truncated;
+      }, streamed);
     } catch (e) {
       streamed.errors.push({messageId: '', code: errorCode_(e)});
     }

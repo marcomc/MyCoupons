@@ -71,15 +71,15 @@ function mailboxQuery_(scan) {
 
 function mailboxDeadlineReached_(deadlineMs) { return !!deadlineMs && Date.now() >= deadlineMs; }
 
-function readCouponMessages_(state, onMessage) {
+function readCouponMessages_(state, onMessage, accumulator) {
   if (!state || typeof state !== 'object' || !state.journalSheet ||
     !Number.isSafeInteger(state.recoveryStart) || state.recoveryStart < 0) fail_('STATE');
-  return scanCouponMessages_(state, onMessage || function () {});
+  return scanCouponMessages_(state, onMessage || function () {}, accumulator);
 }
 
-function scanCouponMessages_(state, onMessage) {
+function scanCouponMessages_(state, onMessage, accumulator) {
   if (typeof onMessage !== 'function') fail_('STATE');
-  const result = {messages: [], errors: [], truncated: false};
+  const result = accumulator || {messages: [], errors: [], truncated: false};
   let scan = loadMailboxScanState_(state.recoveryStart, state.config && state.config.spreadsheetId);
   let remaining = MC_GMAIL_MAX_MESSAGES_PER_RUN;
   let pages = 0;
@@ -101,7 +101,9 @@ function scanCouponMessages_(state, onMessage) {
   if (retries.length) { scan.retryCursor = retries[retries.length - 1]; saveMailboxScanState_(scan); }
   for (let index = 0; index < retries.length; index++) {
     if (mailboxDeadlineReached_(state._deadlineMs)) { result.truncated = true; return result; }
-    mailboxProcessMessage_(state, scan, retries[index], false, onMessage, result);
+    const retryJournal = journalSnapshot[retries[index]];
+    const retryWindow = mailboxRetryWindow_(scan, retryJournal);
+    mailboxProcessMessage_(state, retryWindow, retries[index], !!retryWindow._retryWindow, onMessage, result);
     remaining--;
   }
 
@@ -168,6 +170,14 @@ function invalidMailboxPageToken_(error) {
     error.message === 'Invalid page token';
 }
 
+function mailboxRetryWindow_(scan, journal) {
+  const match = journal && /^read\|(\d+)\|(\d+)$/.exec(journal.failureStage || '');
+  if (!match) return scan;
+  const startMs = Number(match[1]); const endMs = Number(match[2]);
+  if (!Number.isSafeInteger(startMs) || !Number.isSafeInteger(endMs) || endMs < startMs) fail_('STATE');
+  return {startMs: startMs, endMs: endMs, _retryWindow: true};
+}
+
 function mailboxProcessMessage_(state, scan, messageId, enforceWindow, onMessage, result) {
   const journal = getMessageState_(state.journalSheet, messageId);
   if (journal && (MC_FINAL_MESSAGE_STATES.indexOf(journal.status) >= 0 || journal.status === 'review')) return true;
@@ -175,15 +185,15 @@ function mailboxProcessMessage_(state, scan, messageId, enforceWindow, onMessage
   if (mailboxDeadlineReached_(state._deadlineMs)) return false;
   let raw;
   try { raw = Gmail.Users.Messages.get('me', messageId, {format: 'full'}); } catch (e) {
-    mailboxReadFailure_(state.journalSheet, messageId); result.errors.push(gmailReadError_(messageId)); return true;
+    mailboxReadFailure_(state.journalSheet, messageId, scan); result.errors.push(gmailReadError_(messageId)); return true;
   }
   if (mailboxDeadlineReached_(state._deadlineMs)) return false;
   if (!raw || typeof raw !== 'object' || raw.id !== messageId) {
-    mailboxReadFailure_(state.journalSheet, messageId); result.errors.push(gmailReadError_(messageId)); return true;
+    mailboxReadFailure_(state.journalSheet, messageId, scan); result.errors.push(gmailReadError_(messageId)); return true;
   }
   let message;
   try { message = canonicalGmailMessage_(raw); } catch (e) {
-    mailboxReadFailure_(state.journalSheet, messageId); result.errors.push(gmailReadError_(messageId)); return true;
+    mailboxReadFailure_(state.journalSheet, messageId, scan); result.errors.push(gmailReadError_(messageId)); return true;
   }
   if (mailboxDeadlineReached_(state._deadlineMs)) return false;
   if (enforceWindow && (message.receivedAtMs < scan.startMs || message.receivedAtMs > scan.endMs)) {
@@ -202,9 +212,10 @@ function mailboxProcessMessage_(state, scan, messageId, enforceWindow, onMessage
   return true;
 }
 
-function mailboxReadFailure_(journalSheet, messageId) {
+function mailboxReadFailure_(journalSheet, messageId, scan) {
   const journal = getMessageState_(journalSheet, messageId) || newMessageState_(messageId);
-  journal.status = 'failed'; journal.retryCount++; journal.failureStage = 'read';
+  if (!scan || !Number.isSafeInteger(scan.startMs) || !Number.isSafeInteger(scan.endMs)) fail_('STATE');
+  journal.status = 'failed'; journal.retryCount++; journal.failureStage = 'read|' + scan.startMs + '|' + scan.endMs;
   journal.lastError = 'MAIL'; journal.updatedAt = new Date().toISOString();
   saveMessageState_(journalSheet, journal);
 }
