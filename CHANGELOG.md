@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Treat the email subject as an independent evidence span, preserve exact
+  case/Unicode/punctuation coupon identities, prevent sender metadata from
+  grounding offer facts, consolidate sparse deterministic codes with their
+  evidenced AI descriptions, and use the correct global Vertex endpoint.
+
 - Recognize gcloud's exact owner-pinned missing bootstrap-secret diagnostic and
   either canonical project identity in its ancestor response, while rejecting
   ambiguous aliases, foreign identities, and unrelated diagnostics.
@@ -19,6 +24,9 @@
   evaluation cannot fail when the locale module loads later.
 
 ### Added
+
+- Add an extraction outcome contract that distinguishes complete and incomplete
+  coverage without letting an empty candidate list authorize archiving.
 
 - Harden Apps Script bootstrap deployment: distinguish the automatic HEAD
   deployment, accept canonical Secret Manager project-number resources, reject

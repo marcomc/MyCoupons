@@ -79,7 +79,7 @@ function validateReviewRow_(row, message, displayRow, imageEvidence, formulas, c
   const candidate = {merchant: merchant, website: website, code: code, discountType: discountType, discountValue: discountValue,
     minimumSpend: reviewSourceValue_(row[6]), validOn: reviewSourceValue_(row[7]), exclusions: reviewSourceValue_(row[8]), expiry: expiry, usageLimits: reviewSourceValue_(row[10]), currency: reviewSourceValue_(row[20])};
   const source = candidateSource_(message);
-  const spans = source.spans.concat([message.subject, message.sender].filter(function (value) { return typeof value === 'string' && value; }));
+  const spans = source.spans;
   if (discountType || discountValue) {
     const pairedImage = reviewFieldImageEvidence_(imageEvidence, 'discountType', discountType, source.images) &&
       reviewFieldImageEvidence_(imageEvidence, 'discountValue', discountValue, source.images) &&
