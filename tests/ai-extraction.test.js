@@ -57,6 +57,27 @@ test('generic code introductions stay with grounded AI while explicit forms rema
   const verificationOutcome = ctx.extractCouponOutcome_(verification, empty);
   assert.equal(verificationOutcome.verifiedNonOffer, true);
   assert.deepEqual(Array.from(ctx.deterministicCandidates_({text: 'Use the code LOGIN77 to verify your account.', incomplete: false})), []);
+  const authenticationProposal = aiResponse({merchant: 'Account', code: 'LOGIN77', evidence: {merchant: {quote: 'Use the code LOGIN77 to verify your account.'}, code: {quote: 'Use the code LOGIN77 to verify your account.'}}});
+  const authenticationOutcome = ctx.extractCouponOutcome_({text: 'Use the code LOGIN77 to verify your account.', incomplete: false}, {fetch: () => ({status: 200,
+    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: authenticationProposal.text}]}}]})})});
+  assert.deepEqual(Array.from(authenticationOutcome.candidates), []);
+  assert.equal(authenticationOutcome.invalidated, true);
+  assert.equal(authenticationOutcome.verifiedNonOffer, false);
+  assert.equal(authenticationOutcome.archiveAllowed, false);
+  const mixedAuthenticationOutcome = ctx.extractCouponOutcome_({text: 'Use the code LOGIN77 to verify your account. Brand coupon code SAVE20', incomplete: false}, {fetch: () => ({status: 200,
+    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: authenticationProposal.text}]}}]})})});
+  assert.deepEqual(Array.from(mixedAuthenticationOutcome.candidates, candidate => candidate.code), ['SAVE20']);
+  assert.equal(mixedAuthenticationOutcome.invalidated, true);
+  const loginOffer = {text: 'Brand members: use code SAVE20 after login for 20% off.', incomplete: false};
+  const loginOfferProposal = aiResponse({code: 'SAVE20', evidence: {merchant: {quote: loginOffer.text}, code: {quote: loginOffer.text}}});
+  assert.equal(ctx.extractCouponOutcome_(loginOffer, {fetch: () => ({status: 200,
+    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: loginOfferProposal.text}]}}]})})}).candidates[0].code, 'SAVE20');
+  const collision = {text: 'Use the code LOGIN77 to verify your account. Brand coupon code LOGIN77 gives 20% off.', incomplete: false};
+  const collisionProposal = aiResponse({merchant: 'Account', code: 'LOGIN77', evidence: {merchant: {quote: 'Use the code LOGIN77 to verify your account.'}, code: {quote: 'Use the code LOGIN77 to verify your account.'}}});
+  const collisionOutcome = ctx.extractCouponOutcome_(collision, {fetch: () => ({status: 200,
+    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: collisionProposal.text}]}}]})})});
+  assert.deepEqual(Array.from(collisionOutcome.candidates, candidate => [candidate.merchant, candidate.code]), [['', 'LOGIN77']]);
+  assert.equal(collisionOutcome.invalidated, true);
   assert.deepEqual(Array.from(ctx.deterministicCandidates_({text: 'Coupon code SAVE20 Promo code PLUS20 Discount code LESS20 Codice sconto ÈTÉ+20', incomplete: false}), c => c.code),
     ['SAVE20', 'PLUS20', 'LESS20', 'ÈTÉ+20']);
   const genericCoupon = {text: 'Brand promo: usa il codice ÈTÉ+20', incomplete: false};
@@ -64,6 +85,7 @@ test('generic code introductions stay with grounded AI while explicit forms rema
   const ai = aiResponse({code: 'ÈTÉ+20', evidence: {merchant: {quote: 'Brand promo: usa il codice ÈTÉ+20'}, code: {quote: 'Brand promo: usa il codice ÈTÉ+20'}}});
   ctx.callGeminiModel_ = () => ai;
   assert.equal(ctx.extractCouponOutcome_(genericCoupon).candidates[0].code, 'ÈTÉ+20');
+  assert.match(ctx.buildCandidatePrompt_(genericCoupon), /Do not extract account, login, or verification codes/);
   const mixed = {text: verification.text + ' Brand coupon code SAVE20', incomplete: false};
   assert.deepEqual(Array.from(ctx.extractCouponOutcome_(mixed, empty).candidates, c => c.code), ['SAVE20']);
   assert.equal(ctx.extractCouponOutcome_({...mixed, incomplete: true}, empty).verifiedNonOffer, false);

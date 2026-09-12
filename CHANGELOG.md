@@ -6,7 +6,8 @@
 
 - Leave weak generic Italian and English code introductions to evidence-gated AI,
   so authentication notices cannot synthesize coupon-review rows. Explicit
-  coupon/promo/discount forms remain deterministic.
+  coupon/promo/discount forms remain deterministic, and authentication-only AI
+  code proposals are rejected during candidate projection.
 
 - Bind Gemini extraction values to typed evidence in a shared JSON response
   schema on both backends. Validate the complete response before projection,

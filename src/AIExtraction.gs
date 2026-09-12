@@ -69,6 +69,7 @@ function candidatePrompt_(message) {
     'Set review=true for uncertain facts or actual offer information that could not be represented. Optional fields absent from the source may be null without requiring review.',
     'Preserve exact code case, Unicode and punctuation. Use source wording for descriptive values including notes, not summaries.',
     'Use HTTPS websites and explicit YYYY-MM-DD expiry supported by the source. discountValue and minimumSpend are scalar numeric strings without units.',
+    'Do not extract account, login, or verification codes as coupon offers. A mixed message may still contain an independently evidenced coupon offer.',
     'discountType is the exact unit beside the discount amount, such as %, EUR, or a currency symbol; never a phrase such as percent off or % off. The type and value quotes must support the same adjacent amount and unit.',
     'An image-only fact is always review=true. Incomplete source coverage requires review=true and cannot verify absence of an offer.',
     'Each candidate has exactly these keys: ' + aiCandidateKeys_().join(', ') + '.',
@@ -123,6 +124,14 @@ function parseAICandidateOutcome_(response, message) {
   const candidates = body.candidates.map(function (candidate) {
     const raw = projectAIWireCandidate_(candidate);
     const normalized = normalizeCandidate_(raw, message);
+    // A grounded token in an authentication-only sentence is not an offer.
+    // Evaluate each candidate, rather than excluding a mixed source message.
+    const codeEvidence = ownValue_(raw.evidence, 'code');
+    const codeQuote = codeEvidence && ownValue_(codeEvidence, 'quote');
+    if (normalized.code && authenticationCodeOnly_(normalized.code, codeQuote, source)) {
+      invalidated++;
+      return null;
+    }
     if (!(normalized.merchant || normalized.code || normalized.website || normalized.discountType && normalized.discountValue)) {
       invalidated++;
       return null;

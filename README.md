@@ -178,6 +178,9 @@ The example configuration contains product defaults only.
   forms are left to evidence-gated AI rather than a proximity heuristic; this
   avoids treating authentication tokens as coupons without excluding mixed
   account-and-offer messages.
+  Candidate projection also rejects a proposed code whose complete sourced
+  sentence is authentication-only, so an AI response cannot turn a login or
+  verification code into a review row or archive authority.
   Deterministic candidates currently require review. Tokens end at whitespace;
   one matching pair of outer ASCII quotes or angle brackets may wrap a token.
   Internal punctuation is never silently removed. Introducers require whitespace

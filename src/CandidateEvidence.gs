@@ -75,6 +75,25 @@ function deterministicCandidateOutcome_(message) {
   });
   return {candidates: codes.slice(0, MC.maxCandidates), complete: complete && codes.length <= MC.maxCandidates};
 }
+function authenticationCodeOnly_(code, quote, source) {
+  if (!code || typeof quote !== 'string' || !quote || !source || !Array.isArray(source.evidenceSpans)) return false;
+  let evidenceOccurrences = 0;
+  let authenticationOnly = true;
+  source.evidenceSpans.forEach(function (span) {
+    groundedFieldOccurrences_('code', code, quote, span).forEach(function (occurrence) {
+      evidenceOccurrences++;
+      const before = span.slice(0, occurrence.start);
+      const after = span.slice(occurrence.end);
+      const sentenceStart = Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'), before.lastIndexOf('?'), before.lastIndexOf('\n')) + 1;
+      const sentenceEndMatch = /[.!?\n]/u.exec(after);
+      const sentence = span.slice(sentenceStart, occurrence.end + (sentenceEndMatch ? sentenceEndMatch.index : after.length));
+      const authentication = /(?:\b(?:account|authentication|login|log in|one[ -]?time|otp|verify|verification)\b|\b(?:accesso|account|autenticazione|monouso|verifica|verificare)\b)/iu.test(sentence);
+      const offer = /(?:\b(?:coupon|promo(?:tional|zione|zionale)?|sconto|offerta|risparmia|salva|discount|offer|save|sale)\b|\p{Nd}\s*%)/iu.test(sentence);
+      if (!authentication || offer) authenticationOnly = false;
+    });
+  });
+  return evidenceOccurrences > 0 && authenticationOnly;
+}
 function rawOccurrences_(value, source, normalized) {
   if (!wellFormedUtf16_(value) || !wellFormedUtf16_(source)) return [];
   const query = normalized ? String(value).trim() : String(value);
