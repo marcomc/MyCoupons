@@ -7,9 +7,9 @@ const MC_FINAL_MESSAGE_STATES = Object.freeze(['confirmed', 'ignored']);
 
 function mailboxScanState_(recoveryStart, nowMs, installationId) {
   if (!Number.isSafeInteger(recoveryStart) || recoveryStart < 0 ||
-    !Number.isSafeInteger(nowMs) || nowMs < recoveryStart) fail_('STATE');
-  return {version: MC_MAILBOX_SCAN_STATE_VERSION, startMs: recoveryStart, endMs: nowMs,
-    installationId: installationId || '', pageToken: '', pendingNextPageToken: '', pendingIds: [], retryCursor: '', complete: false};
+    !Number.isSafeInteger(nowMs) || nowMs < 0) fail_('STATE');
+  return {version: MC_MAILBOX_SCAN_STATE_VERSION, startMs: recoveryStart, endMs: Math.max(recoveryStart, nowMs),
+    installationId: installationId || '', pageToken: '', pendingNextPageToken: '', pendingIds: [], retryCursor: '', complete: nowMs < recoveryStart};
 }
 
 function validMailboxScanState_(value) {
@@ -34,7 +34,7 @@ function loadMailboxScanState_(recoveryStart, installationId) {
   const raw = props_().getProperty(MC_MAILBOX_SCAN_STATE_KEY);
   if (!raw) {
     const initial = mailboxScanState_(recoveryStart, Date.now(), installationId);
-    saveMailboxScanState_(initial);
+    if (!initial.complete) saveMailboxScanState_(initial);
     return initial;
   }
   let state;
@@ -42,14 +42,14 @@ function loadMailboxScanState_(recoveryStart, installationId) {
   if (!validMailboxScanState_(state)) fail_('STATE');
   if (state.installationId !== (installationId || '')) {
     state = mailboxScanState_(recoveryStart, Date.now(), installationId);
-    saveMailboxScanState_(state);
+    if (!state.complete) saveMailboxScanState_(state);
     return state;
   }
   if (state.complete) {
     const previousRetryCursor = state.retryCursor;
     state = mailboxScanState_(state.endMs, Date.now(), installationId);
     state.retryCursor = previousRetryCursor;
-    saveMailboxScanState_(state);
+    if (!state.complete) saveMailboxScanState_(state);
   }
   return state;
 }
@@ -88,6 +88,9 @@ function scanCouponMessagesInSession_(state, onMessage, accumulator) {
   if (typeof onMessage !== 'function') fail_('STATE');
   const result = accumulator || {messages: [], errors: [], truncated: false};
   let scan = loadMailboxScanState_(state.recoveryStart, state.config && mailboxInstallationId_(state.config));
+  // A future recovery date is not a completed discovery checkpoint. Keep this
+  // empty interval ephemeral so a corrected sheet date can take effect next run.
+  if (scan.complete) { result.waitingUntilMs = scan.startMs; return result; }
   let remaining = MC_GMAIL_MAX_MESSAGES_PER_RUN;
   let pages = 0;
   const seenPageTokens = Object.create(null);

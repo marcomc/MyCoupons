@@ -167,10 +167,16 @@ function runMailboxScheduledImport_(event) {
       const outcome = scheduledSummary_(state, before, result);
       // Cleanup failures must not erase rows/links already collected this run.
       try {
-        const scan = JSON.parse(props_().getProperty(MC_MAILBOX_SCAN_STATE_KEY));
-        if (!validMailboxScanState_(scan) || scan.installationId !== mailboxInstallationId_(config)) fail_('STATE');
         const continuation = mailboxContinuation_(config);
-        if (scan.complete || continuation.record.runs >= MC_CONTINUATION_MAX_RUNS) stopMailboxContinuation_(continuation);
+        if (result.waitingUntilMs !== undefined) {
+          if (!Number.isSafeInteger(result.waitingUntilMs) || result.waitingUntilMs < 0) fail_('STATE');
+          stopMailboxContinuation_(continuation);
+        }
+        else {
+          const scan = JSON.parse(props_().getProperty(MC_MAILBOX_SCAN_STATE_KEY));
+          if (!validMailboxScanState_(scan) || scan.installationId !== mailboxInstallationId_(config)) fail_('STATE');
+          if (scan.complete || continuation.record.runs >= MC_CONTINUATION_MAX_RUNS) stopMailboxContinuation_(continuation);
+        }
       } catch (e) { outcome.errors.push({messageId: '', code: errorCode_(e)}); }
       return outcome;
     }, deadlineMs);

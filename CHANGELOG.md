@@ -33,6 +33,7 @@
   execution slots, with installation-scoped lifecycle and image deadlines.
   Indexed journal sessions avoid per-message full-sheet rereads and retain
   fail-closed write verification and recovery after ambiguous writes.
+  Future recovery dates wait without querying Gmail or advancing the cursor.
 - Retain code-less messages as awaiting extraction, without false failure
   notifications, hot retries or archive authority; automatic AI consumption
   remains a separate increment.

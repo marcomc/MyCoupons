@@ -45,6 +45,8 @@ The example configuration contains product defaults only.
   keys, candidate row references, and archive/label checkpoints.
 - Recovery starts on the latest real coupon day in `Europe/Rome`; an empty
   coupon tab requires the configured `initialDate`.
+  A future recovery date waits without Gmail queries, errors or a persisted
+  cursor; a later daily run starts when due, or uses a corrected recovery date.
 - Scan all Gmail messages returned by Gmail's default search (including every
   destination label and read state, while retaining Gmail's default spam/trash
   exclusion). The first window starts from the latest real coupon day; later

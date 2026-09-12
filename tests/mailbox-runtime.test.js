@@ -430,3 +430,72 @@ test('durable summary recovers confirmed counts and failed-review links without 
   const unchanged = f.ctx.scheduledSummary_(f.state, f.ctx.readMessageJournal_(f.state.journalSheet), {messages: [], errors: []});
   assert.equal(unchanged.imported, 0); assert.equal(unchanged.review, 0);
 });
+
+test('future configured or sheet recovery dates wait without queries or cursor advancement, then run when due', () => {
+  for (const source of ['config', 'sheet']) {
+    const f = fixture(1); const requested = Date.parse('2025-02-04T23:00:00Z');
+    f.advance(requested - 3 * 86400000 - f.now());
+    f.config.initialDate = '2025-02-01';
+    if (source === 'config') {
+      f.config.initialDate = '2025-02-05';
+    } else {
+      const row = Array(26).fill('');
+      row[0] = '2025-02-05'; row[1] = 'Merchant'; row[3] = 'FUTURE'; row[11] = 'source';
+      f.state.couponSheet.rows.push(row);
+    }
+    f.properties.MYCOUPONS_CONFIG = JSON.stringify(f.config);
+    f.ctx.ensureSheetState_ = config => {
+      f.state.recoveryStart = f.ctx.recoveryStartForSheet_(f.state.couponSheet, config);
+      assert.equal(f.state.recoveryStart, requested, source);
+      return f.state;
+    };
+    f.messages[0].at = requested;
+    for (let day = 0; day < 3; day++) {
+      const result = f.ctx.runScheduledImport();
+      assert.equal(result.errors.length, 0, source); assert.equal(f.triggers.length, 0, source);
+      assert.equal(f.listed.length, 0, source); assert.equal(f.sent.length, 0, source);
+      assert.equal(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE, undefined, source);
+      f.advance(86400000);
+    }
+    assert.equal(f.ctx.runScheduledImport().errors.length, 0, source);
+    assert.equal(f.fetched.length, 1, source);
+    const scan = JSON.parse(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE);
+    assert.equal(scan.startMs, requested, source); assert.equal(scan.complete, true, source);
+  }
+});
+
+test('correcting a future sheet recovery date resumes immediately without an idle cursor blocking it', () => {
+  const f = fixture(1); const original = Date.parse('2025-01-31T23:00:00Z');
+  const row = Array(26).fill('');
+  row[0] = '2025-02-05'; row[1] = 'Merchant'; row[3] = 'FUTURE'; row[11] = 'source';
+  f.state.couponSheet.rows.push(row);
+  f.ctx.ensureSheetState_ = config => {
+    f.state.recoveryStart = f.ctx.recoveryStartForSheet_(f.state.couponSheet, config);
+    return f.state;
+  };
+  assert.equal(f.ctx.runScheduledImport().errors.length, 0);
+  assert.equal(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE, undefined);
+  row[0] = '2025-02-01';
+  assert.equal(f.ctx.runScheduledImport().errors.length, 0); assert.equal(f.fetched.length, 1);
+  assert.equal(JSON.parse(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE).startMs, original);
+});
+
+test('existing matching cursors take precedence and mismatched cursors remain untouched while waiting', () => {
+  const active = fixture(100); active.ctx.runScheduledImport();
+  const prior = JSON.parse(active.properties.MYCOUPONS_MAILBOX_SCAN_STATE);
+  active.state.recoveryStart = active.now() + 86400000;
+  assert.equal(active.continuation().errors.length, 0); assert.equal(active.fetched.length, 100);
+  const completed = JSON.parse(active.properties.MYCOUPONS_MAILBOX_SCAN_STATE);
+  assert.equal(completed.startMs, prior.startMs); assert.equal(completed.endMs, prior.endMs);
+  assert.equal(completed.complete, true);
+  const foreign = fixture(1); const start = foreign.state.recoveryStart;
+  const old = foreign.ctx.mailboxScanState_(start, foreign.now(), 'previous-installation'); old.pendingIds = ['bad'];
+  foreign.ctx.saveMailboxScanState_(old); const raw = foreign.properties.MYCOUPONS_MAILBOX_SCAN_STATE;
+  foreign.state.recoveryStart = foreign.now() + 86400000;
+  assert.equal(foreign.ctx.runScheduledImport().errors.length, 0);
+  assert.equal(foreign.properties.MYCOUPONS_MAILBOX_SCAN_STATE, raw);
+  assert.equal(foreign.fetched.length, 0); assert.equal(foreign.triggers.length, 0);
+  foreign.state.recoveryStart = start;
+  assert.equal(foreign.ctx.runScheduledImport().errors.length, 0);
+  assert.deepEqual(foreign.fetched, ['1']);
+});
