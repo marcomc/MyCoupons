@@ -16,8 +16,8 @@ Private Gmail-to-Google-Sheets coupon importer built with Google Apps Script.
 
 The current increment provides configuration validation, coupon candidate
 parsing and normalization, historical recovery dates, safe spreadsheet and
-Gmail-label resource setup, a private per-message journal, bounded read-only
-Gmail message ingestion, and local deterministic import-row persistence.
+Gmail-label resource setup, a private per-message journal, a bounded resumable
+mailbox scan, and local deterministic import-row persistence.
 Extraction treats the subject as an independent evidenced source, preserves
 exact case/Unicode/punctuation coupon identities, and consolidates a sparse
 deterministic code with an evidenced AI description without authorizing any
@@ -45,9 +45,19 @@ The example configuration contains product defaults only.
   keys, candidate row references, and archive/label checkpoints.
 - Recovery starts on the latest real coupon day in `Europe/Rome`; an empty
   coupon tab requires the configured `initialDate`.
-- Read messages assigned to the configured label from the recovery date in
-  bounded pages, irrespective of read state. Final journal states are skipped
-  before fetching message contents, and Gmail is never mutated by this reader.
+- Scan all Gmail messages returned by Gmail's default search (including every
+  destination label and read state, while retaining Gmail's default spam/trash
+  exclusion). The first window starts from the latest real coupon day; later
+  windows advance from a durable cursor, never from a newer coupon row.
+- Freeze each scan's end before paging and store its page cursor plus every
+  listed, unprocessed message ID before fetching message content. Exact
+  `internalDate` checks bound the safe epoch-second query overlap. A stale
+  provider page token restarts only that frozen window; other list failures
+  fail closed. Read/extraction failures remain journal-backed retries after a
+  window advances.
+- Process at most a bounded number of messages per run, streaming one canonical
+  message through row persistence before fetching the next. Final journal
+  states are skipped before fetching, and Gmail is never mutated by this reader.
 - Canonical message payloads preserve the message ID, thread ID, received time,
   sender, subject, plain text, raw HTML, and canonical Gmail link. MIME
   alternatives remain independent; unsupported content marks the payload

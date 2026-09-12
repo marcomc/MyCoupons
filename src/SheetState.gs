@@ -1,5 +1,5 @@
 const MC_MESSAGE_STATE_STATUSES = Object.freeze([
-  'pending', 'processing', 'review', 'confirmed', 'ignored', 'failed'
+  'pending', 'processing', 'review', 'confirmed', 'ignored', 'failed', 'deferred'
 ]);
 const MC_MESSAGE_STATE_KEYS = Object.freeze([
   'version', 'messageId', 'status', 'attempts', 'retryCount', 'dedupeKeys',

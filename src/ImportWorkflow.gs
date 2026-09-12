@@ -1,11 +1,21 @@
 /* Deterministic, read-only import orchestration. Gmail mutations are deliberately absent. */
 function runImportWorkflow_(input) {
   const state = input || ensureSheetState_();
-  if (!state.couponSheet || !state.journalSheet || !Array.isArray(state.messages)) {
-    const read = readCouponMessages_(state);
-    state.messages = read.messages;
-    state.errors = read.errors;
-    state.truncated = read.truncated;
+  if (!state.couponSheet || !state.journalSheet) fail_('STATE');
+  if (!Array.isArray(state.messages)) {
+    // The scanner invokes this callback for one durable pending ID at a time.
+    // Consequently image acquisition cannot defer every sheet write until the
+    // complete mailbox page has been fetched.
+    const scanned = readCouponMessages_(state, function (message) {
+      return processCouponMessage_(state, message);
+    });
+    const streamed = {imported: 0, review: 0, errors: scanned.errors, messages: scanned.messages,
+      truncated: scanned.truncated};
+    scanned.messages.forEach(function (outcome) {
+      if (outcome.status === 'confirmed') streamed.imported += outcome.rows.length;
+      if (outcome.status === 'review') streamed.review += outcome.rows.length;
+    });
+    return streamed;
   }
   const result = {imported: 0, review: 0, errors: state.errors || [], messages: [], truncated: !!state.truncated};
   state.messages.forEach(function (message) {

@@ -25,6 +25,11 @@
 
 ### Added
 
+- Add a frozen, resumable Gmail mailbox scanner that discovers all default-search
+  mail independently of labels and read state, persists pending IDs before
+  bounded streaming reads, retries failed IDs durably, and safely restarts only
+  exact stale page-token failures without moving a scan window.
+
 - Add an extraction outcome contract that distinguishes complete and incomplete
   coverage without letting an empty candidate list authorize archiving.
 

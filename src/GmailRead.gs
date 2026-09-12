@@ -1,73 +1,205 @@
 const MC_GMAIL_PAGE_SIZE = 50;
 const MC_GMAIL_MAX_PAGES = 20;
+const MC_GMAIL_MAX_MESSAGES_PER_RUN = 10;
+const MC_MAILBOX_SCAN_STATE_KEY = 'MYCOUPONS_MAILBOX_SCAN_STATE';
+const MC_MAILBOX_SCAN_STATE_VERSION = 1;
 const MC_FINAL_MESSAGE_STATES = Object.freeze(['confirmed', 'ignored']);
 
-function readCouponMessages_(state) {
-  if (!state || typeof state !== 'object' || !state.label || !state.journalSheet ||
-    typeof state.recoveryStart !== 'number' || !isFinite(state.recoveryStart)) fail_('STATE');
-  return readGmailMessages_(state.label, state.recoveryStart, state.journalSheet, state._deadlineMs);
+function mailboxScanState_(recoveryStart, nowMs) {
+  if (!Number.isSafeInteger(recoveryStart) || recoveryStart < 0 ||
+    !Number.isSafeInteger(nowMs) || nowMs < recoveryStart) fail_('STATE');
+  return {version: MC_MAILBOX_SCAN_STATE_VERSION, startMs: recoveryStart, endMs: nowMs,
+    pageToken: '', pendingNextPageToken: '', pendingIds: [], retryCursor: '', complete: false};
 }
 
-function readGmailMessages_(label, recoveryStart, journalSheet, deadlineMs) {
-  if (!label || typeof label.id !== 'string' || !label.id ||
-    typeof label.name !== 'string' || !label.name ||
-    typeof recoveryStart !== 'number' || !isFinite(recoveryStart) || recoveryStart < 0 ||
-    !journalSheet) fail_('MAIL');
-  const states = readMessageJournal_(journalSheet);
+function validMailboxScanState_(value) {
+  return recordWithExactKeys_(value, ['version', 'startMs', 'endMs', 'pageToken',
+    'pendingNextPageToken', 'pendingIds', 'retryCursor', 'complete']) &&
+    value.version === MC_MAILBOX_SCAN_STATE_VERSION && Number.isSafeInteger(value.startMs) && value.startMs >= 0 &&
+    Number.isSafeInteger(value.endMs) && value.endMs >= value.startMs &&
+    mailboxPageToken_(value.pageToken) && mailboxPageToken_(value.pendingNextPageToken) &&
+    mailboxMessageIds_(value.pendingIds) && (!value.retryCursor || validGmailApiId_(value.retryCursor)) &&
+    typeof value.complete === 'boolean' && (!value.complete ||
+      (!value.pageToken && !value.pendingNextPageToken && !value.pendingIds.length));
+}
+
+function mailboxPageToken_(value) { return typeof value === 'string' && value.length <= 1000; }
+function mailboxMessageIds_(value) {
+  return Array.isArray(value) && value.length <= MC_GMAIL_PAGE_SIZE && value.every(validGmailApiId_) &&
+    new Set(value).size === value.length;
+}
+function loadMailboxScanState_(recoveryStart) {
+  if (!Number.isSafeInteger(recoveryStart) || recoveryStart < 0) fail_('STATE');
+  const raw = props_().getProperty(MC_MAILBOX_SCAN_STATE_KEY);
+  if (!raw) {
+    const initial = mailboxScanState_(recoveryStart, Date.now());
+    saveMailboxScanState_(initial);
+    return initial;
+  }
+  let state;
+  try { state = JSON.parse(raw); } catch (e) { fail_('STATE'); }
+  if (!validMailboxScanState_(state)) fail_('STATE');
+  if (state.complete) {
+    const previousRetryCursor = state.retryCursor;
+    state = mailboxScanState_(state.endMs, Date.now());
+    state.retryCursor = previousRetryCursor;
+    saveMailboxScanState_(state);
+  }
+  return state;
+}
+
+function saveMailboxScanState_(state) {
+  if (!validMailboxScanState_(state)) fail_('STATE');
+  props_().setProperty(MC_MAILBOX_SCAN_STATE_KEY, JSON.stringify(state));
+}
+
+function completeMailboxScanState_(scan) {
+  scan.pageToken = ''; scan.pendingNextPageToken = ''; scan.pendingIds = []; scan.complete = true;
+  saveMailboxScanState_(scan);
+}
+
+function mailboxQuery_(scan) {
+  // Gmail date strings are PST-defined. Epoch seconds plus an exact internalDate
+  // filter below keep the frozen Europe/Rome recovery boundary authoritative.
+  return 'after:' + (Math.floor(scan.startMs / 1000) - 1) + ' before:' + (Math.floor(scan.endMs / 1000) + 1);
+}
+
+function mailboxDeadlineReached_(deadlineMs) { return !!deadlineMs && Date.now() >= deadlineMs; }
+
+function readCouponMessages_(state, onMessage) {
+  if (!state || typeof state !== 'object' || !state.journalSheet ||
+    !Number.isSafeInteger(state.recoveryStart) || state.recoveryStart < 0) fail_('STATE');
+  return scanCouponMessages_(state, onMessage || function () {});
+}
+
+function scanCouponMessages_(state, onMessage) {
+  if (typeof onMessage !== 'function') fail_('STATE');
   const result = {messages: [], errors: [], truncated: false};
-  const seen = Object.create(null);
-  const seenPageTokens = Object.create(null);
-  // Gmail's date search boundary is provider-defined; include the prior local
-  // day and apply the exact recovery timestamp below before returning a message.
-  const query = 'after:' + Utilities.formatDate(new Date(recoveryStart - 86400000), MC.defaults.timeZone, 'yyyy/MM/dd');
-  let pageToken = '';
+  let scan = loadMailboxScanState_(state.recoveryStart);
+  let remaining = MC_GMAIL_MAX_MESSAGES_PER_RUN;
   let pages = 0;
-  do {
-    if (deadlineMs && Date.now() >= deadlineMs) { result.truncated = true; break; }
-    if (pages >= MC_GMAIL_MAX_PAGES) {
-      result.truncated = true;
-      break;
+  const seenPageTokens = Object.create(null);
+
+  // Failed/abandoned records stay reachable even after their original window has
+  // completed. They are retried before new listing, but bounded so they cannot starve it.
+  const retryCandidates = Object.keys(readMessageJournal_(state.journalSheet)).filter(function (id) {
+    const journal = getMessageState_(state.journalSheet, id);
+    return journal && ['pending', 'processing', 'failed'].indexOf(journal.status) >= 0 &&
+      scan.pendingIds.indexOf(id) < 0 && validGmailApiId_(id);
+  }).sort();
+  const retryStart = scan.retryCursor ? (retryCandidates.indexOf(scan.retryCursor) + 1) % retryCandidates.length : 0;
+  const retries = retryCandidates.slice(0, Math.min(3, remaining)).map(function (_, index) {
+    return retryCandidates[(retryStart + index) % retryCandidates.length];
+  });
+  if (retries.length) { scan.retryCursor = retries[retries.length - 1]; saveMailboxScanState_(scan); }
+  for (let index = 0; index < retries.length; index++) {
+    if (mailboxDeadlineReached_(state._deadlineMs)) { result.truncated = true; return result; }
+    mailboxProcessMessage_(state, scan, retries[index], false, onMessage, result);
+    remaining--;
+  }
+
+  while (remaining > 0) {
+    if (mailboxDeadlineReached_(state._deadlineMs)) { result.truncated = true; return result; }
+    if (scan.pendingIds.length) {
+      const id = scan.pendingIds[0];
+      if (!mailboxProcessMessage_(state, scan, id, true, onMessage, result)) {
+        result.truncated = true;
+        return result;
+      }
+      remaining--;
+      if (mailboxDeadlineReached_(state._deadlineMs)) { result.truncated = true; return result; }
+      scan.pendingIds.shift();
+      saveMailboxScanState_(scan);
+      if (scan.pendingIds.length) continue;
+      scan.pageToken = scan.pendingNextPageToken;
+      scan.pendingNextPageToken = '';
+      saveMailboxScanState_(scan);
+      if (!scan.pageToken) { completeMailboxScanState_(scan); return result; }
+      continue;
     }
-    pages++;
+    if (pages++ >= MC_GMAIL_MAX_PAGES) { result.truncated = true; return result; }
     let page;
     try {
-      const options = {labelIds: [label.id], maxResults: MC_GMAIL_PAGE_SIZE, q: query};
-      if (pageToken) options.pageToken = pageToken;
+      const options = {maxResults: MC_GMAIL_PAGE_SIZE, q: mailboxQuery_(scan)};
+      if (scan.pageToken) options.pageToken = scan.pageToken;
       page = Gmail.Users.Messages.list('me', options);
     } catch (e) {
+      if (scan.pageToken && invalidMailboxPageToken_(e)) {
+        scan.pageToken = ''; scan.pendingNextPageToken = '';
+        Object.keys(seenPageTokens).forEach(function (token) { delete seenPageTokens[token]; });
+        saveMailboxScanState_(scan);
+        continue;
+      }
       fail_('MAIL');
     }
+    if (mailboxDeadlineReached_(state._deadlineMs)) { result.truncated = true; return result; }
     if (!page || typeof page !== 'object' || page.messages != null && !Array.isArray(page.messages)) fail_('MAIL');
-    const summaries = page.messages || [];
-    summaries.forEach(function (summary) {
-      if (deadlineMs && Date.now() >= deadlineMs) { result.truncated = true; return; }
+    const ids = (page.messages || []).map(function (summary) {
       if (!summary || typeof summary.id !== 'string' || !validGmailApiId_(summary.id)) fail_('MAIL');
-      if (seen[summary.id]) return;
-      seen[summary.id] = true;
-      const state = states[summary.id];
-      if (state && (MC_FINAL_MESSAGE_STATES.indexOf(state.status) >= 0 || state.status === 'review')) return;
-      let raw;
-      try {
-        raw = Gmail.Users.Messages.get('me', summary.id, {format: 'full'});
-      } catch (e) {
-        result.errors.push(gmailReadError_(summary.id));
-        return;
-      }
-      try {
-        if (deadlineMs && Date.now() >= deadlineMs) { result.truncated = true; return; }
-        const message = canonicalGmailMessage_(raw);
-        if (message.receivedAtMs >= recoveryStart) result.messages.push(message);
-      } catch (e) {
-        result.errors.push(gmailReadError_(summary.id));
-      }
+      return summary.id;
     });
-    const nextToken = page.nextPageToken;
-    if (nextToken != null && typeof nextToken !== 'string') fail_('MAIL');
-    if (!nextToken) pageToken = '';
-    else if (seenPageTokens[nextToken]) fail_('MAIL');
-    else { seenPageTokens[nextToken] = true; pageToken = nextToken; }
-  } while (pageToken);
+    if (new Set(ids).size !== ids.length) fail_('MAIL');
+    const next = page.nextPageToken == null ? '' : page.nextPageToken;
+    if (!mailboxPageToken_(next) || next &&
+      (next === scan.pageToken || seenPageTokens[next])) fail_('MAIL');
+    scan.pendingIds = ids;
+    scan.pendingNextPageToken = next;
+    if (scan.pageToken) seenPageTokens[scan.pageToken] = true;
+    saveMailboxScanState_(scan); // Persist discovered work before fetch/image processing.
+    if (!ids.length) {
+      scan.pageToken = next; scan.pendingNextPageToken = '';
+      saveMailboxScanState_(scan);
+      if (!scan.pageToken) { completeMailboxScanState_(scan); return result; }
+    }
+  }
+  result.truncated = true;
   return result;
+}
+
+function invalidMailboxPageToken_(error) {
+  return error && Number(error.code) === 400 && typeof error.message === 'string' &&
+    error.message === 'Invalid page token';
+}
+
+function mailboxProcessMessage_(state, scan, messageId, enforceWindow, onMessage, result) {
+  const journal = getMessageState_(state.journalSheet, messageId);
+  if (journal && (MC_FINAL_MESSAGE_STATES.indexOf(journal.status) >= 0 || journal.status === 'review')) return true;
+  if (!journal) saveMessageState_(state.journalSheet, newMessageState_(messageId));
+  if (mailboxDeadlineReached_(state._deadlineMs)) return false;
+  let raw;
+  try { raw = Gmail.Users.Messages.get('me', messageId, {format: 'full'}); } catch (e) {
+    mailboxReadFailure_(state.journalSheet, messageId); result.errors.push(gmailReadError_(messageId)); return true;
+  }
+  if (mailboxDeadlineReached_(state._deadlineMs)) return false;
+  if (!raw || typeof raw !== 'object' || raw.id !== messageId) {
+    mailboxReadFailure_(state.journalSheet, messageId); result.errors.push(gmailReadError_(messageId)); return true;
+  }
+  let message;
+  try { message = canonicalGmailMessage_(raw); } catch (e) {
+    mailboxReadFailure_(state.journalSheet, messageId); result.errors.push(gmailReadError_(messageId)); return true;
+  }
+  if (mailboxDeadlineReached_(state._deadlineMs)) return false;
+  if (enforceWindow && (message.receivedAtMs < scan.startMs || message.receivedAtMs > scan.endMs)) {
+    const outside = getMessageState_(state.journalSheet, messageId) || newMessageState_(messageId);
+    // A one-second query overlap can surface a just-arrived message beyond this
+    // frozen window. Defer it for the next window rather than finalizing it.
+    outside.status = message.receivedAtMs < scan.startMs ? 'ignored' : 'deferred';
+    outside.outcome = message.receivedAtMs < scan.startMs ? 'outside-window' : 'after-window';
+    outside.updatedAt = new Date().toISOString();
+    saveMessageState_(state.journalSheet, outside);
+    return true;
+  }
+  if (mailboxDeadlineReached_(state._deadlineMs)) return false;
+  const outcome = onMessage(message);
+  if (outcome) result.messages.push(outcome);
+  return true;
+}
+
+function mailboxReadFailure_(journalSheet, messageId) {
+  const journal = getMessageState_(journalSheet, messageId) || newMessageState_(messageId);
+  journal.status = 'failed'; journal.retryCount++; journal.failureStage = 'read';
+  journal.lastError = 'MAIL'; journal.updatedAt = new Date().toISOString();
+  saveMessageState_(journalSheet, journal);
 }
 
 function gmailReadError_(messageId) {
