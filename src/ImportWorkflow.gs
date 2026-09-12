@@ -6,12 +6,18 @@ function runImportWorkflow_(input) {
     // The scanner invokes this callback for one durable pending ID at a time.
     // Consequently image acquisition cannot defer every sheet write until the
     // complete mailbox page has been fetched.
-    const scanned = readCouponMessages_(state, function (message) {
-      return processCouponMessage_(state, message);
-    });
-    const streamed = {imported: 0, review: 0, errors: scanned.errors, messages: scanned.messages,
-      truncated: scanned.truncated};
-    scanned.messages.forEach(function (outcome) {
+    const streamed = {imported: 0, review: 0, errors: [], messages: [], truncated: false};
+    try {
+      const scanned = readCouponMessages_(state, function (message) {
+        return processCouponMessage_(state, message);
+      });
+      streamed.errors = scanned.errors;
+      streamed.messages = scanned.messages;
+      streamed.truncated = scanned.truncated;
+    } catch (e) {
+      streamed.errors.push({messageId: '', code: errorCode_(e)});
+    }
+    streamed.messages.forEach(function (outcome) {
       if (outcome.status === 'confirmed') streamed.imported += outcome.rows.length;
       if (outcome.status === 'review') streamed.review += outcome.rows.length;
     });

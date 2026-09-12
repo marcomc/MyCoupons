@@ -5,19 +5,19 @@ const MC_MAILBOX_SCAN_STATE_KEY = 'MYCOUPONS_MAILBOX_SCAN_STATE';
 const MC_MAILBOX_SCAN_STATE_VERSION = 1;
 const MC_FINAL_MESSAGE_STATES = Object.freeze(['confirmed', 'ignored']);
 
-function mailboxScanState_(recoveryStart, nowMs) {
+function mailboxScanState_(recoveryStart, nowMs, installationId) {
   if (!Number.isSafeInteger(recoveryStart) || recoveryStart < 0 ||
     !Number.isSafeInteger(nowMs) || nowMs < recoveryStart) fail_('STATE');
   return {version: MC_MAILBOX_SCAN_STATE_VERSION, startMs: recoveryStart, endMs: nowMs,
-    pageToken: '', pendingNextPageToken: '', pendingIds: [], retryCursor: '', complete: false};
+    installationId: installationId || '', pageToken: '', pendingNextPageToken: '', pendingIds: [], retryCursor: '', complete: false};
 }
 
 function validMailboxScanState_(value) {
-  return recordWithExactKeys_(value, ['version', 'startMs', 'endMs', 'pageToken',
+  return recordWithExactKeys_(value, ['version', 'startMs', 'endMs', 'installationId', 'pageToken',
     'pendingNextPageToken', 'pendingIds', 'retryCursor', 'complete']) &&
     value.version === MC_MAILBOX_SCAN_STATE_VERSION && Number.isSafeInteger(value.startMs) && value.startMs >= 0 &&
     Number.isSafeInteger(value.endMs) && value.endMs >= value.startMs &&
-    mailboxPageToken_(value.pageToken) && mailboxPageToken_(value.pendingNextPageToken) &&
+    typeof value.installationId === 'string' && value.installationId.length <= 200 && mailboxPageToken_(value.pageToken) && mailboxPageToken_(value.pendingNextPageToken) &&
     mailboxMessageIds_(value.pendingIds) && (!value.retryCursor || validGmailApiId_(value.retryCursor)) &&
     typeof value.complete === 'boolean' && (!value.complete ||
       (!value.pageToken && !value.pendingNextPageToken && !value.pendingIds.length));
@@ -28,20 +28,25 @@ function mailboxMessageIds_(value) {
   return Array.isArray(value) && value.length <= MC_GMAIL_PAGE_SIZE && value.every(validGmailApiId_) &&
     new Set(value).size === value.length;
 }
-function loadMailboxScanState_(recoveryStart) {
+function loadMailboxScanState_(recoveryStart, installationId) {
   if (!Number.isSafeInteger(recoveryStart) || recoveryStart < 0) fail_('STATE');
   const raw = props_().getProperty(MC_MAILBOX_SCAN_STATE_KEY);
   if (!raw) {
-    const initial = mailboxScanState_(recoveryStart, Date.now());
+    const initial = mailboxScanState_(recoveryStart, Date.now(), installationId);
     saveMailboxScanState_(initial);
     return initial;
   }
   let state;
   try { state = JSON.parse(raw); } catch (e) { fail_('STATE'); }
   if (!validMailboxScanState_(state)) fail_('STATE');
+  if (state.installationId !== (installationId || '')) {
+    state = mailboxScanState_(recoveryStart, Date.now(), installationId);
+    saveMailboxScanState_(state);
+    return state;
+  }
   if (state.complete) {
     const previousRetryCursor = state.retryCursor;
-    state = mailboxScanState_(state.endMs, Date.now());
+    state = mailboxScanState_(state.endMs, Date.now(), installationId);
     state.retryCursor = previousRetryCursor;
     saveMailboxScanState_(state);
   }
@@ -75,16 +80,18 @@ function readCouponMessages_(state, onMessage) {
 function scanCouponMessages_(state, onMessage) {
   if (typeof onMessage !== 'function') fail_('STATE');
   const result = {messages: [], errors: [], truncated: false};
-  let scan = loadMailboxScanState_(state.recoveryStart);
+  let scan = loadMailboxScanState_(state.recoveryStart, state.config && state.config.spreadsheetId);
   let remaining = MC_GMAIL_MAX_MESSAGES_PER_RUN;
   let pages = 0;
   const seenPageTokens = Object.create(null);
 
   // Failed/abandoned records stay reachable even after their original window has
   // completed. They are retried before new listing, but bounded so they cannot starve it.
-  const retryCandidates = Object.keys(readMessageJournal_(state.journalSheet)).filter(function (id) {
-    const journal = getMessageState_(state.journalSheet, id);
-    return journal && ['pending', 'processing', 'failed'].indexOf(journal.status) >= 0 &&
+  const journalSnapshot = readMessageJournal_(state.journalSheet);
+  const retryCandidates = Object.keys(journalSnapshot).filter(function (id) {
+    const journal = journalSnapshot[id];
+    return journal && (journal.status === 'pending' || journal.status === 'processing' ||
+      journal.status === 'failed' && !!journal.failureStage) &&
       scan.pendingIds.indexOf(id) < 0 && validGmailApiId_(id);
   }).sort();
   const retryStart = scan.retryCursor ? (retryCandidates.indexOf(scan.retryCursor) + 1) % retryCandidates.length : 0;
