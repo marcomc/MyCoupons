@@ -19,7 +19,23 @@ function sheetMock(rows = [['Message ID', 'State JSON']]) {
 
 function body(value) { const bytes = Buffer.from(value, 'utf8'); return {data: bytes.toString('base64url'), size: bytes.length}; }
 function message(id, receivedAtMs) { return {id, threadId: 'thread-' + id, internalDate: String(receivedAtMs), payload: {mimeType: 'text/plain', headers: [{name: 'From', value: 'offers@example.com'}, {name: 'Subject', value: 'Offer ' + id}], body: body('coupon code SAVE20')}}; }
-function installGmail(ctx, list, get) { const calls = {list: [], get: []}; ctx.Gmail.Users.Messages = {list: (userId, options) => { calls.list.push({userId, options}); return list(options); }, get: (userId, id, options) => { calls.get.push({userId, id, options}); return get(id, options); }}; return calls; }
+function installGmail(ctx, list, get) {
+  const calls = {list: [], get: []};
+  ctx.UrlFetchApp = {fetch: (url, request) => {
+    assert.equal(request.followRedirects, false); assert.equal(request.muteHttpExceptions, true);
+    assert.equal(request.headers.Authorization, 'Bearer oauth-token');
+    const parsed = new URL(url); const options = Object.fromEntries(parsed.searchParams);
+    options.maxResults = Number(options.maxResults);
+    calls.list.push({userId: 'me', options});
+    try { const page = list(options); return {getResponseCode: () => 200, getContentText: () => JSON.stringify(page)}; }
+    catch (error) {
+      if (!error.code) throw error;
+      return {getResponseCode: () => error.code, getContentText: () => JSON.stringify({error: {code: error.code, message: error.message}})};
+    }
+  }};
+  ctx.Gmail.Users.Messages = {get: (userId, id, options) => { calls.get.push({userId, id, options}); return get(id, options); }};
+  return calls;
+}
 function state(journal, startMs, deadlineMs) { return {journalSheet: journal, recoveryStart: startMs, _deadlineMs: deadlineMs}; }
 
 test('discovers all default-search mail in a frozen window without label or unread filters', () => {
@@ -43,7 +59,7 @@ test('persists listed IDs before fetching and retains failed reads through journ
   assert.equal(ctx.getMessageState_(journal, 'abc123').status, 'failed'); assert.equal(ctx.getMessageState_(journal, 'deadbeef').status, 'pending');
 });
 
-test('restarts only an exact invalid page token without moving the frozen window', () => {
+test('restarts a rejected token only after the identical tokenless query succeeds', () => {
   const {ctx} = harness(); const journal = sheetMock();
   const start = Date.parse('2026-05-21T22:00:00Z'); const end = Date.parse('2026-05-23T22:00:00Z');
   const scan = ctx.mailboxScanState_(start, end); scan.pageToken = 'stale'; ctx.saveMailboxScanState_(scan);

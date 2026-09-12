@@ -79,7 +79,9 @@ function processCouponMessage_(state, message) {
     });
     journal.outcome = messageOutcome_(statuses);
     journal.status = journal.outcome === 'archive' ? 'confirmed' : 'review';
-    if (journal.outcome === 'empty') journal.status = 'failed';
+    // No deterministic code is not proof of a non-offer. Retain the source ID
+    // for the later AI pass without retrying it or granting archive authority.
+    if (journal.outcome === 'empty') journal.status = 'awaiting_extraction';
     journal.failureStage = ''; journal.updatedAt = new Date().toISOString();
     saveMessageState_(state.journalSheet, journal);
     return {messageId: message.id, status: journal.status, rows: rows};
@@ -89,6 +91,11 @@ function processCouponMessage_(state, message) {
     saveMessageState_(state.journalSheet, journal);
     return {messageId: message.id, status: 'failed', rows: journal.rowNumbers.slice(), error: journal.lastError};
   }
+}
+
+function awaitingMessageExtraction_(journal) {
+  return journal.status === 'awaiting_extraction' ||
+    journal.status === 'failed' && journal.outcome === 'empty' && !journal.failureStage && !journal.lastError;
 }
 
 function candidateDedupeKey_(message, candidate, index) {

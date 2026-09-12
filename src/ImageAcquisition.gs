@@ -3,7 +3,7 @@ const MC_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
 const MC_IMAGE_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 const MC_IMAGE_MIME_TYPES = Object.freeze(['image/gif', 'image/jpeg', 'image/png', 'image/webp']);
 
-function acquireMessageImages_(raw, html) {
+function acquireMessageImages_(raw, html, deadlineMs) {
   const slots = htmlContent_(html).images;
   const resources = [];
   collectImageParts_(raw && raw.payload, '', resources);
@@ -21,6 +21,7 @@ function acquireMessageImages_(raw, html) {
   let incomplete = false;
   if (slots.length > MC_IMAGE_MAX_COUNT) incomplete = true;
   slots.forEach(function (attrs, index) {
+    if (deadlineMs && Date.now() >= deadlineMs) { incomplete = true; return; }
     if (inspected >= MC_IMAGE_MAX_COUNT) return;
     inspected++;
     const src = typeof attrs.src === 'string' ? attrs.src.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '') : '';
@@ -37,6 +38,7 @@ function acquireMessageImages_(raw, html) {
   });
   resources.forEach(function (resource, index) {
     if (used.indexOf(resource) >= 0) return;
+    if (deadlineMs && Date.now() >= deadlineMs) { incomplete = true; return; }
     if (inspected >= MC_IMAGE_MAX_COUNT) { incomplete = true; return; }
     inspected++;
     const record = materializeImage_(raw.id, slots.length + index, resource, total);

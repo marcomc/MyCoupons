@@ -52,10 +52,14 @@ The example configuration contains product defaults only.
 - Freeze each scan's end before paging and store its page cursor plus every
   listed, unprocessed message ID before fetching message content. Exact
   `internalDate` checks bound the safe epoch-second query overlap. A stale
-  provider page token restarts only that frozen window; other list failures
-  fail closed. Read/extraction failures remain journal-backed retries after a
-  window advances.
-- Process at most a bounded number of messages per run, streaming one canonical
+  provider page token restarts only that frozen window. Listing uses REST:
+  only a structured HTTP 400 followed by a valid response to the identical
+  tokenless query permits restart. Other failures preserve the cursor; no
+  localized Advanced-service error strings are parsed. See the
+  [Gmail error contract](https://developers.google.com/workspace/gmail/api/guides/handle-errors)
+  and [list parameters](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list).
+  Read/extraction failures remain journal-backed retries after a window advances.
+- Process at most 50 messages per run, streaming one canonical
   message through row persistence before fetching the next. Final journal
   states are skipped before fetching, and Gmail is never mutated by this reader.
 - Canonical message payloads preserve the message ID, thread ID, received time,
@@ -66,12 +70,19 @@ The example configuration contains product defaults only.
   fetches only safe HTTPS images, and stores inspected bytes/blob data with
   safe dimensions when known. Rejected, missing, duplicate, redirected,
   oversized, non-image, tracker, and small-pixel resources retain incomplete
-  coverage.
+  coverage. Acquisition starts no further image reads after a 30-second
+  per-message soft budget or the execution's 15-second write reserve. An
+  in-flight synchronous provider request cannot be interrupted; any omitted
+  images retain incomplete coverage.
 - `runImportWorkflow_` consumes canonical reader output, derives deterministic
   candidates, persists bounded 26-column rows, and records candidate row
   references in the journal. Dedupe keys make reruns idempotent while retaining
   user-entered columns. Failed extraction or writes remain retryable; no Gmail
-  mutation is performed.
+  mutation is performed. Messages without deterministic codes retain their IDs
+  as `awaiting_extraction`: no error notification, automatic hot retry or archive
+  authority. Legacy empty/no-error failures are treated equivalently on replay.
+  The automatic AI consumer of these IDs is a separate, not-yet-implemented
+  increment; this scanner does not claim that code-less offers were extracted.
 
 ## Gemini routing
 
@@ -247,10 +258,26 @@ python3 -m compileall -q provisioner tests_python
 
 `installDailyImportTrigger()` installs or reuses one daily clock trigger at
 approximately 08:00 in `Europe/Rome`; Apps Script may apply scheduling jitter.
-`removeDailyImportTrigger()` removes only that owned trigger and refuses to
-choose between duplicates. When its stored trigger ID is missing, configured
+Backlog work uses at most one additional `runMailboxContinuation` clock trigger,
+approximately every five minutes, under the same workflow lock. Its durable
+metadata binds the verified owner, installation and exact trigger UID. Creation
+intent is saved first; unknown/orphan triggers fail closed rather than being
+adopted or duplicated. Completion removes the continuation even when individual
+read failures remain for a later daily retry.
+
+Daily and continuation runs share fifteen execution slots per rolling 24 hours
+(60 minutes of four-minute execution budgets). Exhaustion removes the
+continuation without discarding progress; a daily run after the budget resets
+resumes it. This is a conservative workload cap, not a guarantee against shared
+Apps Script quotas or arbitrary mailbox arrival rates.
+
+`removeDailyImportTrigger()` preflights both owned clock triggers before deleting
+either and refuses to choose between duplicates. When the daily trigger's stored
+ID is missing, configured
 automation removal can recover exactly one matching scheduled trigger; duplicate
-matches remain ambiguous. `runScheduledImport()` serializes the import,
+matches remain ambiguous. This exception does not apply to orphan continuations.
+Reconfiguration cancels the old continuation; failed reconfiguration leaves the
+old daily schedule able to resume. `runScheduledImport()` serializes the import,
 notifies the configured owner only for new imports, newly created review rows,
 or changed errors. Script Properties store a bounded fingerprint/timestamp
 after delivery, plus a bounded pending summary containing validated IDs and

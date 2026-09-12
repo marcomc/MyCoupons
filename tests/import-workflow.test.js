@@ -44,13 +44,19 @@ test('workflow persists deterministic candidates and reruns without duplicates',
   assert.equal(ctx.getMessageState_(journal, 'abc123').status, 'review');
 });
 
-test('workflow records a no-candidate message as retryable and never final', () => {
+test('workflow retains a no-code message awaiting extraction without a failure or archive authority', () => {
   const {ctx} = harness();
   const state = {couponSheet: sheet([HEADERS]), journalSheet: sheet([JOURNAL]),
     messages: [{id: 'deadbeef', receivedAtMs: 0, subject: 'Hello', sender: '', link: 'https://mail.google.com/mail/#all/deadbeef', text: 'Hello', html: '', incomplete: false}]};
   const result = ctx.runImportWorkflow_(state);
-  assert.equal(result.messages[0].status, 'failed');
-  assert.notEqual(ctx.getMessageState_(state.journalSheet, 'deadbeef').status, 'confirmed');
+  assert.equal(result.messages[0].status, 'awaiting_extraction');
+  const saved = ctx.getMessageState_(state.journalSheet, 'deadbeef');
+  assert.equal(saved.lastError, ''); assert.equal(saved.retryCount, 0);
+  assert.equal(saved.archived, false); assert.equal(saved.labelApplied, false);
+  const summary = ctx.scheduledSummary_(state, {}, result);
+  assert.equal(summary.errors.length, 0); assert.equal(summary.review, 0);
+  ctx.MailApp = {sendEmail: () => assert.fail('no false error notification')};
+  assert.equal(ctx.notifyScheduledImport_(summary).sent, false);
 });
 
 test('workflow persists multiple deterministic candidates with distinct rows and references', () => {
