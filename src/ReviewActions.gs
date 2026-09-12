@@ -1,4 +1,6 @@
-const MC_REVIEW_ACTIONS = Object.freeze([EN.actions.confirm, EN.actions.ignore, EN.actions.retry_ai]);
+function reviewActions_() {
+  return [EN.actions.confirm, EN.actions.ignore, EN.actions.retry_ai];
+}
 
 function onReviewEdit(e) {
   if (!e || !e.range || !e.range.getSheet || !e.value) return;
@@ -6,7 +8,7 @@ function onReviewEdit(e) {
   const rowNumber = e.range.getRow();
   const action = String(e.value);
   if (e.range.getColumn() !== MC.headers.indexOf('Action needed') + 1 || rowNumber < 2 ||
-      MC_REVIEW_ACTIONS.indexOf(action) < 0) return;
+      reviewActions_().indexOf(action) < 0) return;
   withLock_(function () {
     const c = config_();
     if (sheet.getName() !== c.sheetName) return;

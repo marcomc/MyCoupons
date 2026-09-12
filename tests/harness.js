@@ -3,7 +3,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
 
-function harness({vendorLast = false} = {}) {
+function harness({sourceOrder, vendorLast = false} = {}) {
   const properties = {};
   const owner = 'owner@example.com';
   const ctx = {Date, JSON, Math, Object, Array, String, Number, Boolean, RegExp, Set, Error,
@@ -36,10 +36,12 @@ function harness({vendorLast = false} = {}) {
     Gmail: {Users: {getProfile: () => ({emailAddress: owner})}}
   };
   vm.createContext(ctx);
-  const names = ['locales/en', 'Config', 'GeminiRouting', 'Digest', 'TextSafety', 'NumericEvidence', 'HtmlEvidence', 'ImageAcquisition',
+  let names = sourceOrder || ['locales/en', 'Config', 'GeminiRouting', 'Digest', 'TextSafety', 'NumericEvidence', 'HtmlEvidence', 'ImageAcquisition',
     'CandidateEvidence', 'AIExtraction', 'GmailIdentity', 'SheetSafety', 'SheetState', 'GmailRead', 'ImportWorkflow', 'ReviewActions', 'Scheduler', 'Installer'];
-  if (vendorLast) names.push('vendor/Html');
-  else names.unshift('vendor/Html');
+  if (!sourceOrder) {
+    if (vendorLast) names.push('vendor/Html');
+    else names.unshift('vendor/Html');
+  }
   for (const name of names) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../src', name + '.gs'), 'utf8'), ctx, {filename: name});
   }

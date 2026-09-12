@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- Defer localized review-action lookup until execution so Apps Script source
+  evaluation cannot fail when the locale module loads later.
+
 ### Added
 
 - Harden Apps Script bootstrap deployment: distinguish the automatic HEAD
