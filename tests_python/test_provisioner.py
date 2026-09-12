@@ -931,6 +931,23 @@ class ProvisionerCommandTests(unittest.TestCase):
         emitted = json.loads("".join(str(call.args[0]) for call in stdout.write.call_args_list))
         self.assertEqual(emitted, {"cloudReady": True, "phase": "bootstrap-complete"})
 
+    def test_cloud_command_reports_all_resumable_apps_script_phases_as_cloud_ready(self) -> None:
+        phases = (
+            "apps-script-version-creation-intent",
+            "apps-script-version-creation-pending",
+            "apps-script-version-ready",
+            "apps-script-deployment-creation-pending",
+            "apps-script-ready",
+        )
+        for phase in phases:
+            with self.subTest(phase=phase), mock.patch("provisioner.cli.load_config", return_value=valid_cloud_config()), mock.patch(
+                "provisioner.cli.provision_cloud", return_value={"phase": phase}
+            ), mock.patch("sys.stdout") as stdout:
+                exit_code = main(["--state-dir", "/private/state", "provision-cloud", "--config", "/private/config.json"])
+            self.assertEqual(exit_code, 0)
+            emitted = json.loads("".join(str(call.args[0]) for call in stdout.write.call_args_list))
+            self.assertEqual(emitted, {"cloudReady": True, "phase": phase})
+
     def test_oauth_command_targets_the_active_gcloud_credential_store(self) -> None:
         self.assertEqual(
             core.oauth_authorization_command(),
