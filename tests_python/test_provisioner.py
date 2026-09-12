@@ -1751,7 +1751,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
             ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
                 "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
-            ), mock.patch("provisioner.core._deployment_list", side_effect=AssertionError("must use persisted deployment ID")), mock.patch(
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
                 "provisioner.core._verify_persisted_owner_only_deployment", return_value=("deployment-1", 1)
             ) as verify_deployment, mock.patch("provisioner.core._remote_bundle_digest", return_value=next_digest), mock.patch(
                 "provisioner.core._recover_bundle_version", return_value=None
@@ -1927,6 +1927,40 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             ), mock.patch("provisioner.core._apps_script_json", side_effect=AssertionError("must not mutate source")):
                 with self.assertRaisesRegex(core.ProvisionerError, "persisted deployment is missing"):
                     core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+
+    def test_established_deployment_validates_the_full_collection_before_source_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": "a" * 64,
+                    "versionNumber": 1,
+                    "deploymentId": "deployment-1",
+                }
+                state["bootstrap"] = {
+                    "secretVersion": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1",
+                    "status": "complete",
+                }
+                state["phase"] = "bootstrap-complete"
+                core._persist_state_locked(state_dir, state, key)
+            with mock.patch("provisioner.core._deployment_bundle", return_value=("b" * 64, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch(
+                "provisioner.core._deployment_list", side_effect=core.ProvisionerError("unsafe deployment collection")
+            ) as deployments, mock.patch(
+                "provisioner.core._apps_script_json", side_effect=AssertionError("must not mutate source")
+            ):
+                with self.assertRaisesRegex(core.ProvisionerError, "unsafe deployment collection"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", None)
+            deployments.assert_called_once_with("private-token", "script-1")
 
     def test_verified_deployment_updates_its_known_id_after_a_new_version_is_read_back(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

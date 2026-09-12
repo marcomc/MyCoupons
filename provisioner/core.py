@@ -2478,10 +2478,14 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             state = _persist_state_locked(state_dir, state, key)
         pending_apps_script = state["appsScript"]
         # A project we can adopt may still have a deployment that violates the
-        # owner-only contract. Reject unknown deployment state before replacing
-        # source, but a persisted exact ID must recover through that ID rather
-        # than a potentially delayed collection listing.
-        if pending_apps_script["deploymentId"] is None:
+        # owner-only contract. Validate every established deployment before
+        # replacing source. Only the immediately persisted result of a create
+        # request can bypass a potentially delayed collection listing while its
+        # exact ID is reconciled.
+        if not (
+            state["phase"] == "apps-script-deployment-creation-pending"
+            and pending_apps_script["deploymentId"] is not None
+        ):
             _deployment_list(access_token, script_id)
         if state["phase"] == "apps-script-deployment-creation-pending":
             if pending_apps_script["deploymentId"] is None:
