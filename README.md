@@ -71,6 +71,13 @@ The example configuration contains product defaults only.
   per-message persistence checks only the target cells and updates the snapshot
   after exact readback. Ambiguous writes invalidate the session until the next
   run reloads durable state. Notification deltas come from that durable state.
+- `diagnoseGmailRead(messageId)` is an owner-gated, read-only Execution API
+  entrypoint for an operator investigating a Gmail runtime mismatch. It returns
+  only fixed stage outcomes plus primitive raw-shape types for the read, MIME,
+  HTML, image-part, acquisition, and canonicalization steps; it never returns
+  message data, identifiers,
+  headers, URLs, image bytes, or exception text. It performs no Gmail, sheet,
+  property, or trigger mutation.
 - Canonical message payloads preserve the message ID, thread ID, received time,
   sender, subject, plain text, raw HTML, and canonical Gmail link. MIME
   alternatives remain independent; unsupported content marks the payload

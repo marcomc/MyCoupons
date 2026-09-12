@@ -55,6 +55,10 @@
 
 ### Added
 
+- Add an owner-gated, read-only Gmail stage diagnostic with fixed opaque results
+  and primitive representation types for live triage; it exposes no mailbox
+  content or identifiers.
+
 - Finalize fully evidenced complete offers after durable row/journal persistence;
   mixed review dispositions preserve the source email, and retryable Gmail
   acknowledgement failures recover from the indexed journal.

@@ -106,3 +106,39 @@ test('rejects a mismatched fetched identity and rotates durable retries', () => 
   ctx.scanCouponMessages_(state(journal, start), () => {});
   assert.ok(fetched.includes('dd'));
 });
+
+test('owner-only Gmail read diagnostic exposes only stage outcomes', () => {
+  const {ctx, properties, config} = harness();
+  installGmail(ctx, () => ({messages: []}), id => message(id, Date.parse('2026-05-22T00:00:00Z')));
+  const before = JSON.stringify(properties);
+  const shape = {idType: 'string', threadIdType: 'string', internalDateType: 'string', payloadType: 'object',
+    payloadHeadersType: 'array', payloadPartsType: 'undefined'};
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.diagnoseGmailRead('abc123'))), {
+    rawShape: shape, read: 'ok', mime: 'ok', html: 'ok', imageParts: 'ok', acquisition: 'ok', canonical: 'ok'
+  });
+  assert.equal(JSON.stringify(properties), before);
+  ctx.Gmail.Users.Messages.get = () => { throw new Error('provider detail must not escape'); };
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.diagnoseGmailRead('abc123'))), {
+    rawShape: 'not-run', read: 'error', mime: 'not-run', html: 'not-run', imageParts: 'not-run', acquisition: 'not-run', canonical: 'not-run'
+  });
+  ctx.Gmail.Users.Messages.get = () => message('abc123', Date.parse('2026-05-22T00:00:00Z'));
+  ctx.htmlContent_ = () => { throw new Error('provider detail must not escape'); };
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.diagnoseGmailRead('abc123'))), {
+    rawShape: shape, read: 'ok', mime: 'ok', html: 'error', imageParts: 'ok', acquisition: 'error', canonical: 'error'
+  });
+  const fresh = harness();
+  installGmail(fresh.ctx, () => ({messages: []}), id => message(id, Date.parse('2026-05-22T00:00:00Z')));
+  const freshBefore = JSON.stringify(fresh.properties);
+  fresh.ctx.collectImageParts_ = () => { throw new Error('part details must not escape'); };
+  assert.deepEqual(JSON.parse(JSON.stringify(fresh.ctx.diagnoseGmailRead('abc123'))), {
+    rawShape: shape, read: 'ok', mime: 'ok', html: 'ok', imageParts: 'error', acquisition: 'error', canonical: 'error'
+  });
+  assert.equal(JSON.stringify(fresh.properties), freshBefore);
+  let reads = 0;
+  ctx.Gmail.Users.Messages.get = () => { reads++; return message('abc123', Date.parse('2026-05-22T00:00:00Z')); };
+  ctx.Gmail.Users.getProfile = () => ({emailAddress: 'other@example.com'});
+  assert.throws(() => ctx.diagnoseGmailRead('abc123'), /OWNER/);
+  assert.equal(reads, 0);
+  assert.equal(JSON.stringify(properties), before);
+  ctx.Gmail.Users.getProfile = () => ({emailAddress: config.ownerEmail});
+});

@@ -270,6 +270,81 @@ function gmailReadError_(messageId) {
   return {messageId: messageId, code: 'MAIL', retryable: true};
 }
 
+// Owner-only, read-only execution diagnostic for an operator investigating a
+// provider/runtime mismatch. It intentionally returns no message identity,
+// headers, body, URLs, image bytes, or exception text.
+function diagnoseGmailRead(messageId) {
+  return withLock_(function () {
+    const config = config_();
+    assertOwner_(config);
+    if (!validGmailApiId_(messageId)) fail_('MAIL');
+    const report = {rawShape: 'not-run', read: 'not-run', mime: 'not-run', html: 'not-run',
+      imageParts: 'not-run', acquisition: 'not-run', canonical: 'not-run'};
+    let raw;
+    try {
+      raw = Gmail.Users.Messages.get('me', messageId, {format: 'full'});
+      report.rawShape = gmailReadRawShape_(raw);
+      if (!raw || typeof raw !== 'object' || raw.id !== messageId) fail_('MAIL');
+      report.read = 'ok';
+    } catch (e) {
+      report.read = diagnosticStageError_(e);
+      return report;
+    }
+    let payload;
+    try {
+      payload = parseMimePayload_(raw.payload);
+      report.mime = 'ok';
+    } catch (e) {
+      report.mime = diagnosticStageError_(e);
+      return report;
+    }
+    try {
+      const projected = htmlContent_(payload.html);
+      report.html = projected && typeof projected === 'object' ? 'ok' : 'invalid';
+    } catch (e) {
+      report.html = diagnosticStageError_(e);
+    }
+    try {
+      const resources = [];
+      collectImageParts_(raw.payload, '', resources);
+      report.imageParts = 'ok';
+    } catch (e) {
+      report.imageParts = diagnosticStageError_(e);
+    }
+    try {
+      const acquired = acquireMessageImages_(raw, payload.html);
+      report.acquisition = acquired && Array.isArray(acquired.images) && typeof acquired.incomplete === 'boolean' ? 'ok' : 'invalid';
+    } catch (e) {
+      report.acquisition = diagnosticStageError_(e);
+    }
+    try {
+      const message = canonicalGmailMessage_(raw);
+      report.canonical = message && Array.isArray(message.images) && typeof message.incomplete === 'boolean' ? 'ok' : 'invalid';
+    } catch (e) {
+      report.canonical = diagnosticStageError_(e);
+    }
+    return report;
+  });
+}
+
+function gmailReadRawShape_(raw) {
+  const payload = raw && typeof raw === 'object' ? raw.payload : null;
+  function partFieldType_(name) {
+    if (!payload || typeof payload !== 'object') return 'not-applicable';
+    return Array.isArray(payload[name]) ? 'array' : typeof payload[name];
+  }
+  return {idType: raw && typeof raw === 'object' ? typeof raw.id : typeof raw,
+    threadIdType: raw && typeof raw === 'object' ? typeof raw.threadId : 'not-applicable',
+    internalDateType: raw && typeof raw === 'object' ? typeof raw.internalDate : 'not-applicable',
+    payloadType: raw && typeof raw === 'object' ? typeof raw.payload : 'not-applicable',
+    payloadHeadersType: partFieldType_('headers'), payloadPartsType: partFieldType_('parts')};
+}
+
+function diagnosticStageError_(error) {
+  const code = errorCode_(error);
+  return code === 'INTERNAL' ? 'error' : 'error-' + code;
+}
+
 function validGmailApiId_(id) {
   return /^[a-f0-9]+$/.test(id) && sourceId_(gmailLink_(id)) === id;
 }
