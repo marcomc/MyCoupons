@@ -19,14 +19,25 @@ function candidateSource_(message) {
   if (!message || typeof message !== 'object' || Array.isArray(message)) fail_('AI');
   const text = sourceFieldValue_(message, 'text');
   const htmlInput = sourceFieldValue_(message, 'html');
+  const subject = sourceFieldValue_(message, 'subject');
+  const sender = sourceFieldValue_(message, 'sender');
   const suppliedImages = sourceFieldValue_(message, 'images');
   if (text !== undefined && typeof text !== 'string' || htmlInput !== undefined && typeof htmlInput !== 'string' ||
+    subject !== undefined && typeof subject !== 'string' || sender !== undefined && typeof sender !== 'string' ||
     suppliedImages !== undefined && !Array.isArray(suppliedImages)) fail_('AI');
   const html = htmlInput === undefined ? {text: '', evidenceSpans: [], activeImageCount: 0, incomplete: false} : htmlContent_(htmlInput);
   const images = suppliedImages === undefined ? [] : suppliedImages;
   const incomplete = ownEnumerableDataValue_(message, 'incomplete');
-  return {spans: [text || ''].concat(html.evidenceSpans).filter(Boolean),
-    evidenceSpans: [text || ''].concat(html.evidenceSpans).filter(Boolean),
+  // Sender is provenance metadata, never factual offer evidence. Subject is an
+  // independent source span so its tokens cannot be joined to body/HTML spans.
+  const sourceSpans = [];
+  if (subject) sourceSpans.push({kind: 'subject', text: subject});
+  if (text) sourceSpans.push({kind: 'text', text: text});
+  html.evidenceSpans.forEach(function (span) { if (span) sourceSpans.push({kind: 'html', text: span}); });
+  return {spans: sourceSpans.map(function (span) { return span.text; }),
+    sourceSpans: sourceSpans,
+    evidenceSpans: sourceSpans.map(function (span) { return span.text; }),
+    sender: sender || '',
     images: images,
     incomplete: incomplete !== false || html.incomplete ||
       !activeHtmlImagesInspected_(html.activeImageCount, images)};
@@ -48,7 +59,7 @@ function deterministicCandidates_(message) {
     while ((match = re.exec(text))) {
       const code = codeLexemes_(match[1])[0];
       const length = code ? Array.from(code).length : 0;
-      if (length >= 3 && length <= 40 && /^[\p{L}\p{N}][\p{L}\p{N}\p{M}_-]*$/u.test(code) &&
+      if (length >= 3 && length <= 40 && /[\p{L}\p{N}\p{M}]/u.test(code) &&
         !codes.some(function (candidate) { return candidate.code === code; })) {
         codes.push({code: code, notes: boundedText_(text, 3500), confidence: 'low', review: true});
       }

@@ -307,7 +307,7 @@ test('coupon introducers are case-insensitive and never truncate the code token'
     assert.equal(ctx.deterministicCandidates_({text: source})[0].code, source.includes('SAVE20') ? 'SAVE20' : 'MiXeD20', source);
   }
   assert.equal(ctx.deterministicCandidates_({text: 'Coupon code isomorphic'})[0].code, 'isomorphic');
-  for (const source of ['Coupon codeis SAVE20', 'coupon code-SAVE20', 'Coupon code is SAVE+20']) {
+  for (const source of ['Coupon codeis SAVE20', 'coupon code-SAVE20']) {
     assert.equal(ctx.deterministicCandidates_({text: source}).length, 0, source);
   }
   assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + 'X'.repeat(41)}).length, 0);
@@ -388,11 +388,12 @@ test('invalid persisted configuration and inherited error names retain stable er
   }
 });
 
-test('deterministic codes consume the complete lexeme before rejecting punctuation', () => {
+test('deterministic codes preserve complete punctuation-bearing lexemes', () => {
   const {ctx} = harness();
   for (const code of ['SAVE+20', 'SAVE.20', 'SAVE/20', 'SAVE:20', 'SAVE@20', 'SAVE&20',
     '+SAVE20', '(SAVE20)', 'SAVE20.', 'SAVE20,']) {
-    assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + code}).length, 0, code);
+    const candidate = ctx.deterministicCandidates_({text: 'Coupon code ' + code})[0];
+    assert.equal(candidate.code, code, code);
   }
   for (const code of ['SAVE_20', 'SAVE-20', 'MiXeD20', 'SAVE20é', 'SAVE20\u0301', 'SAVE20𐐀']) {
     for (const wrapped of [code, '"' + code + '"', "'" + code + "'", '<' + code + '>']) {
@@ -403,7 +404,7 @@ test('deterministic codes consume the complete lexeme before rejecting punctuati
       assert.equal(candidates[0].review, true);
     }
   }
-  assert.equal(ctx.deterministicCandidates_({text: 'Coupon code MiXeD20; Coupon code MiXeD20'}).length, 1);
+  assert.equal(ctx.deterministicCandidates_({text: 'Coupon code MiXeD20; Coupon code MiXeD20'}).length, 2);
   assert.equal(ctx.deterministicCandidates_({text: 'Coupon code MiXeD20 Coupon code MiXeD20'}).length, 1);
   assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + 'X'.repeat(41)}).length, 0);
 });
@@ -1565,7 +1566,7 @@ test('internal quote and angle characters remain part of complete code identitie
     {text: 'Shop ' + source, images: [], incomplete: false});
   }
   for (const token of ["SAVE'20", 'SAVE"20', 'SAVE<20', 'SAVE>20', "'SAVE20", 'SAVE20"', '<SAVE20', 'SAVE20>']) {
-    assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + token}).length, 0, token);
+    assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + token})[0].code, token, token);
     assert.equal(normalize(token, token, token).review, false, token);
     for (const part of ['SAVE', 'SAVE20', '20']) {
       for (const [quote, source] of [[part, token], [token, token], [token, part]]) {
@@ -1577,8 +1578,8 @@ test('internal quote and angle characters remain part of complete code identitie
     assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + token})[0].code, 'SAVE20');
     assert.equal(normalize('SAVE20', 'SAVE20', token).review, false);
   }
-  for (const token of ['"<SAVE20>"', "''SAVE20''", '<<SAVE20>>']) {
-    assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + token}).length, 0);
+  for (const [token, code] of [['"<SAVE20>"', '<SAVE20>'], ["''SAVE20''", "'SAVE20'"], ['<<SAVE20>>', '<SAVE20>']]) {
+    assert.equal(ctx.deterministicCandidates_({text: 'Coupon code ' + token})[0].code, code);
     assert.equal(normalize('SAVE20', 'SAVE20', token).code, '');
   }
 });

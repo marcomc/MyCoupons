@@ -409,6 +409,18 @@ test('review validation ignores the internal dedupe key column', () => {
   assert.equal(ctx.validateReviewRow_(row, {receivedAtMs: Date.parse('2026-01-01T00:00:00Z'), subject: 'Subject', sender: 'Sender', link: row[13]}), true);
 });
 
+test('review validation never uses sender metadata as merchant evidence', () => {
+  const {ctx} = harness();
+  const row = Array(26).fill('');
+  row[0] = new Date('2026-01-01T00:00:00Z');
+  row[1] = 'Merchant'; row[3] = 'CODE';
+  row[11] = 'Coupon code CODE'; row[12] = 'Merchant <offers@example.com>';
+  row[13] = 'https://mail.google.com/mail/u/0/#all/abc';
+  const message = {receivedAtMs: Date.parse('2026-01-01T00:00:00Z'), subject: row[11], sender: row[12],
+    link: row[13], text: '', html: '', incomplete: false, images: []};
+  assert.equal(ctx.validateReviewRow_(row, message), false);
+});
+
 test('review validation rejects an empty offer even when its fields have no evidence', () => {
   const {ctx} = harness();
   ctx.candidateSource_ = () => ({spans: []});

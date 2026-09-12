@@ -23,6 +23,14 @@ test('primary Developer request succeeds without exposing the key in the payload
   assert.doesNotMatch(seen.options.payload, /test-key/);
 });
 
+test('Vertex uses the global host only for global and preserves regional hosts', () => {
+  const {ctx} = setup();
+  assert.match(ctx.buildGeminiEndpoint_('vertex_ai', {vertexProject: 'vertex-project', vertexLocation: 'global', model: 'gemini-flash-latest'}),
+    /^https:\/\/aiplatform\.googleapis\.com\/v1\/projects\/vertex-project\/locations\/global\//);
+  assert.match(ctx.buildGeminiEndpoint_('vertex_ai', {vertexProject: 'vertex-project', vertexLocation: 'europe-west1', model: 'gemini-flash-latest'}),
+    /^https:\/\/europe-west1-aiplatform\.googleapis\.com\/v1\/projects\/vertex-project\/locations\/europe-west1\//);
+});
+
 test('exact daily quota activates Vertex once and persists a one-hour route', () => {
   const {ctx, properties} = setup(); let calls = 0;
   const daily = {error: {code: 'quota_exceeded', message: 'daily quota'}};

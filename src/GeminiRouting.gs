@@ -83,7 +83,8 @@ function buildGeminiEndpoint_(backend, c) {
   }
   if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(c.vertexProject) ||
     !/^[a-z][a-z0-9-]*$/.test(c.vertexLocation)) fail_('CONFIG');
-  return 'https://' + c.vertexLocation + '-aiplatform.googleapis.com/v1/projects/' +
+  const host = c.vertexLocation === 'global' ? 'aiplatform.googleapis.com' : c.vertexLocation + '-aiplatform.googleapis.com';
+  return 'https://' + host + '/v1/projects/' +
     encodeURIComponent(c.vertexProject) + '/locations/' + encodeURIComponent(c.vertexLocation) +
     '/publishers/google/models/' + encodeURIComponent(c.model) + ':generateContent';
 }

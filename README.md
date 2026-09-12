@@ -18,6 +18,10 @@ The current increment provides configuration validation, coupon candidate
 parsing and normalization, historical recovery dates, safe spreadsheet and
 Gmail-label resource setup, a private per-message journal, bounded read-only
 Gmail message ingestion, and local deterministic import-row persistence.
+Extraction treats the subject as an independent evidenced source, preserves
+exact case/Unicode/punctuation coupon identities, and consolidates a sparse
+deterministic code with an evidenced AI description without authorizing any
+Gmail mutation.
 Review actions now expose an installable-edit-compatible `onReviewEdit` entry
 point for Confirm, Ignore, and Retry with AI, with row/source validation and
 message-level archive checkpoints. The local provisioner can deploy and
@@ -68,6 +72,8 @@ The example configuration contains product defaults only.
 - With `autoVertexFallback` enabled and `vertexProject` configured, paid Vertex
   routing activates only for an explicit daily-quota or prepayment-depletion
   HTTP 429 response. The temporary route lasts one hour and then expires.
+- Vertex `global` calls use `aiplatform.googleapis.com`; regional locations keep
+  their location-prefixed host.
 - Network errors, HTTP 408, generic 429 responses, selected 5xx responses, and
   malformed responses retry at most three times on the current backend.
 
@@ -79,13 +85,19 @@ The example configuration contains product defaults only.
   `Europe/Rome`; exclude technical scan rows and partial discount rows. A real
   offer has a code, website, or both discount type and value. An empty sheet
   needs `initialDate`.
-- Detect explicitly introduced coupon codes and retain source text as notes.
+- Detect explicitly introduced coupon codes from independent subject, plain-text,
+  and rendered-HTML spans, and retain source text as notes. Sender is provenance
+  metadata and cannot support an asserted merchant or offer field.
   Deterministic candidates currently require review. Tokens end at whitespace;
   one matching pair of outer ASCII quotes or angle brackets may wrap a token.
   Internal punctuation is never silently removed. Introducers require whitespace
   or an explicit colon/equal delimiter before the code.
-  The deterministic parser skips complete tokens outside its supported Unicode
-  letter/number/mark, underscore and hyphen syntax and 3–40 code-point length.
+  Complete 3–40 code-point tokens with a Unicode letter, number, or mark remain
+  exact identities, including internal and boundary punctuation.
+- AI and deterministic descriptions consolidate only when an exact code identity
+  enriches a sparse deterministic code. Separate described offers remain separate
+  even if they reuse a code. `extractCouponOutcome_` explicitly reports complete
+  versus incomplete coverage; an empty outcome never grants archive authority.
 - Reject unknown candidate or evidence keys and malformed control fields before
   normalizing proposed fields, including notes, against quoted source text.
   Candidate and evidence records must use own properties on plain or null
