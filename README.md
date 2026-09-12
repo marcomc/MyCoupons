@@ -146,6 +146,10 @@ The example configuration contains product defaults only.
   enriches a sparse deterministic code. Separate described offers remain separate
   even if they reuse a code. `extractCouponOutcome_` explicitly reports complete
   versus incomplete coverage; an empty outcome never grants archive authority.
+  Copied Notes exceeding 3,500 UTF-16 units or more than 12 unique explicit codes
+  keep the extraction incomplete after AI enrichment, including on retry.
+  Deduplication, row recovery, and retry share descriptive case/whitespace rules,
+  preserve numeric zero, and keep code and URL path/query/fragment identity exact.
 - Reject unknown candidate or evidence keys and malformed control fields before
   normalizing proposed fields, including notes, against quoted source text.
   Candidate and evidence records must use own properties on plain or null

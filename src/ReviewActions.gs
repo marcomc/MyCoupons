@@ -211,11 +211,10 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
 }
 
 function retryCandidateMatchesRow_(candidate, row) {
-  const columns = {merchant: 1, website: 2, code: 3, discountType: 4, discountValue: 5, minimumSpend: 6,
-    validOn: 7, exclusions: 8, expiry: 9, usageLimits: 10, currency: 20, notes: 16};
+  const factual = candidateFactualValuesFromRow_(row);
   return !!candidate.merchant && MC.fields.every(function (field) {
-    const value = reviewSourceValue_(row[columns[field]] || '');
-    return !value || String(candidate[field] || '') === value;
+    const value = candidateFieldIdentity_(field, factual[field]);
+    return !value || candidateFieldIdentity_(field, candidate[field]) === value;
   });
 }
 

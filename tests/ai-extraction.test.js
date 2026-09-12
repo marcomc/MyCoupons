@@ -61,6 +61,53 @@ function aiResponse(overrides = {}) {
   return {text: JSON.stringify({candidates: [candidate]})};
 }
 
+test('shared field identities preserve typed zero, exact codes and URL suffixes across all key consumers', () => {
+  const {ctx} = harness();
+  const base = {merchant: 'Brand', code: 'Save+20', minimumSpend: '0', website: 'https://shop.example/Offer?A=1#X'};
+  const same = {...base, merchant: '  BRAND  ', minimumSpend: 0, website: 'HTTPS://SHOP.EXAMPLE/Offer?A=1#X'};
+  for (const key of ['exactCandidateIdentityKey_', 'candidateMergeKey_']) {
+    assert.equal(ctx[key](base), ctx[key](same), key);
+    for (const different of [{minimumSpend: ''}, {minimumSpend: '25'}, {code: 'save+20'}, {code: 'Save20'},
+      {website: 'https://shop.example/offer?A=1#X'}, {website: 'https://shop.example/Offer?a=1#X'},
+      {website: 'https://shop.example/Offer?A=1#x'}]) {
+      assert.notEqual(ctx[key](base), ctx[key]({...base, ...different}), JSON.stringify(different));
+    }
+  }
+});
+
+test('deterministic copied Notes loss survives high-confidence enrichment even with replacement Notes', () => {
+  for (const length of [3500, 3501]) for (const replacementNotes of ['', 'Brand']) {
+    const {ctx} = harness();
+    const prefix = 'Brand coupon code AI20 ';
+    const message = {text: prefix + 'x'.repeat(length - prefix.length), incomplete: false};
+    ctx.callGeminiModel_ = () => aiResponse({notes: replacementNotes,
+      evidence: {merchant: {quote: 'Brand'}, code: {quote: 'AI20'},
+        ...(replacementNotes ? {notes: {quote: 'Brand'}} : {})}});
+    assert.equal(ctx.candidatePrompt_(message).truncated, false);
+    const outcome = ctx.extractCouponOutcome_(message);
+    assert.equal(outcome.status, length === 3500 ? 'complete' : 'incomplete');
+    assert.equal(outcome.archiveAllowed, length === 3500);
+    assert.equal(outcome.candidates[0].notes.length, replacementNotes ? 5 : 3500);
+  }
+});
+
+test('deterministic unique-code clipping distinguishes twelve, thirteen and repeated codes', () => {
+  for (const count of [12, 13]) for (const duplicate of [false, true]) {
+    const {ctx} = harness();
+    const codes = Array.from({length: count}, (_, i) => 'SAVE' + i);
+    const text = 'Brand ' + codes.map(code => 'coupon code ' + code).join(' ') + (duplicate ? ' coupon code SAVE0' : '');
+    ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: codes.slice(0, 12).map(code =>
+      JSON.parse(aiResponse({code, evidence: {merchant: {quote: 'Brand'}, code: {quote: code}}}).text).candidates[0])})});
+    const message = {text, incomplete: false};
+    assert.equal(ctx.deterministicCandidates_(message).length, 12);
+    assert.equal(ctx.deterministicCandidateOutcome_(message).complete, count === 12);
+    const outcome = ctx.extractCouponOutcome_(message);
+    assert.equal(outcome.candidates.length, 12);
+    assert.equal(outcome.status, count === 12 ? 'complete' : 'incomplete');
+    assert.equal(outcome.archiveAllowed, count === 12);
+  }
+});
+
 test('end-to-end extraction accepts bounded prompt and preserves deterministic code', () => {
   const {ctx, properties} = harness();
   properties.GEMINI_API_KEY = 'test-key';

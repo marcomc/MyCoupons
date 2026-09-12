@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Share factual identity normalization across deduplication, row recovery, and AI
+  retry matching, preserving numeric zero and exact code/URL components. Keep
+  truncated deterministic Notes and clipped code sets in review after AI enrichment.
+
 - Run full deterministic plus AI extraction during initial and recovered scans;
   keep invalidated or incomplete empty outputs reachable, checkpoint verified
   non-offers without archive authority, and recover legacy awaiting-extraction

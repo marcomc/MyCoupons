@@ -274,11 +274,15 @@ function candidateRowIdentity_(message, candidate) {
 }
 
 function candidateRowIdentityFromRow_(row) {
+  return JSON.stringify([String(row[13] || ''), exactCandidateIdentityKey_(candidateFactualValuesFromRow_(row))]);
+}
+
+function candidateFactualValuesFromRow_(row) {
   const columns = {merchant: 1, website: 2, code: 3, discountType: 4, discountValue: 5, minimumSpend: 6,
     validOn: 7, exclusions: 8, expiry: 9, usageLimits: 10, currency: 20, notes: 16};
   const candidate = {};
-  MC.fields.forEach(function (field) { candidate[field] = reviewSourceValue_(row[columns[field]] || ''); });
-  return JSON.stringify([String(row[13] || ''), exactCandidateIdentityKey_(candidate)]);
+  MC.fields.forEach(function (field) { candidate[field] = reviewSourceValue_(row[columns[field]]); });
+  return candidate;
 }
 
 function couponRow_(message, candidate) {

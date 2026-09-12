@@ -60,6 +60,92 @@ function fixture() {
   return f;
 }
 
+function setSource(f, text) {
+  f.raw.payload.body = {data: Buffer.from(text).toString('base64url'), size: Buffer.byteLength(text)};
+  f.boot();
+}
+
+function modelResponse(proposals) {
+  return {text: JSON.stringify({candidates: proposals.map(proposal => {
+    const result = {...proposal}; delete result.imageEvidence;
+    result.evidence = Object.fromEntries(Object.entries(result).filter(([key, value]) =>
+      typeof value === 'string' && value && key !== 'confidence').map(([key, value]) => [key, {quote: value}]));
+    return result;
+  })})};
+}
+
+test('real extraction keeps deterministic Notes and code-count losses in review through import and AI retry', () => {
+  for (const mode of ['notes', 'code-count']) {
+    const f = fixture();
+    const codes = mode === 'notes' ? ['Save+20'] : Array.from({length: 13}, (_, i) => 'SAVE' + i);
+    const text = 'Brand ' + codes.map(code => 'coupon code ' + code).join(' ') + (mode === 'notes' ? ' ' + 'x'.repeat(3500) : '');
+    setSource(f, text); delete f.state.extractCouponOutcome;
+    f.ctx.callGeminiModel_ = () => modelResponse(codes.slice(0, 12).map(code => candidate(code, {notes: '', review: false})));
+    assert.equal(f.run().messages[0].status, 'review');
+    assert.equal(f.saved().batchIntent.archiveAllowed, false);
+    assert.equal(f.coupon.rows.length, Math.min(codes.length, 12) + 1);
+    for (let row = 2; row <= f.coupon.rows.length; row++) {
+      f.action(row, 'Retry with AI');
+      assert.equal(f.coupon.rows[row - 1][17], 'Needs review');
+      assert.equal(f.saved().status, 'review'); assert.equal(f.mutations.length, 0);
+    }
+    assert.equal(f.saved().batchIntent.archiveAllowed, false);
+  }
+});
+
+test('real AI retry constrains raw numeric zero and rejects a different evidenced minimum without overwriting', () => {
+  for (const amount of ['0', '25']) {
+    const f = fixture(); setSource(f, 'Brand coupon code Save+20 Minimum 0 Other minimum 25');
+    f.state.extractCouponOutcome = () => ({candidates: [candidate('Save+20', {minimumSpend: '0', notes: ''})], archiveAllowed: false});
+    f.run(); f.coupon.rows[1][6] = 0;
+    const before = JSON.stringify(f.coupon.rows);
+    f.ctx.callGeminiModel_ = () => modelResponse([candidate('Save+20', {minimumSpend: amount, notes: '', review: false})]);
+    f.action(2, 'Retry with AI');
+    if (amount === '0') {
+      assert.equal(f.coupon.rows[1][6], '0'); assert.equal(f.saved().status, 'confirmed'); assert.equal(f.mutations.length, 2);
+    } else {
+      f.coupon.rows[1][24] = '';
+      assert.equal(JSON.stringify(f.coupon.rows), before);
+      assert.equal(f.saved().status, 'review'); assert.equal(f.mutations.length, 0);
+    }
+  }
+});
+
+test('orphan recovery preserves numeric zero identity rather than adopting a blank-valued row', () => {
+  const f = fixture(); const zero = candidate('Save+20', {minimumSpend: '0'});
+  f.coupon.rows.push(f.ctx.couponRow_(f.message, candidate()), f.ctx.couponRow_(f.message, zero));
+  f.coupon.rows[2][6] = 0;
+  assert.equal(f.ctx.candidateRowIdentityFromRow_(f.coupon.rows[2]), f.ctx.candidateRowIdentity_(f.message, zero));
+  assert.notEqual(f.ctx.candidateRowIdentityFromRow_(f.coupon.rows[2]), f.ctx.candidateRowIdentity_(f.message, candidate()));
+  f.state.extractCouponOutcome = () => ({candidates: [zero], archiveAllowed: false});
+  assert.equal(f.run().messages[0].status, 'review');
+  assert.equal(f.coupon.rows.length, 3); assert.deepEqual(Array.from(f.saved().rowNumbers), [3]);
+  assert.equal(f.mutations.length, 0);
+});
+
+test('real AI retry accepts evidenced descriptive case and whitespace variants', () => {
+  const f = fixture();
+  setSource(f, 'Brand coupon code Save+20 Members only All items Except clearance EUR');
+  f.state.extractCouponOutcome = () => ({candidates: [candidate('Save+20', {merchant: ' BRAND ', validOn: 'ALL  ITEMS',
+    exclusions: 'EXCEPT  CLEARANCE', currency: 'eur', notes: 'MEMBERS  ONLY'})], archiveAllowed: false});
+  f.run();
+  f.ctx.callGeminiModel_ = () => modelResponse([candidate('Save+20', {validOn: 'All items',
+    exclusions: 'Except clearance', currency: 'EUR', review: false})]);
+  f.action(2, 'Retry with AI');
+  assert.equal(f.saved().status, 'confirmed'); assert.equal(f.mutations.length, 2);
+  assert.equal(f.coupon.rows[1][16], 'Members only');
+});
+
+test('retry identity preserves exact code and URL suffixes but folds scheme and authority', () => {
+  const f = fixture(); const base = candidate('Save+20', {website: 'https://shop.example/Offer?A=1#X'});
+  const row = f.ctx.couponRow_(f.message, base);
+  assert.equal(f.ctx.retryCandidateMatchesRow_({...base, website: 'HTTPS://SHOP.EXAMPLE/Offer?A=1#X'}, row), true);
+  for (const patch of [{code: 'save+20'}, {code: 'Save20'}, {website: 'https://shop.example/offer?A=1#X'},
+    {website: 'https://shop.example/Offer?a=1#X'}, {website: 'https://shop.example/Offer?A=1#x'}]) {
+    assert.equal(f.ctx.retryCandidateMatchesRow_({...base, ...patch}, row), false, JSON.stringify(patch));
+  }
+});
+
 test('partial A+B append keeps B durable through Confirm, Ignore and Retry with AI before replay', () => {
   for (const action of ['Confirm', 'Ignore', 'Retry with AI']) {
     const f = fixture(); const getRange = f.coupon.getRange; let fail = true;

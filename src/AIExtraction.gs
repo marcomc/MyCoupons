@@ -88,16 +88,20 @@ function parseAICandidates_(response, message) {
 }
 
 function candidateMergeKey_(candidate) {
-  return JSON.stringify([normalized_(candidate.merchant), candidateWebsiteIdentity_(candidate.website), String(candidate.code || ''),
-    normalized_(candidate.discountType), normalized_(candidate.discountValue), normalized_(candidate.minimumSpend),
-    normalized_(candidate.expiry)]);
+  return JSON.stringify(['merchant', 'website', 'code', 'discountType', 'discountValue', 'minimumSpend', 'expiry']
+    .map(function (field) { return candidateFieldIdentity_(field, candidate[field]); }));
 }
 
 function exactCandidateIdentityKey_(candidate) {
   return JSON.stringify(MC.fields.map(function (field) {
-    if (field === 'website') return candidateWebsiteIdentity_(candidate[field]);
-    return field === 'code' ? String(candidate[field] || '') : normalized_(candidate[field]);
+    return candidateFieldIdentity_(field, candidate[field]);
   }));
+}
+
+function candidateFieldIdentity_(field, value) {
+  const raw = String(value == null ? '' : value);
+  if (field === 'website') return candidateWebsiteIdentity_(raw);
+  return field === 'code' ? raw : normalized_(raw);
 }
 
 function candidateWebsiteIdentity_(value) {
@@ -155,7 +159,8 @@ function extractCouponOutcome_(message, hooks) {
   // Consolidate exact model duplicates before sparse deterministic enrichment
   // adds copied source notes that could make an identical proposal look new.
   const ai = uniqueAICandidates_(aiOutcome.candidates);
-  const deterministic = deterministicCandidates_(message).map(function (candidate) {
+  const deterministicOutcome = deterministicCandidateOutcome_(message);
+  const deterministic = deterministicOutcome.candidates.map(function (candidate) {
     return {merchant: '', website: '', code: candidate.code, discountType: '', discountValue: '', minimumSpend: '',
       validOn: '', exclusions: '', expiry: '', usageLimits: '', currency: '', notes: candidate.notes,
       confidence: candidate.confidence, review: true};
@@ -169,7 +174,7 @@ function extractCouponOutcome_(message, hooks) {
   if (result.length > MC.maxCandidates) fail_('AI');
   // This is deliberately descriptive, not authorization to mutate Gmail. In
   // particular, an empty complete outcome only means no candidate was found.
-  const complete = !source.incomplete && !prompt.truncated;
+  const complete = !source.incomplete && !prompt.truncated && deterministicOutcome.complete;
   const autoConfirmed = result.length > 0 && complete && !aiOutcome.invalidated && result.every(function (candidate) {
     return candidateAutomaticallyConfirmed_(candidate);
   });
