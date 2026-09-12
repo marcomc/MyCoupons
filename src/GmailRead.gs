@@ -424,12 +424,14 @@ function parseMimePart_(part, trace, record) {
       record.partsType = mimeDiagnosticType_(part.parts);
       record.bodyType = mimeDiagnosticType_(part.body);
     }
+    if (part.body != null) {
+      if (typeof part.body !== 'object' || Array.isArray(part.body) ||
+        decodeBytePayload_(part.body.data, part.body.size).length) fail_('MAIL');
+    }
     if (!Array.isArray(part.parts)) {
-      if (part.body && typeof part.body === 'object' && part.body.data) fail_('MAIL');
       output.incomplete = true;
       return output;
     }
-    if (part.body && typeof part.body === 'object' && part.body.data) fail_('MAIL');
     if (record) record.stage = 'multipart-children';
     part.parts.forEach(function (child) {
       const parsed = parseMimePayload_(child, trace, record);
@@ -481,40 +483,8 @@ function mimeHeader_(headers, name) {
 function decodeMimeBody_(body, headers, record) {
   if (record) { record.stage = 'body-validation'; record.bodyType = mimeDiagnosticType_(body); }
   if (!body || typeof body !== 'object') fail_('MAIL');
-  const data = body.data == null ? '' : body.data;
-  if (record) {
-    record.stage = 'data-validation';
-    record.dataType = mimeDiagnosticType_(body.data);
-    record.dataLength = typeof data === 'string' ? data.length : null;
-    record.dataLengthRemainder = typeof data === 'string' ? data.length % 4 : null;
-    record.dataSyntaxValid = typeof data === 'string' && /^[A-Za-z0-9_-]*={0,2}$/.test(data);
-    record.paddingLength = typeof data === 'string' ? (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0) : null;
-    record.sizeType = mimeDiagnosticType_(body.size);
-  }
-  if (typeof data !== 'string' || !/^[A-Za-z0-9_-]*={0,2}$/.test(data) || data.length % 4 === 1) fail_('MAIL');
-  if (record) {
-    record.stage = 'size-validation';
-    record.sizeValid = body.size == null || Number.isSafeInteger(body.size) && body.size >= 0;
-  }
-  if (body.size != null && (!Number.isSafeInteger(body.size) || body.size < 0)) fail_('MAIL');
-  if (!data) {
-    if (record) record.stage = 'empty-body-validation';
-    if (body.size && body.size !== 0) fail_('MAIL');
-    return '';
-  }
-  let bytes;
-  if (record) record.stage = 'base64-decode';
-  try { bytes = Utilities.base64DecodeWebSafe(data); } catch (e) { fail_('MAIL'); }
-  if (record) {
-    record.stage = 'bytes-validation';
-    record.bytesType = mimeDiagnosticType_(bytes);
-    record.bytesLengthType = bytes == null ? 'not-applicable' : typeof bytes.length;
-    record.bytesLength = bytes != null && Number.isSafeInteger(bytes.length) && bytes.length >= 0 ? bytes.length : null;
-    record.sizeMatches = body.size == null ? 'not-declared' : bytes != null && body.size === bytes.length;
-  }
-  if (!Array.isArray(bytes)) fail_('MAIL');
-  if (record) record.stage = 'size-match';
-  if (body.size != null && body.size !== bytes.length) fail_('MAIL');
+  const bytes = decodeBytePayload_(body.data, body.size, record);
+  if (!bytes.length) return '';
   if (record) record.stage = 'charset-validation';
   const charset = mimeCharset_(headers);
   if (record) {

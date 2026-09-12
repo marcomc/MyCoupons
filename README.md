@@ -86,7 +86,18 @@ The example configuration contains product defaults only.
 - Canonical message payloads preserve the message ID, thread ID, received time,
   sender, subject, plain text, raw HTML, and canonical Gmail link. MIME
   alternatives remain independent; unsupported content marks the payload
-  incomplete and malformed message data produces a retryable error. Bounded
+  incomplete and malformed message data produces a retryable error. Text and
+  image payloads accept REST base64url strings and Advanced-service byte arrays
+  through one validated boundary. Signed and unsigned octets preserve exact
+  content; invalid elements, malformed encoding, and declared-size mismatches
+  fail closed. Empty multipart byte arrays remain valid containers. Utilities
+  receive signed bytes, while image signatures and dimensions use unsigned
+  octets. The REST representation and byte counts follow the
+  [Gmail body contract](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages.attachments);
+  blobs and encoding use the
+  [Apps Script Byte-array utilities](https://developers.google.com/apps-script/reference/utilities/utilities).
+  This repair has synthetic regression coverage; deployed import acceptance
+  requires a separate live run. Bounded
   image acquisition preserves DOM-order slots, maps only matching inline CIDs,
   fetches only safe HTTPS images, and stores inspected bytes/blob data with
   safe dimensions when known. Rejected, missing, duplicate, redirected,

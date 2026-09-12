@@ -4,7 +4,7 @@ const {harness} = require('./harness');
 
 test('Apps Script source loads when review actions precede locale initialization', () => {
   const sourceOrder = ['vendor/Html', 'Config', 'GeminiRouting', 'Digest', 'TextSafety', 'NumericEvidence', 'HtmlEvidence',
-    'ImageAcquisition', 'CandidateEvidence', 'AIExtraction', 'GmailIdentity', 'SheetSafety', 'SheetState', 'GmailRead',
+    'BytePayload', 'ImageAcquisition', 'CandidateEvidence', 'AIExtraction', 'GmailIdentity', 'SheetSafety', 'SheetState', 'GmailRead',
     'ImportWorkflow', 'ReviewActions', 'Scheduler', 'Installer', 'locales/en'];
   const {ctx} = harness({sourceOrder});
   assert.equal(typeof ctx.verifyBootstrapExecutionAccess, 'function');

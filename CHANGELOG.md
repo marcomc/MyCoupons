@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- Accept Advanced Gmail byte-array payloads alongside REST base64url for MIME
+  text, inline images, and attachments. Validate every byte and declared size,
+  preserve Unicode and transport content, and interpret signed image bytes
+  correctly for signatures, dimensions, and limits. Synthetic full-message
+  extraction is covered; live deployment/import acceptance remains separate.
+
 - Share factual identity normalization across deduplication, row recovery, and AI
   retry matching, preserving numeric zero and exact code/URL components. Keep
   truncated deterministic Notes and clipped code sets in review after AI enrichment.
@@ -57,8 +63,7 @@
 
 - Trace nested MIME validation and Apps Script decoding stages in the owner-only
   Gmail diagnostic, with bounded metadata-only records for runtime triage.
-  Importer validation and behavior remain unchanged; a live MIME repair is not
-  yet established.
+  Diagnostic tracing itself does not grant import or archive authority.
 
 - Add an owner-gated, read-only Gmail stage diagnostic with fixed opaque results
   and primitive representation types for live triage; it exposes no mailbox
