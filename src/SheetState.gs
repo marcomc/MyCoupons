@@ -1,5 +1,5 @@
 const MC_MESSAGE_STATE_STATUSES = Object.freeze([
-  'pending', 'processing', 'review', 'confirmed', 'ignored', 'failed', 'deferred', 'awaiting_extraction'
+  'pending', 'processing', 'review', 'confirmed', 'ignored', 'nonoffer', 'failed', 'deferred', 'awaiting_extraction'
 ]);
 const MC_MESSAGE_STATE_KEYS = Object.freeze([
   'version', 'messageId', 'status', 'attempts', 'retryCount', 'dedupeKeys',
@@ -407,6 +407,17 @@ function findMessageStateByDedupeKey_(sheet, dedupeKey) {
   const states = readMessageJournal_(sheet);
   const matches = Object.keys(states).filter(function (messageId) {
     return states[messageId].dedupeKeys.indexOf(dedupeKey) >= 0;
+  });
+  if (matches.length > 1) fail_('STATE');
+  return matches.length ? states[matches[0]] : null;
+}
+
+function findMessageStateByRowNumber_(sheet, rowNumber) {
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) fail_('STATE');
+  const states = readMessageJournal_(sheet);
+  const matches = Object.keys(states).filter(function (messageId) {
+    const state = states[messageId];
+    return state.rowNumbers.filter(function (value) { return value === rowNumber; }).length === 1;
   });
   if (matches.length > 1) fail_('STATE');
   return matches.length ? states[matches[0]] : null;

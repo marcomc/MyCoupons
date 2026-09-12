@@ -29,6 +29,12 @@ function fixture(count = 0) {
   const coupons = sheet(Array(26).fill('header'));
   const state = {config, recoveryStart: start, journalSheet: journal, couponSheet: coupons,
     spreadsheet: {getId: () => config.spreadsheetId}};
+  state.extractCouponOutcome = message => {
+    const candidates = ctx.deterministicCandidates_(message).map(candidate => ({merchant: '', website: '', code: candidate.code,
+      discountType: '', discountValue: '', minimumSpend: '', validOn: '', exclusions: '', expiry: '', usageLimits: '',
+      currency: '', notes: candidate.notes, confidence: candidate.confidence, review: true, imageEvidence: {}}));
+    return {candidates, verifiedNonOffer: candidates.length === 0};
+  };
   const triggers = []; const deleted = []; const sent = []; const fetched = []; const listed = [];
   let uid = 0; let locked = false;
   ctx.LockService = {getScriptLock: () => ({tryLock: () => { assert.equal(locked, false); locked = true; return true; },
@@ -88,7 +94,7 @@ test('693 messages drain through one owned continuation, then later arrivals use
   assert.equal(runs, 14); assert.equal(f.fetched.length, 693);
   assert.equal(new Set(f.fetched).size, 693); assert.ok(f.listed.every(q => q === firstQuery));
   assert.equal(f.deleted.length, 1); assert.equal(f.state.couponSheet.rows.length, 70);
-  assert.equal(Object.values(f.ctx.readMessageJournal_(f.state.journalSheet)).filter(j => j.status === 'awaiting_extraction').length, 624);
+  assert.equal(Object.values(f.ctx.readMessageJournal_(f.state.journalSheet)).filter(j => j.status === 'nonoffer').length, 624);
   f.advance(86400000); f.ctx.runScheduledImport();
   while (f.triggers.length) f.continuation();
   assert.equal(f.fetched.length, 773); assert.equal(new Set(f.fetched).size, 773);
@@ -201,7 +207,7 @@ test('completed discovery removes continuation despite read failures, while a de
   const saved = timed.ctx.getMessageState_(timed.state.journalSheet, '1');
   assert.match(saved.failureStage, /^read\|\d+\|\d+$/);
   timed.ctx.Gmail.Users.Messages.get = get; timed.continuation();
-  assert.equal(timed.triggers.length, 0); assert.equal(timed.ctx.getMessageState_(timed.state.journalSheet, '1').status, 'awaiting_extraction');
+  assert.equal(timed.triggers.length, 0); assert.equal(timed.ctx.getMessageState_(timed.state.journalSheet, '1').status, 'nonoffer');
 });
 
 test('continuation rejects wrong event, owner, installation and lock contention without fetching or creating', () => {
@@ -295,13 +301,13 @@ test('list adapter only restarts after a structured token-400 and a valid tokenl
   }
 });
 
-test('replay and retry selection skip explicit and legacy awaiting-extraction records', () => {
+test('replay and retry selection recover explicit and legacy awaiting-extraction records', () => {
   const f = fixture(2);
   for (const [id, legacy] of [['1', false], ['2', true]]) {
     const entry = f.ctx.newMessageState_(id); entry.status = legacy ? 'failed' : 'awaiting_extraction'; entry.outcome = 'empty';
     f.ctx.saveMessageState_(f.state.journalSheet, entry);
   }
-  f.ctx.runScheduledImport(); assert.equal(f.fetched.length, 0); assert.equal(f.sent.length, 0);
+  f.ctx.runScheduledImport(); assert.equal(f.fetched.length, 2); assert.equal(f.sent.length, 0);
   assert.equal(f.triggers.length, 0);
 });
 
@@ -334,7 +340,7 @@ test('read retry retains its originating boundary after the scan window has adva
   f.ctx.saveMessageState_(f.state.journalSheet, entry);
   original.complete = true; f.ctx.saveMailboxScanState_(original); f.advance(86400000);
   f.ctx.runScheduledImport();
-  assert.equal(f.ctx.getMessageState_(f.state.journalSheet, '1').status, 'awaiting_extraction');
+  assert.equal(f.ctx.getMessageState_(f.state.journalSheet, '1').status, 'nonoffer');
   assert.equal(f.fetched.length, 1);
   // An extraction/write retry already passed the boundary. A subsequent read
   // failure must not replace that proof with the newer window's lower bound.
@@ -344,7 +350,7 @@ test('read retry retains its originating boundary after the scan window has adva
   f.ctx.Gmail.Users.Messages.get = () => { throw new Error('unavailable'); };
   f.ctx.runScheduledImport(); assert.equal(f.ctx.getMessageState_(f.state.journalSheet, '1').failureStage, 'read_validated');
   f.ctx.Gmail.Users.Messages.get = get; f.ctx.runScheduledImport();
-  assert.equal(f.ctx.getMessageState_(f.state.journalSheet, '1').status, 'awaiting_extraction');
+  assert.equal(f.ctx.getMessageState_(f.state.journalSheet, '1').status, 'nonoffer');
 });
 
 test('image acquisition yields incomplete coverage after its soft budget and still persists the message', () => {

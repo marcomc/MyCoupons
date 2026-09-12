@@ -47,14 +47,15 @@ function duplicateJsonKeys_(json) {
   return false;
 }
 
-function parseAICandidates_(response, message) {
+function parseAICandidateOutcome_(response, message) {
   if (!response || typeof response.text !== 'string' || response.text.length > AI_EXTRACTION.maxResponse ||
       /^\s*```|```\s*$/.test(response.text) || duplicateJsonKeys_(response.text)) fail_('AI');
   let body;
   try { body = JSON.parse(response.text); } catch (e) { fail_('AI'); }
   if (!plainObjectWithKeys_(body, ['candidates']) || !Array.isArray(body.candidates) ||
       body.candidates.length > AI_EXTRACTION.maxCandidates) fail_('AI');
-  return body.candidates.map(function (candidate) {
+  let invalidated = 0;
+  const candidates = body.candidates.map(function (candidate) {
     if (!plainObjectWithKeys_(candidate, aiCandidateKeys_()) ||
         Object.getOwnPropertyNames(candidate).length !== aiCandidateKeys_().length) fail_('AI');
     const evidence = candidate.evidence;
@@ -64,10 +65,21 @@ function parseAICandidates_(response, message) {
             Object.keys(evidence[key]).length < 1;
         }) || MC.fields.some(function (key) { return candidate[key] && !Object.prototype.hasOwnProperty.call(evidence, key); })) fail_('AI');
     const normalized = normalizeCandidate_(candidate, message);
+    if (!(normalized.merchant || normalized.code || normalized.website || normalized.discountType && normalized.discountValue)) {
+      invalidated++;
+      return null;
+    }
     return normalized;
   }).filter(function (candidate) {
-    return candidate.merchant || candidate.code || candidate.website || candidate.discountType && candidate.discountValue;
+    return candidate !== null;
   });
+  // An empty syntactically valid response is distinct from a candidate that was
+  // discarded because its claimed facts could not be grounded in the source.
+  return {candidates: candidates, modelEmpty: body.candidates.length === 0, invalidated: invalidated > 0};
+}
+
+function parseAICandidates_(response, message) {
+  return parseAICandidateOutcome_(response, message).candidates;
 }
 
 function candidateMergeKey_(candidate) {
@@ -112,7 +124,8 @@ function extractCouponOutcome_(message, hooks) {
     if (!image || typeof image.mimeType !== 'string' || !Array.isArray(image.bytes)) fail_('AI');
     return {mimeType: image.mimeType, data: Utilities.base64EncodeWebSafe(image.bytes)};
   });
-  const ai = parseAICandidates_(callGeminiModel_({text: prompt, images: images}, hooks), message);
+  const aiOutcome = parseAICandidateOutcome_(callGeminiModel_({text: prompt, images: images}, hooks), message);
+  const ai = aiOutcome.candidates;
   const deterministic = deterministicCandidates_(message).map(function (candidate) {
     return {merchant: '', website: '', code: candidate.code, discountType: '', discountValue: '', minimumSpend: '',
       validOn: '', exclusions: '', expiry: '', usageLimits: '', currency: '', notes: candidate.notes,
@@ -127,8 +140,19 @@ function extractCouponOutcome_(message, hooks) {
   if (result.length > MC.maxCandidates) fail_('AI');
   // This is deliberately descriptive, not authorization to mutate Gmail. In
   // particular, an empty complete outcome only means no candidate was found.
-  return {status: source.incomplete ? 'incomplete' : 'complete', candidates: result,
-    empty: result.length === 0, archiveAllowed: false};
+  const complete = !source.incomplete;
+  const autoConfirmed = result.length > 0 && complete && !aiOutcome.invalidated && result.every(function (candidate) {
+    return candidateAutomaticallyConfirmed_(candidate);
+  });
+  return {status: complete ? 'complete' : 'incomplete', candidates: result,
+    empty: result.length === 0, modelEmpty: aiOutcome.modelEmpty, invalidated: aiOutcome.invalidated,
+    verifiedNonOffer: complete && result.length === 0 && aiOutcome.modelEmpty,
+    archiveAllowed: autoConfirmed};
+}
+
+function candidateAutomaticallyConfirmed_(candidate) {
+  return !!candidate && !candidate.review && !!candidate.merchant &&
+    !!(candidate.code || candidate.website || candidate.discountType && candidate.discountValue);
 }
 
 function extractCouponCandidates_(message, hooks) {

@@ -27,8 +27,10 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   const row = range.getValues()[0];
   const displayRow = range.getDisplayValues()[0];
   const formulas = range.getFormulas()[0];
-  const key = String(row[16] || '');
-  const state = key && findMessageStateByDedupeKey_(journalSheet, key);
+  let state = findMessageStateByRowNumber_(journalSheet, rowNumber);
+  // Pre-increment rows used the visible Notes cell for the technical key. Keep
+  // them reviewable without extending that legacy storage mistake.
+  if (!state && String(row[16] || '')) state = findMessageStateByDedupeKey_(journalSheet, String(row[16]));
   if (!state) return reviewFailure_(sheet, rowNumber, 'STATE');
   if (!candidateStates_(state.candidateStates, state.candidateKeys, state.rowNumbers)) {
     state.candidateStates = state.candidateKeys.map(function (candidateKey, index) {
@@ -36,12 +38,12 @@ function processReviewAction_(sheet, rowNumber, action, c) {
     });
     state.version = 2;
   }
+  const stateIndex = state.rowNumbers.indexOf(rowNumber);
+  const key = stateIndex < 0 ? '' : state.candidateKeys[stateIndex];
   const candidate = state.candidateStates.filter(function (item) { return item.key === key; });
-  const currentRow = findCouponRowByDedupeKey_(sheet, key);
-  if (candidate.length !== 1 || currentRow !== rowNumber) return reviewFailure_(sheet, rowNumber, 'STATE');
+  if (candidate.length !== 1 || stateIndex < 0 || state.rowNumbers[stateIndex] !== rowNumber ||
+      sourceId_(row[13]) !== state.messageId) return reviewFailure_(sheet, rowNumber, 'STATE');
   candidate[0].rowNumber = rowNumber;
-  const stateIndex = state.candidateKeys.indexOf(key);
-  if (stateIndex < 0) return reviewFailure_(sheet, rowNumber, 'STATE');
   state.rowNumbers[stateIndex] = rowNumber;
   if (action === EN.actions.ignore) {
     setReviewStatus_(sheet, rowNumber, EN.statuses.ignored, '');
@@ -158,8 +160,7 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
   const enriched = candidates.filter(function (item) { return retryCandidateMatchesRow_(item, row); });
   if (enriched.length !== 1) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   const knownRows = state.candidateStates.map(function (known) {
-    const knownRow = findCouponRowByDedupeKey_(sheet, known.key);
-    return knownRow && sheet.getRange(knownRow, 1, 1, MC.headers.length).getDisplayValues()[0];
+    return known.rowNumber && sheet.getRange(known.rowNumber, 1, 1, MC.headers.length).getDisplayValues()[0];
   });
   if (knownRows.some(function (knownRow) { return !knownRow; })) return reviewFailure_(sheet, rowNumber, 'STATE');
   if (candidates.some(function (item) {
@@ -167,7 +168,7 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
       return retryCandidateMatchesRow_(item, knownRow);
     });
   })) return reviewFailure_(sheet, rowNumber, 'REVIEW');
-  const updated = couponRow_(message, enriched[0], candidate.key);
+  const updated = couponRow_(message, enriched[0]);
   const existing = sheet.getRange(rowNumber, 1, 1, updated.length).getValues()[0];
   const existingFormulas = sheet.getRange(rowNumber, 1, 1, updated.length).getFormulas()[0];
   const merged = existing.slice();
@@ -204,28 +205,34 @@ function completeReviewMessage_(state, sheet, journalSheet, c) {
     try { saveMessageState_(journalSheet, state); } catch (e) { restoreReviewRows_(state, sheet); throw e; }
     return;
   }
+  state.status = 'processing'; state.failureStage = 'mail';
+  try { saveMessageState_(journalSheet, state); } catch (e) { restoreReviewRows_(state, sheet); throw e; }
   try {
     if (!refreshAndValidateReviewRows_(state, sheet, c)) { restoreReviewRows_(state, sheet); state.status = 'review'; state.outcome = 'review'; saveMessageState_(journalSheet, state); return; }
   } catch (e) {
     restoreReviewRows_(state, sheet); state.status = 'review'; state.outcome = 'review'; state.lastError = errorCode_(e); saveMessageState_(journalSheet, state); return;
   }
   try {
-    if (!state.labelApplied) { modifyReviewMessage_(state.messageId, {addLabelIds: [c.labelId]}); state.labelApplied = true; }
-    if (!state.archived) { modifyReviewMessage_(state.messageId, {removeLabelIds: ['INBOX']}); state.archived = true; }
+    if (!state.labelApplied) {
+      const labelled = modifyReviewMessage_(state.messageId, {addLabelIds: [c.labelId]});
+      if (labelled.labelIds.indexOf(c.labelId) < 0) fail_('MAIL');
+      state.labelApplied = true; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
+    }
+    if (!state.archived) {
+      const archived = modifyReviewMessage_(state.messageId, {removeLabelIds: ['INBOX']});
+      if (archived.labelIds.indexOf('INBOX') >= 0) fail_('MAIL');
+      state.archived = true; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
+    }
     state.status = 'confirmed'; state.outcome = 'archive'; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
   } catch (e) {
-    if (state.labelApplied || state.archived) {
-      restoreReviewRows_(state, sheet);
-      state.status = 'failed'; state.outcome = 'review'; state.failureStage = 'mail'; state.lastError = errorCode_(e); state.updatedAt = new Date().toISOString();
-      try { saveMessageState_(journalSheet, state); } catch (ignored) {}
-      throw e;
-    }
-    state.candidateStates.forEach(function (item) {
-      item.status = 'review';
-      setReviewStatus_(sheet, item.rowNumber, EN.statuses.review, EN.actions.confirm);
-    });
-    state.status = 'review'; state.outcome = 'review'; state.lastError = errorCode_(e);
-    state.failureStage = 'mail'; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
+    // Gmail may have accepted an operation even when its acknowledgement is
+    // uncertain. Preserve the already validated confirmed rows and durable
+    // archive intent; the initial workflow retries idempotent per-message
+    // mutations instead of asking the user to confirm a second time.
+    state.status = 'failed'; state.outcome = 'archive'; state.failureStage = 'mail';
+    state.lastError = errorCode_(e); state.updatedAt = new Date().toISOString();
+    try { saveMessageState_(journalSheet, state); } catch (ignored) {}
+    throw e;
   }
 }
 
@@ -249,7 +256,7 @@ function restoreReviewRows_(state, sheet) {
 function refreshAndValidateReviewRows_(state, sheet, c) {
   const message = getReviewMessage_(state.messageId);
   const complete = state.candidateStates.every(function (item) {
-    const rowNumber = findCouponRowByDedupeKey_(sheet, item.key);
+    const rowNumber = item.rowNumber;
     if (!rowNumber) return false;
     item.rowNumber = rowNumber;
     const index = state.candidateKeys.indexOf(item.key);

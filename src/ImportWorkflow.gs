@@ -1,4 +1,4 @@
-/* Deterministic, read-only import orchestration. Gmail mutations are deliberately absent. */
+/* Durable extraction/import orchestration. Gmail mutation follows verified journal persistence. */
 function runImportWorkflow_(input) {
   return withLock_(function () {
     const state = input || ensureSheetState_();
@@ -47,6 +47,10 @@ function processCouponMessage_(state, message) {
   if (existing && existing.status === 'review') {
     return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
   }
+  if (existing && existing.outcome === 'archive' && existing.candidateStates &&
+      existing.candidateStates.length && existing.candidateStates.every(function (item) { return item.status === 'confirmed'; })) {
+    return finalizeImportedMessage_(state, existing);
+  }
   let journal = existing || newMessageState_(message.id);
   journal.attempts++;
   journal.status = 'processing'; journal.failureStage = 'extract'; journal.lastError = '';
@@ -54,12 +58,20 @@ function processCouponMessage_(state, message) {
   try {
     if (!Array.isArray(journal.candidateStates)) journal.candidateStates = [];
     journal.version = 2;
-    const candidates = deterministicCandidates_(message).map(function (candidate) {
-      const normalized = {}; MC.fields.forEach(function (field) { normalized[field] = ''; });
-      normalized.code = candidate.code; normalized.notes = candidate.notes;
-      normalized.confidence = candidate.confidence; normalized.review = true;
-      return normalized;
-    });
+    const extraction = extractCouponOutcomeForState_(state, message);
+    const candidates = extraction.candidates;
+    if (extraction.verifiedNonOffer) {
+      journal.outcome = 'empty'; journal.status = 'nonoffer'; journal.failureStage = '';
+      journal.updatedAt = new Date().toISOString(); saveMessageState_(state.journalSheet, journal);
+      return {messageId: message.id, status: 'nonoffer', rows: []};
+    }
+    // Empty but unverified, invalidated or incomplete output is never a
+    // non-offer checkpoint. Preserve durable reachability without hot retries.
+    if (!candidates.length) {
+      journal.outcome = 'empty'; journal.status = 'awaiting_extraction'; journal.failureStage = '';
+      journal.updatedAt = new Date().toISOString(); saveMessageState_(state.journalSheet, journal);
+      return {messageId: message.id, status: 'awaiting_extraction', rows: []};
+    }
     const rows = [];
     const statuses = [];
     candidates.forEach(function (candidate, index) {
@@ -70,8 +82,10 @@ function processCouponMessage_(state, message) {
         rowNumber = journal.rowNumbers[known];
         if (!rowNumber) fail_('STATE');
       } else {
-        const row = couponRow_(message, candidate, key);
-        const prior = findCouponRowByDedupeKey_(state.couponSheet, key);
+        const row = couponRow_(message, candidate);
+        // Journal acknowledgement may have failed after the row write. Only a
+        // fresh source-backed message and exact projected identity can recover it.
+        const prior = findCouponRowByCandidateIdentity_(state.couponSheet, message, candidate);
         rowNumber = prior || appendCouponRow_(state.couponSheet, row);
         journal.dedupeKeys.push(key);
         journal.candidateKeys.push(key);
@@ -85,12 +99,11 @@ function processCouponMessage_(state, message) {
       }
     });
     journal.outcome = messageOutcome_(statuses);
-    journal.status = journal.outcome === 'archive' ? 'confirmed' : 'review';
-    // No deterministic code is not proof of a non-offer. Retain the source ID
-    // for the later AI pass without retrying it or granting archive authority.
-    if (journal.outcome === 'empty') journal.status = 'awaiting_extraction';
-    journal.failureStage = ''; journal.updatedAt = new Date().toISOString();
+    journal.status = journal.outcome === 'archive' ? 'processing' : 'review';
+    journal.failureStage = journal.outcome === 'archive' ? 'mail' : '';
+    journal.updatedAt = new Date().toISOString();
     saveMessageState_(state.journalSheet, journal);
+    if (journal.outcome === 'archive') return finalizeImportedMessage_(state, journal);
     return {messageId: message.id, status: journal.status, rows: rows};
   } catch (e) {
     journal.status = 'failed'; journal.retryCount++; journal.failureStage = journal.failureStage || 'write';
@@ -106,17 +119,40 @@ function awaitingMessageExtraction_(journal) {
 }
 
 function candidateDedupeKey_(message, candidate, index) {
-  return digest_(message.id + '|' + index + '|' + normalized_(candidate.merchant) + '|' +
-    candidate.code + '|' + candidate.website + '|' + candidate.discountType + '|' + candidate.discountValue);
+  // Candidate order is model-controlled. Exact candidate identity is not.
+  return digest_(message.id + '|' + exactCandidateIdentityKey_(candidate));
 }
 
 function findCouponRowByDedupeKey_(sheet, key) {
-  const rows = sheet.getDataRange().getDisplayValues();
-  for (let index = 1; index < rows.length; index++) if (rows[index][16] === key) return index + 1;
+  // Technical keys live in the private journal, never in user-visible Notes.
+  // Retained only for compatibility; callers must resolve through journal state.
   return 0;
 }
 
-function couponRow_(message, candidate, key) {
+function findCouponRowByCandidateIdentity_(sheet, message, candidate) {
+  const rows = sheet.getDataRange().getDisplayValues();
+  const identity = candidateRowIdentity_(message, candidate);
+  const matches = [];
+  for (let index = 1; index < rows.length; index++) {
+    if (candidateRowIdentityFromRow_(rows[index]) === identity) matches.push(index + 1);
+  }
+  if (matches.length > 1) fail_('STATE');
+  return matches.length ? matches[0] : 0;
+}
+
+function candidateRowIdentity_(message, candidate) {
+  return JSON.stringify([message.link].concat(MC.fields.map(function (field) { return String(candidate[field] || ''); })));
+}
+
+function candidateRowIdentityFromRow_(row) {
+  const columns = {merchant: 1, website: 2, code: 3, discountType: 4, discountValue: 5, minimumSpend: 6,
+    validOn: 7, exclusions: 8, expiry: 9, usageLimits: 10, currency: 20, notes: 16};
+  return JSON.stringify([String(row[13] || '')].concat(MC.fields.map(function (field) {
+    return reviewSourceValue_(row[columns[field]] || '');
+  })));
+}
+
+function couponRow_(message, candidate) {
   const row = Array(26).fill('');
   row[0] = new Date(message.receivedAtMs); row[1] = textCell_(candidate.merchant);
   row[2] = textCell_(candidate.website); row[3] = textCell_(candidate.code);
@@ -126,7 +162,8 @@ function couponRow_(message, candidate, key) {
   row[10] = textCell_(candidate.usageLimits); row[11] = textCell_(message.subject);
   row[12] = textCell_(message.sender); row[13] = message.link;
   row[14] = candidate.confidence; row[15] = candidate.review ? EN.yes : '';
-  row[16] = key; row[17] = candidate.review ? EN.statuses.review : EN.statuses.confirmed;
+  row[16] = textCell_(candidate.notes); row[17] = candidate.review ? EN.statuses.review : EN.statuses.confirmed;
+  row[20] = textCell_(candidate.currency);
   row[24] = '';
   return row;
 }
@@ -136,6 +173,41 @@ function appendCouponRow_(sheet, row) {
   const rowNumber = Math.max(2, sheet.getLastRow() + 1);
   sheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
   const stored = sheet.getRange(rowNumber, 1, 1, row.length).getValues()[0];
-  if (stored.length !== row.length || String(stored[16]) !== String(row[16])) fail_('WRITE');
+  if (stored.length !== row.length || String(stored[13]) !== String(row[13]) ||
+      String(stored[16]) !== String(row[16]) || String(stored[20]) !== String(row[20])) fail_('WRITE');
   return rowNumber;
+}
+
+function extractCouponOutcomeForState_(state, message) {
+  if (state && typeof state.extractCouponOutcome === 'function') return state.extractCouponOutcome(message);
+  const hooks = Object.assign({}, state && state.extractionHooks || {});
+  if (state && state._deadlineMs) hooks.deadlineMs = state._deadlineMs;
+  return extractCouponOutcome_(message, hooks);
+}
+
+function finalizeImportedMessage_(state, journal) {
+  const c = state && state.config;
+  if (!c || !c.labelId) fail_('CONFIG');
+  try {
+    if (!journal.labelApplied) {
+      const labelled = modifyReviewMessage_(journal.messageId, {addLabelIds: [c.labelId]});
+      if (labelled.labelIds.indexOf(c.labelId) < 0) fail_('MAIL');
+      journal.labelApplied = true; journal.updatedAt = new Date().toISOString();
+      saveMessageState_(state.journalSheet, journal);
+    }
+    if (!journal.archived) {
+      const archived = modifyReviewMessage_(journal.messageId, {removeLabelIds: ['INBOX']});
+      if (archived.labelIds.indexOf('INBOX') >= 0) fail_('MAIL');
+      journal.archived = true; journal.updatedAt = new Date().toISOString();
+      saveMessageState_(state.journalSheet, journal);
+    }
+    journal.status = 'confirmed'; journal.failureStage = ''; journal.lastError = '';
+    journal.updatedAt = new Date().toISOString(); saveMessageState_(state.journalSheet, journal);
+    return {messageId: journal.messageId, status: 'confirmed', rows: journal.rowNumbers.slice()};
+  } catch (e) {
+    journal.status = 'failed'; journal.retryCount++; journal.failureStage = 'mail';
+    journal.lastError = errorCode_(e); journal.updatedAt = new Date().toISOString();
+    try { saveMessageState_(state.journalSheet, journal); } catch (ignored) {}
+    return {messageId: journal.messageId, status: 'failed', rows: journal.rowNumbers.slice(), error: journal.lastError};
+  }
 }
