@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Use one conservative image count and byte budget from acquisition through the
+  Gemini request. Omit excess images with incomplete coverage before transport,
+  retaining inspected image identities and explicit manual review authority.
+
 - Reconcile a briefly stale exact-ID Apps Script deployment readback after a
   validated update response with a bounded 30-second retry budget, without
   repeating mutations or accepting any changed deployment identity, target

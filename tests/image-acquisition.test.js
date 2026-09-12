@@ -73,9 +73,34 @@ test('does not fetch beyond the image-count bound', () => {
   ctx.UrlFetchApp = {fetch: () => { calls++; return {getResponseCode: () => 200, getHeaders: () => ({'Content-Type': 'image/png'}), getContent: () => png}; }};
   const html = Array.from({length: 13}, (_, i) => '<img src="https://shop.com/' + i + '.png">').join('');
   const result = ctx.acquireMessageImages_(message({mimeType: 'multipart/mixed', parts: []}), html);
-  assert.equal(calls, 12);
+  assert.equal(calls, 6);
   assert.equal(result.incomplete, true);
-  assert.equal(result.images.length, 12);
+  assert.equal(result.images.length, 6);
+});
+
+test('acquisition omits excess attachment images before Gemini transport and preserves image indexes', () => {
+  const {ctx, properties} = harness(); properties.GEMINI_API_KEY = 'synthetic-key';
+  const gif = [71, 73, 70, 56, 57, 97, 3, 0, 3, 0, 0, 0, 0];
+  const raw = message({mimeType: 'multipart/mixed', parts: Array.from({length: 7}, (_, index) => ({
+    mimeType: 'image/gif', filename: 'image' + index + '.gif', headers: [], body: {data: gif, size: gif.length}
+  }))});
+  const acquired = ctx.acquireMessageImages_(raw, '');
+  assert.equal(acquired.incomplete, true);
+  assert.deepEqual(Array.from(acquired.images, image => [image.sourceId, image.slot, image.mimeType]), [
+    ['abc123:image:0', 0, 'image/gif'], ['abc123:image:1', 1, 'image/gif'],
+    ['abc123:image:2', 2, 'image/gif'], ['abc123:image:3', 3, 'image/gif'],
+    ['abc123:image:4', 4, 'image/gif'], ['abc123:image:5', 5, 'image/gif']
+  ]);
+  let request;
+  const outcome = ctx.extractCouponOutcome_({text: 'Coupon code SAVE20', incomplete: acquired.incomplete, images: acquired.images}, {
+    fetch: (_, options) => {
+      request = JSON.parse(options.payload);
+      return {status: 200, body: JSON.stringify({candidates: [{content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})};
+    }
+  });
+  assert.equal(request.contents[0].parts.filter(part => part.inlineData).length, 6);
+  assert.equal(outcome.status, 'incomplete');
+  assert.equal(outcome.archiveAllowed, false);
 });
 
 test('CID matching is case-sensitive and same-filename attachments remain independent', () => {

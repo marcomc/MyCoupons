@@ -124,7 +124,7 @@ test('attachment and inline sizes, invalid bytes and aggregate limits retain inc
   for (const declaredSize of [1, '24', -1, NaN]) {
     assert.equal(ctx.materializeImage_('abc123', 0, {mimeType: 'image/png', data: png, declaredSize}, 0), null);
   }
-  assert.equal(ctx.materializeImage_('abc123', 0, {mimeType: 'image/png', data: png}, 8 * 1024 * 1024), null);
+  assert.equal(ctx.materializeImage_('abc123', 0, {mimeType: 'image/png', data: png}, 6 * 1024 * 1024), null);
   assert.equal(ctx.materializeImage_('abc123', 0, {mimeType: 'image/png', data: png.concat(new Array(2 * 1024 * 1024).fill(0))}, 0), null);
   const tiny = png.slice(); tiny[19] = 1;
   assert.equal(ctx.materializeImage_('abc123', 0, {mimeType: 'image/png', data: signed(tiny)}, 0), null);
@@ -197,7 +197,7 @@ test('image byte budgets reject oversized arrays and base64 before decode or byt
     ctx.Gmail.Users.Messages = {Attachments: {get: () => ({data, size: png.length})}};
     assert.equal(ctx.materializeImage_('abc123', 0, {mimeType: 'image/png', attachmentId: 'att', declaredSize: png.length}, 0), null);
   }
-  assert.equal(ctx.materializeImage_('abc123', 0, {mimeType: 'image/png', data: Buffer.from(png).toString('base64url')}, 8 * 1024 * 1024 - 1), null);
+  assert.equal(ctx.materializeImage_('abc123', 0, {mimeType: 'image/png', data: Buffer.from(png).toString('base64url')}, 6 * 1024 * 1024 - 1), null);
   assert.equal(decodes, 0); assert.equal(copies, 0);
   const fresh = harness().ctx;
   // The exact cap remains valid; padding must not inflate the byte estimate.
@@ -205,20 +205,19 @@ test('image byte budgets reject oversized arrays and base64 before decode or byt
 });
 
 
-test('remote image bytes reach the aggregate budget before normalization copies', () => {
+test('remote image acquisition stops at the exact aggregate budget before another fetch', () => {
   const {ctx} = harness();
   const large = png.concat(new Array(2 * 1024 * 1024 - png.length).fill(0));
-  let reads = 0; let copies = 0;
-  const blocked = png.slice();
-  Object.defineProperty(blocked, 0, {get: () => { copies++; return 137; }});
+  let reads = 0;
   ctx.UrlFetchApp = {fetch: () => {
     reads++;
+    if (reads > 3) assert.fail('must not fetch after reaching the aggregate image budget');
     return {getResponseCode: () => 200, getHeaders: () => ({'Content-Type': 'image/png'}),
-      getContent: () => reads <= 4 ? large : blocked};
+      getContent: () => large};
   }};
   const html = Array.from({length: 5}, (_, i) => '<img src="https://example.com/' + i + '.png">').join('');
   const result = ctx.acquireMessageImages_({id: 'abc123'}, html);
-  assert.equal(result.images.length, 4);
+  assert.equal(reads, 3);
+  assert.equal(result.images.length, 3);
   assert.equal(result.incomplete, true);
-  assert.equal(copies, 0);
 });
