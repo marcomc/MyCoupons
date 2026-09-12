@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Bind Gemini extraction values to typed evidence in a shared JSON response
+  schema on both backends. Validate the complete response before projection,
+  retain source-grounding and review authority, reject excess offers and
+  incomplete provider completions, and keep format failures out of paid fallback.
+
 - Use one conservative image count and byte budget from acquisition through the
   Gemini request. Omit excess images with incomplete coverage before transport,
   retaining inspected image identities and explicit manual review authority.

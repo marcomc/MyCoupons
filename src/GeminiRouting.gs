@@ -133,7 +133,8 @@ function callGeminiBackend_(backend, c, request, hooks, fallbackReason) {
     const response = UrlFetchApp.fetch(url, options);
     return {status: response.getResponseCode(), body: response.getContentText()};
   };
-  const payload = {contents: [{role: 'user', parts: [{text: request.text}]}]};
+  const payload = {contents: [{role: 'user', parts: [{text: request.text}]}],
+    generationConfig: {responseMimeType: 'application/json', responseJsonSchema: candidateResponseSchema_()}};
   (request.images || []).forEach(function (image) {
     payload.contents[0].parts.push({inlineData: {mimeType: image.mimeType, data: image.data}});
   });
@@ -174,8 +175,9 @@ function parseGeminiResponse_(response) {
   if (response.body.length > GEMINI_ROUTING.maxResponseBytes) fail_('GEMINI_RESPONSE');
   let body;
   try { body = JSON.parse(response.body); } catch (e) { fail_('GEMINI_RESPONSE'); }
-  const parts = body && body.candidates && body.candidates[0] && body.candidates[0].content &&
-    body.candidates[0].content.parts;
+  if (!body || !Array.isArray(body.candidates) || body.candidates.length !== 1 ||
+      !body.candidates[0] || body.candidates[0].finishReason !== 'STOP') fail_('GEMINI_RESPONSE');
+  const parts = body.candidates[0].content && body.candidates[0].content.parts;
   if (!Array.isArray(parts)) fail_('GEMINI_RESPONSE');
   const text = parts.filter(function (part) { return part && typeof part.text === 'string'; })
     .map(function (part) { return part.text; }).join('');
