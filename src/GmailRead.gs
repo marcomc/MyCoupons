@@ -278,7 +278,7 @@ function diagnoseGmailRead(messageId) {
     const config = config_();
     assertOwner_(config);
     if (!validGmailApiId_(messageId)) fail_('MAIL');
-    const report = {rawShape: 'not-run', read: 'not-run', mime: 'not-run', html: 'not-run',
+    const report = {rawShape: 'not-run', mimeTrace: {parts: [], omitted: 0}, read: 'not-run', mime: 'not-run', html: 'not-run',
       imageParts: 'not-run', acquisition: 'not-run', canonical: 'not-run'};
     let raw;
     try {
@@ -292,7 +292,7 @@ function diagnoseGmailRead(messageId) {
     }
     let payload;
     try {
-      payload = parseMimePayload_(raw.payload);
+      payload = parseMimePayload_(raw.payload, report.mimeTrace);
       report.mime = 'ok';
     } catch (e) {
       report.mime = diagnosticStageError_(e);
@@ -375,29 +375,75 @@ function canonicalGmailMessage_(raw, deadlineMs) {
   };
 }
 
-function parseMimePayload_(part) {
+// Trace records contain only closed classifications, types, counts and outcomes.
+// Keep the most recent records so a deep/late failure remains visible. This is
+// observation of the production path, never an alternate permissive parser.
+function mimeDiagnosticType_(value) {
+  return value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+}
+
+function mimeDiagnosticPart_(trace, parent) {
+  if (!trace) return null;
+  const record = {index: trace.omitted + trace.parts.length, parent: parent ? parent.index : null,
+    stage: 'part-validation', status: 'running'};
+  if (trace.parts.length === 64) { trace.parts.shift(); trace.omitted++; }
+  trace.parts.push(record);
+  return record;
+}
+
+function parseMimePayload_(part, trace, parent) {
+  const record = mimeDiagnosticPart_(trace, parent);
+  try {
+    const output = parseMimePart_(part, trace, record);
+    if (record) { record.stage = 'complete'; record.status = 'ok'; }
+    return output;
+  } catch (e) {
+    if (record) record.status = 'error';
+    throw e;
+  }
+}
+
+function parseMimePart_(part, trace, record) {
+  if (record) {
+    record.partType = mimeDiagnosticType_(part);
+    record.mimeTypeType = part ? mimeDiagnosticType_(part.mimeType) : 'not-applicable';
+  }
   if (!part || typeof part !== 'object' || typeof part.mimeType !== 'string' || !part.mimeType.trim()) fail_('MAIL');
   const mimeType = part.mimeType.split(';', 1)[0].trim().toLowerCase();
-  const headers = mimeHeaders_(part.headers);
+  if (record) {
+    record.mimeClass = mimeType.indexOf('multipart/') === 0 ? 'multipart' :
+      mimeType === 'text/plain' ? 'plain' : mimeType === 'text/html' ? 'html' : 'other';
+    record.stage = 'headers-validation';
+    record.headersType = mimeDiagnosticType_(part.headers);
+  }
+  const headers = mimeHeaders_(part.headers, record);
   const output = {headers: headers, text: '', html: '', incomplete: false};
   if (mimeType.indexOf('multipart/') === 0) {
+    if (record) {
+      record.stage = 'multipart-validation';
+      record.partsType = mimeDiagnosticType_(part.parts);
+      record.bodyType = mimeDiagnosticType_(part.body);
+    }
     if (!Array.isArray(part.parts)) {
       if (part.body && typeof part.body === 'object' && part.body.data) fail_('MAIL');
       output.incomplete = true;
       return output;
     }
     if (part.body && typeof part.body === 'object' && part.body.data) fail_('MAIL');
+    if (record) record.stage = 'multipart-children';
     part.parts.forEach(function (child) {
-      const parsed = parseMimePayload_(child);
+      const parsed = parseMimePayload_(child, trace, record);
+      if (record) record.stage = 'multipart-composition';
       if (parsed.text) output.text = appendMimeText_(output.text, parsed.text);
       if (parsed.html) output.html = appendMimeText_(output.html, parsed.html);
       output.incomplete = output.incomplete || parsed.incomplete;
       if (!output.headers.length && parsed.headers.length) output.headers = parsed.headers;
+      if (record) record.stage = 'multipart-children';
     });
     return output;
   }
   if (mimeType === 'text/plain' || mimeType === 'text/html') {
-    const value = decodeMimeBody_(part.body, headers);
+    const value = decodeMimeBody_(part.body, headers, record);
     if (mimeType === 'text/plain') output.text = value;
     else output.html = value;
     return output;
@@ -412,10 +458,16 @@ function appendMimeText_(left, right) {
   return left + '\n' + right;
 }
 
-function mimeHeaders_(headers) {
+function mimeHeaders_(headers, record) {
   if (headers == null) return [];
   if (!Array.isArray(headers)) fail_('MAIL');
-  return headers.map(function (header) {
+  return headers.map(function (header, index) {
+    if (record) {
+      record.headerIndex = index;
+      record.headerType = mimeDiagnosticType_(header);
+      record.headerNameType = header ? mimeDiagnosticType_(header.name) : 'not-applicable';
+      record.headerValueType = header ? mimeDiagnosticType_(header.value) : 'not-applicable';
+    }
     if (!header || typeof header.name !== 'string' || !header.name || typeof header.value !== 'string') fail_('MAIL');
     return {name: header.name.toLowerCase(), value: header.value};
   });
@@ -426,21 +478,59 @@ function mimeHeader_(headers, name) {
   return match.length ? match[0].value : '';
 }
 
-function decodeMimeBody_(body, headers) {
+function decodeMimeBody_(body, headers, record) {
+  if (record) { record.stage = 'body-validation'; record.bodyType = mimeDiagnosticType_(body); }
   if (!body || typeof body !== 'object') fail_('MAIL');
   const data = body.data == null ? '' : body.data;
+  if (record) {
+    record.stage = 'data-validation';
+    record.dataType = mimeDiagnosticType_(body.data);
+    record.dataLength = typeof data === 'string' ? data.length : null;
+    record.dataLengthRemainder = typeof data === 'string' ? data.length % 4 : null;
+    record.dataSyntaxValid = typeof data === 'string' && /^[A-Za-z0-9_-]*={0,2}$/.test(data);
+    record.paddingLength = typeof data === 'string' ? (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0) : null;
+    record.sizeType = mimeDiagnosticType_(body.size);
+  }
   if (typeof data !== 'string' || !/^[A-Za-z0-9_-]*={0,2}$/.test(data) || data.length % 4 === 1) fail_('MAIL');
+  if (record) {
+    record.stage = 'size-validation';
+    record.sizeValid = body.size == null || Number.isSafeInteger(body.size) && body.size >= 0;
+  }
   if (body.size != null && (!Number.isSafeInteger(body.size) || body.size < 0)) fail_('MAIL');
   if (!data) {
+    if (record) record.stage = 'empty-body-validation';
     if (body.size && body.size !== 0) fail_('MAIL');
     return '';
   }
   let bytes;
+  if (record) record.stage = 'base64-decode';
   try { bytes = Utilities.base64DecodeWebSafe(data); } catch (e) { fail_('MAIL'); }
+  if (record) {
+    record.stage = 'bytes-validation';
+    record.bytesType = mimeDiagnosticType_(bytes);
+    record.bytesLengthType = bytes == null ? 'not-applicable' : typeof bytes.length;
+    record.bytesLength = bytes != null && Number.isSafeInteger(bytes.length) && bytes.length >= 0 ? bytes.length : null;
+    record.sizeMatches = body.size == null ? 'not-declared' : bytes != null && body.size === bytes.length;
+  }
   if (!Array.isArray(bytes)) fail_('MAIL');
+  if (record) record.stage = 'size-match';
   if (body.size != null && body.size !== bytes.length) fail_('MAIL');
+  if (record) record.stage = 'charset-validation';
   const charset = mimeCharset_(headers);
-  try { return Utilities.newBlob(bytes).getDataAsString(charset); } catch (e) { fail_('MAIL'); }
+  if (record) {
+    const normalized = charset.toLowerCase();
+    record.charsetClass = normalized === 'utf-8' || normalized === 'utf8' ? 'utf8' :
+      normalized === 'us-ascii' || normalized === 'ascii' ? 'ascii' :
+      normalized === 'iso-8859-1' ? 'latin1' : normalized === 'windows-1252' ? 'windows1252' : 'other';
+    record.stage = 'blob-create';
+  }
+  try {
+    const blob = Utilities.newBlob(bytes);
+    if (record) record.stage = 'string-decode';
+    const value = blob.getDataAsString(charset);
+    if (record) record.decodedType = mimeDiagnosticType_(value);
+    return value;
+  } catch (e) { fail_('MAIL'); }
 }
 
 function mimeCharset_(headers) {

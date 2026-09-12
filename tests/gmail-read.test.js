@@ -113,25 +113,31 @@ test('owner-only Gmail read diagnostic exposes only stage outcomes', () => {
   const before = JSON.stringify(properties);
   const shape = {idType: 'string', threadIdType: 'string', internalDateType: 'string', payloadType: 'object',
     payloadHeadersType: 'array', payloadPartsType: 'undefined'};
+  const trace = {parts: [{index: 0, parent: null, stage: 'complete', status: 'ok',
+    partType: 'object', mimeTypeType: 'string', mimeClass: 'plain', headersType: 'array', headerIndex: 1,
+    headerType: 'object', headerNameType: 'string', headerValueType: 'string',
+    bodyType: 'object', dataType: 'string', dataLength: 24, dataLengthRemainder: 0, dataSyntaxValid: true,
+    paddingLength: 0, sizeType: 'number', sizeValid: true, bytesType: 'array',
+    bytesLengthType: 'number', bytesLength: 18, sizeMatches: true, charsetClass: 'utf8', decodedType: 'string'}], omitted: 0};
   assert.deepEqual(JSON.parse(JSON.stringify(ctx.diagnoseGmailRead('abc123'))), {
-    rawShape: shape, read: 'ok', mime: 'ok', html: 'ok', imageParts: 'ok', acquisition: 'ok', canonical: 'ok'
+    mimeTrace: trace, rawShape: shape, read: 'ok', mime: 'ok', html: 'ok', imageParts: 'ok', acquisition: 'ok', canonical: 'ok'
   });
   assert.equal(JSON.stringify(properties), before);
   ctx.Gmail.Users.Messages.get = () => { throw new Error('provider detail must not escape'); };
   assert.deepEqual(JSON.parse(JSON.stringify(ctx.diagnoseGmailRead('abc123'))), {
-    rawShape: 'not-run', read: 'error', mime: 'not-run', html: 'not-run', imageParts: 'not-run', acquisition: 'not-run', canonical: 'not-run'
+    mimeTrace: {parts: [], omitted: 0}, rawShape: 'not-run', read: 'error', mime: 'not-run', html: 'not-run', imageParts: 'not-run', acquisition: 'not-run', canonical: 'not-run'
   });
   ctx.Gmail.Users.Messages.get = () => message('abc123', Date.parse('2026-05-22T00:00:00Z'));
   ctx.htmlContent_ = () => { throw new Error('provider detail must not escape'); };
   assert.deepEqual(JSON.parse(JSON.stringify(ctx.diagnoseGmailRead('abc123'))), {
-    rawShape: shape, read: 'ok', mime: 'ok', html: 'error', imageParts: 'ok', acquisition: 'error', canonical: 'error'
+    mimeTrace: trace, rawShape: shape, read: 'ok', mime: 'ok', html: 'error', imageParts: 'ok', acquisition: 'error', canonical: 'error'
   });
   const fresh = harness();
   installGmail(fresh.ctx, () => ({messages: []}), id => message(id, Date.parse('2026-05-22T00:00:00Z')));
   const freshBefore = JSON.stringify(fresh.properties);
   fresh.ctx.collectImageParts_ = () => { throw new Error('part details must not escape'); };
   assert.deepEqual(JSON.parse(JSON.stringify(fresh.ctx.diagnoseGmailRead('abc123'))), {
-    rawShape: shape, read: 'ok', mime: 'ok', html: 'ok', imageParts: 'error', acquisition: 'error', canonical: 'error'
+    mimeTrace: trace, rawShape: shape, read: 'ok', mime: 'ok', html: 'ok', imageParts: 'error', acquisition: 'error', canonical: 'error'
   });
   assert.equal(JSON.stringify(fresh.properties), freshBefore);
   let reads = 0;
@@ -141,4 +147,99 @@ test('owner-only Gmail read diagnostic exposes only stage outcomes', () => {
   assert.equal(reads, 0);
   assert.equal(JSON.stringify(properties), before);
   ctx.Gmail.Users.getProfile = () => ({emailAddress: config.ownerEmail});
+});
+
+
+test('MIME trace identifies each production validation and runtime failure without leaking source data', () => {
+  const cases = [
+    ['part-validation', raw => { raw.payload.parts[0] = null; }],
+    ['part-validation', raw => { raw.payload.parts[0].mimeType = 123; }],
+    ['headers-validation', raw => { raw.payload.parts[0].headers = {}; }],
+    ['headers-validation', raw => { raw.payload.parts[0].headers = [{name: 'Secret header', value: 1}]; }],
+    ['multipart-validation', raw => { raw.payload.parts[0] = {mimeType: 'multipart/mixed', body: body('SECRET')}; }],
+    ['body-validation', raw => { raw.payload.parts[0].body = null; }],
+    ['data-validation', raw => { raw.payload.parts[0].body.data = 'SECRET!'; }],
+    ['size-validation', raw => { raw.payload.parts[0].body.size = '6'; }],
+    ['empty-body-validation', raw => { raw.payload.parts[0].body.data = ''; }],
+    ['base64-decode', (_, ctx) => { ctx.Utilities.base64DecodeWebSafe = () => { throw Error('SECRET provider detail'); }; }],
+    ['bytes-validation', (_, ctx) => { ctx.Utilities.base64DecodeWebSafe = () => ({length: 6, 0: 83}); }],
+    ['bytes-validation', (_, ctx) => { ctx.Utilities.base64DecodeWebSafe = () => null; }],
+    ['size-match', raw => { raw.payload.parts[0].body.size = 7; }],
+    ['charset-validation', raw => { raw.payload.parts[0].headers = [{name: 'Content-Type', value: 'text/plain; charset="SECRET!"'}]; }],
+    ['blob-create', (_, ctx) => { ctx.Utilities.newBlob = () => { throw Error('SECRET blob detail'); }; }],
+    ['string-decode', (_, ctx) => { ctx.Utilities.newBlob = () => ({getDataAsString: () => { throw Error('SECRET charset detail'); }}); }],
+    ['multipart-composition', (_, ctx) => { ctx.appendMimeText_ = () => { throw Error('SECRET composition detail'); }; }]
+  ];
+  for (const [stage, inject] of cases) {
+    const {ctx, properties} = harness();
+    const raw = message('abc123', 0);
+    raw.payload = {mimeType: 'multipart/alternative', parts: [{mimeType: 'text/plain', body: body('SECRET')}]};
+    inject(raw, ctx);
+    let reads = 0;
+    ctx.Gmail.Users.Messages = {get: () => { reads++; return raw; }, modify: () => assert.fail('no Gmail writes')};
+    ctx.SpreadsheetApp = {openById: () => assert.fail('no sheet access')};
+    ctx.ScriptApp.newTrigger = () => assert.fail('no trigger writes');
+    ctx.ScriptApp.deleteTrigger = () => assert.fail('no trigger writes');
+    ctx.PropertiesService.getScriptProperties = () => ({getProperty: key => properties[key] ?? null,
+      setProperty: () => assert.fail('no property writes'), deleteProperty: () => assert.fail('no property writes')});
+    ctx.acquireMessageImages_ = () => assert.fail('must stop at MIME failure');
+    const report = JSON.parse(JSON.stringify(ctx.diagnoseGmailRead('abc123')));
+    assert.equal(reads, 1);
+    assert.match(report.mime, /^error/);
+    assert.equal(report.html, 'not-run');
+    assert.ok(report.mimeTrace.parts.some(part => part.stage === stage && part.status === 'error'), stage);
+    if (stage !== 'multipart-composition') {
+      assert.equal(report.mimeTrace.parts.at(-1).parent, 0);
+      assert.equal(report.mimeTrace.parts.at(-1).stage, stage);
+    }
+    assert.doesNotMatch(JSON.stringify(report), /SECRET|abc123|offers@example|Offer|U0VDUkVU/);
+  }
+});
+
+test('MIME tracing preserves successful parser outputs and bounds late-failure records', () => {
+  const {ctx} = harness();
+  const plain = {mimeType: 'text/plain', body: body('synthetic')};
+  const payload = {mimeType: 'multipart/alternative', parts: [plain,
+    {mimeType: 'text/html', headers: [{name: 'Content-Type', value: 'text/html; charset=iso-8859-1'}], body: body('<b>synthetic</b>')},
+    {mimeType: 'application/octet-stream'}, {mimeType: 'multipart/mixed'}]};
+  const trace = {parts: [], omitted: 0};
+  const normal = ctx.parseMimePayload_(payload);
+  const observed = ctx.parseMimePayload_(payload, trace);
+  assert.deepEqual(observed, normal);
+  assert.equal(observed.incomplete, true);
+  assert.equal(trace.parts[2].charsetClass, 'latin1');
+  assert.ok(trace.parts.every(part => part.stage === 'complete' && part.status === 'ok'));
+  const many = {mimeType: 'multipart/mixed', parts: Array.from({length: 100}, () => plain)};
+  many.parts.push({mimeType: 'text/plain', body: {data: 'broken!'}});
+  const bounded = {parts: [], omitted: 0};
+  assert.throws(() => ctx.parseMimePayload_(many, bounded), /MAIL/);
+  assert.equal(bounded.parts.length, 64);
+  assert.equal(bounded.omitted, 38);
+  assert.equal(bounded.parts.at(-1).index, 101);
+  assert.equal(bounded.parts.at(-1).parent, 0);
+  assert.equal(bounded.parts.at(-1).stage, 'data-validation');
+  const nested = {mimeType: 'multipart/mixed', parts: [many]};
+  const deep = {parts: [], omitted: 0};
+  assert.throws(() => ctx.parseMimePayload_(nested, deep), /MAIL/);
+  assert.equal(deep.parts.at(-1).parent, 1);
+});
+
+test('MIME trace observes byte representation, size equality and charset classes without relaxing validation', () => {
+  const {ctx} = harness();
+  const payload = {mimeType: 'text/plain', body: body('SECRET')};
+  const trace = {parts: [], omitted: 0};
+  ctx.Utilities.base64DecodeWebSafe = () => new Int8Array([83, 69, 67, 82, 69, 84]);
+  assert.throws(() => ctx.parseMimePayload_(payload, trace), /MAIL/);
+  assert.equal(trace.parts[0].bytesType, 'object');
+  assert.equal(trace.parts[0].bytesLength, 6);
+  assert.equal(trace.parts[0].sizeMatches, true);
+  const fresh = harness().ctx;
+  for (const [charset, classification] of [['UTF-8', 'utf8'], ['US-ASCII', 'ascii'],
+    ['windows-1252', 'windows1252'], ['SECRET-CHARSET', 'other']]) {
+    const next = {parts: [], omitted: 0};
+    fresh.Utilities.newBlob = () => ({getDataAsString: actual => { assert.equal(actual, charset); return 'SECRET'; }});
+    fresh.parseMimePayload_({...payload, headers: [{name: 'Content-Type', value: 'text/plain; charset=' + charset}]}, next);
+    assert.equal(next.parts[0].charsetClass, classification);
+    assert.doesNotMatch(JSON.stringify(next), /SECRET/);
+  }
 });

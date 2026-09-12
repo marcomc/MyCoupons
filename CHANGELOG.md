@@ -55,6 +55,11 @@
 
 ### Added
 
+- Trace nested MIME validation and Apps Script decoding stages in the owner-only
+  Gmail diagnostic, with bounded metadata-only records for runtime triage.
+  Importer validation and behavior remain unchanged; a live MIME repair is not
+  yet established.
+
 - Add an owner-gated, read-only Gmail stage diagnostic with fixed opaque results
   and primitive representation types for live triage; it exposes no mailbox
   content or identifiers.
