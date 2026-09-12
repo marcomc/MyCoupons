@@ -73,10 +73,15 @@ The example configuration contains product defaults only.
   run reloads durable state. Notification deltas come from that durable state.
 - `diagnoseGmailRead(messageId)` is an owner-gated, read-only Execution API
   entrypoint for an operator investigating a Gmail runtime mismatch. It returns
-  only fixed stage outcomes plus primitive raw-shape types for the read, MIME,
-  HTML, image-part, acquisition, and canonicalization steps; it never returns
-  message data, identifiers,
-  headers, URLs, image bytes, or exception text. It performs no Gmail, sheet,
+  fixed outcomes for read, MIME, HTML, image-part, acquisition, and canonicalization
+  plus primitive raw-shape types. `mimeTrace` retains the latest 64 MIME part
+  records (with an omitted count), numbered traversal/parent positions, exact
+  failure stages, types, lengths, size equality, and fixed charset classes.
+  The trace follows the production parser and does not relax validation or
+  establish a runtime repair. For a MIME failure, inspect the deepest retained
+  error record; ancestors may also fail while processing their children.
+  It never returns message content, identifiers, headers, URLs, bytes, arbitrary
+  charset names, or exception text. It performs no Gmail, sheet,
   property, or trigger mutation.
 - Canonical message payloads preserve the message ID, thread ID, received time,
   sender, subject, plain text, raw HTML, and canonical Gmail link. MIME
