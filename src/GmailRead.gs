@@ -3,7 +3,7 @@ const MC_GMAIL_MAX_PAGES = 20;
 const MC_GMAIL_MAX_MESSAGES_PER_RUN = 50;
 const MC_MAILBOX_SCAN_STATE_KEY = 'MYCOUPONS_MAILBOX_SCAN_STATE';
 const MC_MAILBOX_SCAN_STATE_VERSION = 1;
-const MC_FINAL_MESSAGE_STATES = Object.freeze(['confirmed', 'ignored']);
+const MC_FINAL_MESSAGE_STATES = Object.freeze(['confirmed', 'ignored', 'nonoffer']);
 
 function mailboxScanState_(recoveryStart, nowMs, installationId) {
   if (!Number.isSafeInteger(recoveryStart) || recoveryStart < 0 ||
@@ -100,7 +100,9 @@ function scanCouponMessagesInSession_(state, onMessage, accumulator) {
   const journalSnapshot = readMessageJournal_(state.journalSheet);
   const retryCandidates = Object.keys(journalSnapshot).filter(function (id) {
     const journal = journalSnapshot[id];
-    return journal && (journal.status === 'pending' && /^read\|\d+\|\d+$/.test(journal.failureStage || '') || journal.status === 'processing' ||
+    return journal && (journal.version === 3 && !completeCandidateBatch_(journal) ||
+      journal.status === 'pending' && /^read\|\d+\|\d+$/.test(journal.failureStage || '') || journal.status === 'processing' ||
+      awaitingMessageExtraction_(journal) ||
       journal.status === 'failed' && /^read\|\d+\|\d+$/.test(journal.failureStage || '') ||
       journal.status === 'failed' && journal.failureStage !== 'read' && !!journal.failureStage) &&
       scan.pendingIds.indexOf(id) < 0 && validGmailApiId_(id);
@@ -218,8 +220,8 @@ function mailboxRetryWindow_(scan, journal) {
 
 function mailboxProcessMessage_(state, scan, messageId, enforceWindow, onMessage, result) {
   const journal = getMessageState_(state.journalSheet, messageId);
-  if (journal && (MC_FINAL_MESSAGE_STATES.indexOf(journal.status) >= 0 || journal.status === 'review' ||
-      awaitingMessageExtraction_(journal))) return true;
+  if (journal && completeCandidateBatch_(journal) && (MC_FINAL_MESSAGE_STATES.indexOf(journal.status) >= 0 || journal.status === 'review')) return true;
+  if (journal && journal.status === 'awaiting_extraction' && !awaitingMessageExtraction_(journal)) return true;
   if (!journal) {
     const pending = newMessageState_(messageId);
     pending.failureStage = 'read|' + scan.startMs + '|' + scan.endMs;

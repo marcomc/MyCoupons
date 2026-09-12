@@ -158,6 +158,10 @@ test('journal states preserve retry and dedupe metadata and reject duplicates', 
   const state = ctx.newMessageState_('opaque-message-id');
   state.status = 'failed'; state.attempts = 2; state.retryCount = 1;
   state.dedupeKeys = ['merchant|code']; state.lastError = 'temporary';
+  state.nextRetryAt = 'invalid';
+  assert.equal(ctx.validMessageState_(state), false);
+  state.nextRetryAt = '2026-09-12T12:00:00.000Z';
+  assert.equal(ctx.validMessageState_(state), true);
   ctx.saveMessageState_(journal, state);
   assert.deepEqual(JSON.parse(JSON.stringify(ctx.getMessageState_(journal, 'opaque-message-id'))),
     JSON.parse(JSON.stringify(state)));

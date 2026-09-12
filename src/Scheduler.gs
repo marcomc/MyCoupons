@@ -215,7 +215,7 @@ function scheduledSummary_(state, before, result) {
     if (message.status !== 'review') return;
     const prior = before[messageId];
     const priorRows = prior && prior.rowNumbers || [];
-    const recovered = prior && prior.status === 'failed';
+    const recovered = prior && prior.status !== 'review';
     const newRows = message.rowNumbers.filter(function (row) { return recovered || priorRows.indexOf(row) < 0; });
     if (!newRows.length) return;
     review += newRows.length;

@@ -4,6 +4,36 @@
 
 ### Fixed
 
+- Share factual identity normalization across deduplication, row recovery, and AI
+  retry matching, preserving numeric zero and exact code/URL components. Keep
+  truncated deterministic Notes and clipped code sets in review after AI enrichment.
+
+- Run full deterministic plus AI extraction during initial and recovered scans;
+  keep invalidated or incomplete empty outputs reachable, checkpoint verified
+  non-offers without archive authority, and recover legacy awaiting-extraction
+  records without hot retries.
+
+- Preserve readable evidenced Notes and Currency columns while keeping technical
+  candidate identities in the private journal. Reconcile reordered candidate
+  output and append-before-acknowledgement recovery without duplicate rows.
+
+- Persist message-finalization checkpoints before and after label/archive
+  operations, preserve unread and unrelated messages, and use bounded production
+  Gemini retry delays that respect the runtime deadline.
+
+- Verify the complete immutable candidate batch before row writes, replay
+  interrupted imports without re-extraction, and gate every archive entrypoint
+  on full-batch persistence. Keep interrupted legacy batches fail-closed and
+  preserve completed legacy review, including Notes keys and typed expiry dates.
+
+- Preserve case-sensitive URL paths, queries, and fragments in candidate
+  identities. Collapse exact repeated AI offers before sparse-code enrichment
+  while retaining distinct conditions for offers sharing a coupon code.
+
+- Honor extraction backoff for retained page IDs, clear abandoned payload staging
+  before non-batch checkpoints, and restore acknowledged legacy mail failures to
+  review without re-extraction or repeating completed Gmail mutations.
+
 - Treat the email subject as an independent evidence span, preserve exact
   case/Unicode/punctuation coupon identities, prevent sender metadata from
   grounding offer facts, consolidate sparse deterministic codes with their
@@ -24,6 +54,13 @@
   evaluation cannot fail when the locale module loads later.
 
 ### Added
+
+- Finalize fully evidenced complete offers after durable row/journal persistence;
+  mixed review dispositions preserve the source email, and retryable Gmail
+  acknowledgement failures recover from the indexed journal.
+
+- Document private future authenticated access choices and separate unimplemented
+  Chrome and Safari extension deliverables.
 
 - Add a frozen, resumable Gmail mailbox scanner that discovers all default-search
   mail independently of labels and read state, persists pending IDs before

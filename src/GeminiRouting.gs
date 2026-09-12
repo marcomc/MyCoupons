@@ -119,6 +119,16 @@ function callGeminiModel_(request, hooks) {
   return callGeminiBackend_(c.backend, c, request, hooks, '');
 }
 
+function geminiRetrySleep_(hooks, delayMs) {
+  const deadlineMs = hooks && hooks.deadlineMs;
+  if (deadlineMs && (!Number.isFinite(deadlineMs) || Date.now() + delayMs >= deadlineMs)) fail_('LIMIT');
+  if (hooks && typeof hooks.sleep === 'function') { hooks.sleep(delayMs); return; }
+  // Apps Script has no implicit retry wait. Production must actually yield
+  // between bounded attempts; the missing method in the Node harness is a
+  // deliberate no-op only for transport unit tests.
+  if (Utilities && typeof Utilities.sleep === 'function') Utilities.sleep(delayMs);
+}
+
 function callGeminiBackend_(backend, c, request, hooks, fallbackReason) {
   const fetcher = hooks && hooks.fetch ? hooks.fetch : function (url, options) {
     const response = UrlFetchApp.fetch(url, options);
@@ -139,7 +149,7 @@ function callGeminiBackend_(backend, c, request, hooks, fallbackReason) {
       });
     } catch (error) {
       if (attempt === GEMINI_ROUTING.maxAttempts) throw new Error('Gemini network request failed.');
-      if (hooks && hooks.sleep) hooks.sleep(250 * Math.pow(2, attempt - 1));
+      geminiRetrySleep_(hooks, 250 * Math.pow(2, attempt - 1));
       continue;
     }
     response = {status: Number(response.status), body: String(response.body || '')};
@@ -153,7 +163,7 @@ function callGeminiBackend_(backend, c, request, hooks, fallbackReason) {
     }
     if (GEMINI_ROUTING.retryableStatuses.indexOf(response.status) >= 0 &&
       attempt < GEMINI_ROUTING.maxAttempts) {
-      if (hooks && hooks.sleep) hooks.sleep(250 * Math.pow(2, attempt - 1));
+      geminiRetrySleep_(hooks, 250 * Math.pow(2, attempt - 1));
       continue;
     }
     throw new Error('Gemini request failed with HTTP ' + response.status + '.');

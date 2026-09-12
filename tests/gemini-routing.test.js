@@ -63,6 +63,18 @@ test('generic 429, transient text, and network failures never activate Vertex', 
   assert.equal(attempts, 3); assert.equal(properties.MYCOUPONS_GEMINI_VERTEX_UNTIL, undefined);
 });
 
+test('production retries sleep within the runtime deadline', () => {
+  const {ctx, properties} = harness(); properties.GEMINI_API_KEY = 'test-key';
+  const sleeps = []; ctx.Utilities.sleep = milliseconds => sleeps.push(milliseconds);
+  const response = JSON.stringify({candidates: [{content: {parts: [{text: 'ok'}]}}]});
+  const result = ctx.callGeminiModel_({text: 'offer', images: []}, {fetch: (() => {
+    let calls = 0; return () => ++calls < 3 ? {status: 503, body: ''} : {status: 200, body: response};
+  })(), deadlineMs: Date.now() + 5000});
+  assert.equal(result.text, 'ok'); assert.deepEqual(sleeps, [250, 500]);
+  assert.throws(() => ctx.callGeminiModel_({text: 'offer', images: []}, {fetch: () => ({status: 503, body: ''}),
+    deadlineMs: Date.now() + 100}), /LIMIT/);
+});
+
 test('oversized quota-like errors fail closed before fallback classification', () => {
   const {ctx, properties} = setup();
   const body = JSON.stringify({error: {code: 'quota_exceeded', message: 'daily quota'}}) + 'x'.repeat(1024 * 1024);

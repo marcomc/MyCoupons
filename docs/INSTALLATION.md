@@ -104,9 +104,28 @@ verification, and the importer recovers from the latest real coupon date.
 Empty sheets require an explicit `initialDate`. To roll back all automation,
 use `removeMyCouponsAutomation`; resource data and labels are not deleted.
 
+Initial and scheduled scans run deterministic and AI extraction together. A
+fully evidenced complete offer is persisted before its source message receives
+the configured label and is removed from `INBOX`. Incomplete, image-only, or
+ambiguous results create review rows. Confirm, Ignore, and Retry with AI operate
+on that same journal-backed candidate; Ignore intentionally leaves the source
+message unchanged. The journal checkpoints label and archive acknowledgements
+individually, so reruns recover partial operations without duplicate rows.
+
+New imports checkpoint the full bounded candidate payload before any coupon
+write. Interrupted batches replay that immutable payload without calling AI;
+Confirm, Ignore, and Retry with AI cannot finalize a partly written batch.
+Do not edit the private journal's metadata or payload columns. A legacy bound
+batch without a completed review checkpoint reports `STATE` / `legacy_batch`
+and leaves Gmail unchanged: recovery requires inspecting the original source
+and existing rows, not rerunning AI or marking the partial batch complete.
+
 ## Live validation
 
-This repository contains no live deployment proof. After operator-authorized
-setup, verify ownership, private Sheet sharing, label identity, trigger
-identity, a minimal AI call, and one end-to-end import. Confirm that failed
-imports leave Gmail unchanged and that notifications link to the private row.
+This repository contains no live deployment proof for this increment. After
+operator-authorized setup, verify ownership, private Sheet sharing, label and
+trigger identity, a minimal AI call, and a manual plus scheduled end-to-end
+import. Exercise Confirm, Ignore, and Retry with AI on the same candidate;
+verify notification deltas and that a replay has no duplicate row. Confirm that
+failed or incomplete imports leave Gmail unchanged and that notifications link
+to the private row.

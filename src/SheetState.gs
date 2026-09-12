@@ -1,5 +1,5 @@
 const MC_MESSAGE_STATE_STATUSES = Object.freeze([
-  'pending', 'processing', 'review', 'confirmed', 'ignored', 'failed', 'deferred', 'awaiting_extraction'
+  'pending', 'processing', 'review', 'confirmed', 'ignored', 'nonoffer', 'failed', 'deferred', 'awaiting_extraction'
 ]);
 const MC_MESSAGE_STATE_KEYS = Object.freeze([
   'version', 'messageId', 'status', 'attempts', 'retryCount', 'dedupeKeys',
@@ -12,6 +12,10 @@ const MC_LEGACY_MESSAGE_STATE_KEYS = Object.freeze([
   'failureStage', 'outcome', 'labelApplied', 'archived', 'updatedAt'
 ]);
 var MC_JOURNAL_SESSION = null;
+const MC_BATCH_STATE_KEYS = Object.freeze(MC_MESSAGE_STATE_KEYS.concat(['batchIntent']));
+const MC_JOURNAL_CHUNK = 40000;
+const MC_JOURNAL_MAX_JSON = 2000000;
+const MC_JOURNAL_CONTINUATION = 'mycoupons-json:';
 
 function ensureSheetState_(input, deadlineMs) {
   const c = validateConfig_(input || config_());
@@ -140,7 +144,7 @@ function ensureJournalSheet_(spreadsheet) {
     setHeaderRow_(sheet, MC.journalHeaders);
     return sheet;
   }
-  assertHeaderRow_(sheet, MC.journalHeaders, true);
+  assertHeaderRow_(sheet, MC.journalHeaders, false);
   return sheet;
 }
 
@@ -249,18 +253,28 @@ function newMessageState_(messageId) {
 
 function validMessageState_(state) {
   const isLegacy = recordWithExactKeys_(state, MC_LEGACY_MESSAGE_STATE_KEYS);
-  if ((!isLegacy && !recordWithExactKeys_(state, MC_MESSAGE_STATE_KEYS)) ||
-    (state.version !== 1 && state.version !== 2) || typeof state.messageId !== 'string' || !state.messageId ||
+  const isBatch = state && state.version === 3;
+  if ((isBatch ? !recordWithExactKeys_(state, MC_BATCH_STATE_KEYS) :
+    !isLegacy && !recordWithExactKeys_(state, MC_MESSAGE_STATE_KEYS)) ||
+    (state.version !== 1 && state.version !== 2 && !isBatch) || typeof state.messageId !== 'string' || !state.messageId ||
     MC_MESSAGE_STATE_STATUSES.indexOf(state.status) < 0 ||
     !nonNegativeInteger_(state.attempts) || !nonNegativeInteger_(state.retryCount) ||
     !stringArray_(state.dedupeKeys) || !stringArray_(state.candidateKeys) ||
-    (state.version === 2 && !isLegacy && !candidateStates_(state.candidateStates, state.candidateKeys, state.rowNumbers)) ||
+    ((isBatch || state.version === 2 && !isLegacy) && !candidateStates_(state.candidateStates, state.candidateKeys, state.rowNumbers)) ||
+    (isBatch && !validBatchIntent_(state)) ||
     !nonNegativeIntegerArray_(state.rowNumbers) ||
-    !stringValue_(state.lastAttemptAt) || !stringValue_(state.nextRetryAt) ||
+    !stringValue_(state.lastAttemptAt) || !validRetryTimestamp_(state.nextRetryAt) ||
     !stringValue_(state.lastError) || !stringValue_(state.failureStage) ||
     !stringValue_(state.outcome) || typeof state.labelApplied !== 'boolean' ||
     typeof state.archived !== 'boolean' || !stringValue_(state.updatedAt)) return false;
   return true;
+}
+
+function validRetryTimestamp_(value) {
+  if (value === '') return true;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
 function candidateStates_(value, keys, rows) {
@@ -309,22 +323,24 @@ function readMessageJournal_(sheet) {
 }
 
 function loadMessageJournal_(sheet) {
-  assertHeaderRow_(sheet, MC.journalHeaders, true);
+  assertHeaderRow_(sheet, MC.journalHeaders, false);
   const rows = sheet.getDataRange().getValues();
+  if (rows[0].slice(2).some(function (cell) { return cell !== ''; })) fail_('STATE');
   const states = Object.create(null);
   const rowById = Object.create(null);
   const rawById = Object.create(null);
   for (let index = 1; index < rows.length; index++) {
     const row = rows[index];
     const messageId = row[0];
-    if (messageId === '' && row[1] === '') continue;
+    if (messageId === '' && row.slice(1).every(function (cell) { return cell === ''; })) continue;
     if (typeof messageId !== 'string' || !messageId || typeof row[1] !== 'string' || !row[1]) fail_('STATE');
     let state;
-    try { state = JSON.parse(row[1]); } catch (e) { fail_('STATE'); }
+    const serialized = serializedJournalRow_(row);
+    try { state = JSON.parse(serialized); } catch (e) { fail_('STATE'); }
     if (!validMessageState_(state) || state.messageId !== messageId || states[messageId]) fail_('STATE');
     states[messageId] = state;
     rowById[messageId] = index + 1;
-    rawById[messageId] = row[1];
+    rawById[messageId] = serialized;
   }
   return {sheet: sheet, states: states, rowById: rowById, rawById: rawById, lastRow: rows.length, valid: true};
 }
@@ -364,13 +380,56 @@ function saveMessageStateUnlocked_(sheet, state) {
     const existing = session.rowById[id];
     const row = existing || Math.max(2, session.lastRow + 1);
     if (sheet.getLastRow() !== session.lastRow) fail_('STATE');
-    const range = sheet.getRange(row, 1, 1, 2);
+    const serialized = JSON.stringify(state);
+    if (serialized.length > MC_JOURNAL_MAX_JSON) fail_('STATE');
+    const metadata = Object.assign({}, state);
+    const payload = state.version === 3 ? JSON.stringify(state.batchIntent) : '';
+    if (state.version === 3) delete metadata.batchIntent;
+    const metadataJson = JSON.stringify(metadata);
+    if (metadataJson.length > 50000) fail_('STATE');
+    const chunks = [];
+    for (let offset = 0; offset < payload.length;) {
+      const chunk = boundedText_(payload.slice(offset), MC_JOURNAL_CHUNK);
+      chunks.push(MC_JOURNAL_CONTINUATION + chunk); offset += chunk.length;
+    }
+    const width = Math.max(2, chunks.length + 2, sheet.getLastColumn());
+    if (typeof sheet.getMaxColumns === 'function' && width > sheet.getMaxColumns()) {
+      sheet.insertColumnsAfter(sheet.getMaxColumns(), width - sheet.getMaxColumns());
+    }
+    const range = sheet.getRange(row, 1, 1, width);
     const current = journalCells_(range);
     if (existing) {
       if (current[0] !== id || current[1] !== session.rawById[id]) fail_('STATE');
     } else if (current[0] !== '' || current[1] !== '') fail_('STATE');
-    const serialized = JSON.stringify(state);
-    range.setValues([[id, serialized]]);
+    const prior = session.states[id];
+    if (prior && prior.version === 3) {
+      // Never rewrite committed payload cells during mutable row/mail
+      // checkpoints. A failed checkpoint cannot corrupt the replay authority.
+      if (state.version !== 3 || JSON.stringify(prior.batchIntent) !== payload) fail_('STATE');
+    } else if (state.version === 3) {
+      if (!prior || prior.candidateKeys.length || prior.status !== 'processing') fail_('STATE');
+      const payloadCells = chunks.slice();
+      while (payloadCells.length < width - 2) payloadCells.push('');
+      const payloadRange = sheet.getRange(row, 3, 1, width - 2);
+      // Stage and verify EVERY immutable payload cell before publishing v3 in
+      // the metadata cell. Uncommitted staging on an empty legacy processing
+      // record can safely be overwritten: no coupon row was authorized yet.
+      payloadRange.setValues([payloadCells]);
+      if (joinedJournalChunks_(payloadRange.getValues()[0]) !== payload) fail_('STATE');
+    } else if (current[2]) {
+      // A prior attempt staged payload but never published v3. Remove and
+      // verify that staging before any non-batch checkpoint can replace the
+      // only metadata form that permits it (empty legacy processing state).
+      const payloadRange = sheet.getRange(row, 3, 1, width - 2);
+      payloadRange.setValues([Array(width - 2).fill('')]);
+      const cleared = payloadRange.getValues();
+      if (!Array.isArray(cleared) || cleared.length !== 1 || !Array.isArray(cleared[0]) ||
+          cleared[0].length !== width - 2 || cleared[0].some(function (cell) { return cell !== ''; })) fail_('STATE');
+    }
+    const metadataRange = sheet.getRange(row, 1, 1, 2);
+    metadataRange.setValues([[id, metadataJson]]);
+    const metadataStored = metadataRange.getValues()[0];
+    if (metadataStored[0] !== id || metadataStored[1] !== metadataJson) fail_('STATE');
     const stored = journalCells_(range);
     if (stored[0] !== id || stored[1] !== serialized) fail_('STATE');
     // Never expose speculative state. A failed/ambiguous write invalidates the
@@ -387,9 +446,44 @@ function saveMessageStateUnlocked_(sheet, state) {
 
 function journalCells_(range) {
   const values = range.getValues();
-  if (!Array.isArray(values) || values.length !== 1 || !Array.isArray(values[0]) || values[0].length !== 2 ||
-      typeof values[0][0] !== 'string' || typeof values[0][1] !== 'string') fail_('STATE');
-  return values[0];
+  if (!Array.isArray(values) || values.length !== 1 || !Array.isArray(values[0]) || values[0].length < 2 ||
+      typeof values[0][0] !== 'string') fail_('STATE');
+  return [values[0][0], serializedJournalRow_(values[0]), values[0].slice(2).some(function (cell) { return cell !== ''; })];
+}
+
+function joinedJournalChunks_(chunks) {
+  let ended = false;
+  const serialized = chunks.map(function (chunk) {
+    if (typeof chunk !== 'string' || chunk.length > 50000 || ended && chunk) fail_('STATE');
+    if (!chunk) ended = true;
+    if (chunk) {
+      if (chunk.indexOf(MC_JOURNAL_CONTINUATION) !== 0) fail_('STATE');
+      return chunk.slice(MC_JOURNAL_CONTINUATION.length);
+    }
+    return chunk;
+  }).join('');
+  if (serialized.length > MC_JOURNAL_MAX_JSON) fail_('STATE');
+  return serialized;
+}
+
+function serializedJournalRow_(row) {
+  if (row[0] === '' && row.slice(1).every(function (cell) { return cell === ''; })) return '';
+  if (typeof row[1] !== 'string' || !row[1] || row[1].length > 50000) fail_('STATE');
+  let metadata;
+  try { metadata = JSON.parse(row[1]); } catch (e) { fail_('STATE'); }
+  if (metadata && metadata.version === 3) {
+    if (Object.prototype.hasOwnProperty.call(metadata, 'batchIntent')) fail_('STATE');
+    try { metadata.batchIntent = JSON.parse(joinedJournalChunks_(row.slice(2))); } catch (e) { fail_('STATE'); }
+    const serialized = JSON.stringify(metadata);
+    if (serialized.length > MC_JOURNAL_MAX_JSON) fail_('STATE');
+    return serialized;
+  }
+  if (row.slice(2).some(function (cell) { return cell !== ''; })) {
+    if (!validMessageState_(metadata) || metadata.status !== 'processing' || metadata.candidateKeys.length ||
+        row.slice(2).some(function (cell) { return typeof cell !== 'string' ||
+          cell && (cell.length > 50000 || cell.indexOf(MC_JOURNAL_CONTINUATION) !== 0); })) fail_('STATE');
+  }
+  return row[1];
 }
 
 function updateMessageState_(sheet, messageId, patch) {
@@ -407,6 +501,17 @@ function findMessageStateByDedupeKey_(sheet, dedupeKey) {
   const states = readMessageJournal_(sheet);
   const matches = Object.keys(states).filter(function (messageId) {
     return states[messageId].dedupeKeys.indexOf(dedupeKey) >= 0;
+  });
+  if (matches.length > 1) fail_('STATE');
+  return matches.length ? states[matches[0]] : null;
+}
+
+function findMessageStateByRowNumber_(sheet, rowNumber) {
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) fail_('STATE');
+  const states = readMessageJournal_(sheet);
+  const matches = Object.keys(states).filter(function (messageId) {
+    const state = states[messageId];
+    return state.rowNumbers.filter(function (value) { return value === rowNumber; }).length === 1;
   });
   if (matches.length > 1) fail_('STATE');
   return matches.length ? states[matches[0]] : null;

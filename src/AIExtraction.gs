@@ -3,6 +3,10 @@ const AI_EXTRACTION = Object.freeze({maxPromptText: 60000, maxCandidates: 12, ma
 function aiCandidateKeys_() { return MC.fields.concat(['confidence', 'review', 'evidence']); }
 
 function buildCandidatePrompt_(message) {
+  return candidatePrompt_(message).text;
+}
+
+function candidatePrompt_(message) {
   const source = candidateSource_(message);
   const instruction = [
     'Extract coupon offers from the supplied message. Return JSON only, with no prose or Markdown.',
@@ -31,7 +35,8 @@ function buildCandidatePrompt_(message) {
   const boundedSubject = boundedText_(subject, subjectBudget);
   const boundedText = boundedText_(text, textBudget);
   const boundedHtml = boundedText_(htmlContext, budget - boundedSubject.length - boundedText.length);
-  return instruction + subjectLabel + boundedSubject + textLabel + boundedText + htmlLabel + boundedHtml;
+  return {text: instruction + subjectLabel + boundedSubject + textLabel + boundedText + htmlLabel + boundedHtml,
+    truncated: boundedSubject !== subject || boundedText !== text || boundedHtml !== htmlContext};
 }
 
 function duplicateJsonKeys_(json) {
@@ -47,14 +52,15 @@ function duplicateJsonKeys_(json) {
   return false;
 }
 
-function parseAICandidates_(response, message) {
+function parseAICandidateOutcome_(response, message) {
   if (!response || typeof response.text !== 'string' || response.text.length > AI_EXTRACTION.maxResponse ||
       /^\s*```|```\s*$/.test(response.text) || duplicateJsonKeys_(response.text)) fail_('AI');
   let body;
   try { body = JSON.parse(response.text); } catch (e) { fail_('AI'); }
   if (!plainObjectWithKeys_(body, ['candidates']) || !Array.isArray(body.candidates) ||
       body.candidates.length > AI_EXTRACTION.maxCandidates) fail_('AI');
-  return body.candidates.map(function (candidate) {
+  let invalidated = 0;
+  const candidates = body.candidates.map(function (candidate) {
     if (!plainObjectWithKeys_(candidate, aiCandidateKeys_()) ||
         Object.getOwnPropertyNames(candidate).length !== aiCandidateKeys_().length) fail_('AI');
     const evidence = candidate.evidence;
@@ -64,22 +70,44 @@ function parseAICandidates_(response, message) {
             Object.keys(evidence[key]).length < 1;
         }) || MC.fields.some(function (key) { return candidate[key] && !Object.prototype.hasOwnProperty.call(evidence, key); })) fail_('AI');
     const normalized = normalizeCandidate_(candidate, message);
+    if (!(normalized.merchant || normalized.code || normalized.website || normalized.discountType && normalized.discountValue)) {
+      invalidated++;
+      return null;
+    }
     return normalized;
   }).filter(function (candidate) {
-    return candidate.merchant || candidate.code || candidate.website || candidate.discountType && candidate.discountValue;
+    return candidate !== null;
   });
+  // An empty syntactically valid response is distinct from a candidate that was
+  // discarded because its claimed facts could not be grounded in the source.
+  return {candidates: candidates, modelEmpty: body.candidates.length === 0, invalidated: invalidated > 0};
+}
+
+function parseAICandidates_(response, message) {
+  return parseAICandidateOutcome_(response, message).candidates;
 }
 
 function candidateMergeKey_(candidate) {
-  return [normalized_(candidate.merchant), normalized_(candidate.website), String(candidate.code || ''),
-    normalized_(candidate.discountType), normalized_(candidate.discountValue), normalized_(candidate.minimumSpend),
-    normalized_(candidate.expiry)].join('|');
+  return JSON.stringify(['merchant', 'website', 'code', 'discountType', 'discountValue', 'minimumSpend', 'expiry']
+    .map(function (field) { return candidateFieldIdentity_(field, candidate[field]); }));
 }
 
 function exactCandidateIdentityKey_(candidate) {
-  return MC.fields.map(function (field) {
-    return field === 'code' ? String(candidate[field] || '') : normalized_(candidate[field]);
-  }).join('|');
+  return JSON.stringify(MC.fields.map(function (field) {
+    return candidateFieldIdentity_(field, candidate[field]);
+  }));
+}
+
+function candidateFieldIdentity_(field, value) {
+  const raw = String(value == null ? '' : value);
+  if (field === 'website') return candidateWebsiteIdentity_(raw);
+  return field === 'code' ? raw : normalized_(raw);
+}
+
+function candidateWebsiteIdentity_(value) {
+  // Only the HTTPS scheme and authority are case-insensitive. Path, query and
+  // fragment spelling (including percent escapes) remain part of the identity.
+  return String(value || '').replace(/^https:\/\/[^/?#]+/i, function (authority) { return authority.toLowerCase(); });
 }
 
 function mergeCouponCandidates_(left, right) {
@@ -100,20 +128,39 @@ function sameCouponOffer_(left, right) {
       !candidate.discountValue && !candidate.minimumSpend && !candidate.validOn && !candidate.exclusions &&
       !candidate.expiry && !candidate.usageLimits && !candidate.currency;
   };
-  if (left.code || right.code) return !!left.code && left.code === right.code && (sparse(left) || sparse(right));
-  return exactCandidateIdentityKey_(left) === exactCandidateIdentityKey_(right);
+  if (exactCandidateIdentityKey_(left) === exactCandidateIdentityKey_(right)) return true;
+  return !!left.code && left.code === right.code && (sparse(left) || sparse(right));
+}
+
+function uniqueAICandidates_(candidates) {
+  const result = [];
+  candidates.forEach(function (candidate) {
+    const key = exactCandidateIdentityKey_(candidate);
+    const index = result.findIndex(function (prior) { return exactCandidateIdentityKey_(prior) === key; });
+    if (index < 0) result.push(candidate);
+    else {
+      const merged = mergeCouponCandidates_(result[index], candidate);
+      merged.review = result[index].review || candidate.review;
+      result[index] = merged;
+    }
+  });
+  return result;
 }
 
 function extractCouponOutcome_(message, hooks) {
   // Validate all source ownership, HTML coverage, and image records before any fetch.
   const source = candidateSource_(message);
-  const prompt = buildCandidatePrompt_(message);
+  const prompt = candidatePrompt_(message);
   const images = source.images.map(function (image) {
     if (!image || typeof image.mimeType !== 'string' || !Array.isArray(image.bytes)) fail_('AI');
     return {mimeType: image.mimeType, data: Utilities.base64EncodeWebSafe(image.bytes)};
   });
-  const ai = parseAICandidates_(callGeminiModel_({text: prompt, images: images}, hooks), message);
-  const deterministic = deterministicCandidates_(message).map(function (candidate) {
+  const aiOutcome = parseAICandidateOutcome_(callGeminiModel_({text: prompt.text, images: images}, hooks), message);
+  // Consolidate exact model duplicates before sparse deterministic enrichment
+  // adds copied source notes that could make an identical proposal look new.
+  const ai = uniqueAICandidates_(aiOutcome.candidates);
+  const deterministicOutcome = deterministicCandidateOutcome_(message);
+  const deterministic = deterministicOutcome.candidates.map(function (candidate) {
     return {merchant: '', website: '', code: candidate.code, discountType: '', discountValue: '', minimumSpend: '',
       validOn: '', exclusions: '', expiry: '', usageLimits: '', currency: '', notes: candidate.notes,
       confidence: candidate.confidence, review: true};
@@ -127,8 +174,19 @@ function extractCouponOutcome_(message, hooks) {
   if (result.length > MC.maxCandidates) fail_('AI');
   // This is deliberately descriptive, not authorization to mutate Gmail. In
   // particular, an empty complete outcome only means no candidate was found.
-  return {status: source.incomplete ? 'incomplete' : 'complete', candidates: result,
-    empty: result.length === 0, archiveAllowed: false};
+  const complete = !source.incomplete && !prompt.truncated && deterministicOutcome.complete;
+  const autoConfirmed = result.length > 0 && complete && !aiOutcome.invalidated && result.every(function (candidate) {
+    return candidateAutomaticallyConfirmed_(candidate);
+  });
+  return {status: complete ? 'complete' : 'incomplete', candidates: result,
+    empty: result.length === 0, modelEmpty: aiOutcome.modelEmpty, invalidated: aiOutcome.invalidated,
+    verifiedNonOffer: complete && result.length === 0 && aiOutcome.modelEmpty,
+    archiveAllowed: autoConfirmed};
+}
+
+function candidateAutomaticallyConfirmed_(candidate) {
+  return !!candidate && !candidate.review && !!candidate.merchant &&
+    !!(candidate.code || candidate.website || candidate.discountType && candidate.discountValue);
 }
 
 function extractCouponCandidates_(message, hooks) {

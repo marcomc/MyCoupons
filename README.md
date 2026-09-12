@@ -8,20 +8,22 @@ Private Gmail-to-Google-Sheets coupon importer built with Google Apps Script.
 - [Sheet state](#sheet-state)
 - [Core behavior](#core-behavior)
 - [Gemini routing](#gemini-routing)
+- [Future delivery](#future-delivery)
 - [Local provisioner foundation](#local-provisioner-foundation)
 - [Local validation](#local-validation)
 - [Public information pages](#public-information-pages)
 
 ## Status
 
-The current increment provides configuration validation, coupon candidate
-parsing and normalization, historical recovery dates, safe spreadsheet and
-Gmail-label resource setup, a private per-message journal, a bounded resumable
-mailbox scan, and local deterministic import-row persistence.
+The current increment provides configuration validation, source-grounded
+deterministic and AI coupon extraction, historical recovery dates, safe
+spreadsheet and Gmail-label resource setup, a private per-message journal, and
+a bounded resumable mailbox scan.
 Extraction treats the subject as an independent evidenced source, preserves
 exact case/Unicode/punctuation coupon identities, and consolidates a sparse
-deterministic code with an evidenced AI description without authorizing any
-Gmail mutation.
+deterministic code with an evidenced AI description. Fully evidenced complete
+offers can be finalized; ambiguous, image-only, invalidated, and incomplete
+outcomes remain reviewable.
 Review actions now expose an installable-edit-compatible `onReviewEdit` entry
 point for Confirm, Ignore, and Retry with AI, with row/source validation and
 message-level archive checkpoints. The local provisioner can deploy and
@@ -37,7 +39,8 @@ The example configuration contains product defaults only.
   title match; fail closed on ambiguous or mismatched resources.
 - Preserve the existing 26-column coupon schema and create only missing coupon
   and journal tabs. The journal is `_MyCoupons Messages` with `Message ID` and
-  `State JSON` columns.
+  `State JSON` columns. New batch payloads use bounded, marked JSON chunks in
+  additional unlabelled journal columns; the coupon schema remains unchanged.
 - Resolve or create each missing prefix of a nested Gmail label path. This
   setup does not read, label, archive, or otherwise mutate messages.
 - Persist the resolved spreadsheet and label identities after verification.
@@ -80,15 +83,31 @@ The example configuration contains product defaults only.
   per-message soft budget or the execution's 15-second write reserve. An
   in-flight synchronous provider request cannot be interrupted; any omitted
   images retain incomplete coverage.
-- `runImportWorkflow_` consumes canonical reader output, derives deterministic
-  candidates, persists bounded 26-column rows, and records candidate row
-  references in the journal. Dedupe keys make reruns idempotent while retaining
-  user-entered columns. Failed extraction or writes remain retryable; no Gmail
-  mutation is performed. Messages without deterministic codes retain their IDs
-  as `awaiting_extraction`: no error notification, automatic hot retry or archive
-  authority. Legacy empty/no-error failures are treated equivalently on replay.
-  The automatic AI consumer of these IDs is a separate, not-yet-implemented
-  increment; this scanner does not claim that code-less offers were extracted.
+- `runImportWorkflow_` consumes canonical reader output and runs the merged
+  deterministic and AI extractor. It persists rows, candidate identities, and
+  Gmail checkpoints in the private journal. Technical identities stay in the
+  journal; `Notes / dedupe key` contains readable evidenced notes and `Currency`
+  is projected to its matching column. Failed extraction, writes, and Gmail
+  acknowledgements stay retryable without duplicate rows.
+- Before writing any coupon row, persist and verify the entire extraction batch
+  (at most 12 candidates). Its payload remains immutable; row/mail checkpoints
+  update only the metadata cell. Interrupted imports replay pending payloads
+  without another model call, preserve reviewed rows, and cannot archive until
+  every intended candidate is durably bound. New rows recovered after an
+  interruption require review.
+- Legacy `awaiting_extraction` records are recovered through full extraction. A
+  complete, structurally valid empty model list becomes a non-offer checkpoint
+  with no Gmail archive authority. Empty results caused by incomplete coverage or
+  validation/filtering remain reachable rather than becoming non-offers.
+  Legacy bound batches interrupted before a completed review checkpoint remain
+  fail-closed with `STATE` / `legacy_batch`; their missing payloads cannot be
+  reconstructed safely from a new model response. Completed legacy review rows
+  remain actionable, including their original technical Notes keys.
+- Before Gmail mutation, candidate rows and journal state are verified. Only an
+  all-confirmed message is labelled and removed from `INBOX`, preserving `UNREAD`
+  and unrelated thread messages. A mixed Confirm/Ignore disposition leaves the
+  source mail unchanged. Label and archive acknowledgements are checkpointed
+  separately so retries recover partial mutation safely.
 
 ## Gemini routing
 
@@ -102,7 +121,9 @@ The example configuration contains product defaults only.
 - Vertex `global` calls use `aiplatform.googleapis.com`; regional locations keep
   their location-prefixed host.
 - Network errors, HTTP 408, generic 429 responses, selected 5xx responses, and
-  malformed responses retry at most three times on the current backend.
+  malformed responses retry at most three times on the current backend. Production
+  retries sleep with bounded exponential backoff and stop when the execution
+  deadline would be exceeded.
 
 ## Core behavior
 
@@ -125,6 +146,10 @@ The example configuration contains product defaults only.
   enriches a sparse deterministic code. Separate described offers remain separate
   even if they reuse a code. `extractCouponOutcome_` explicitly reports complete
   versus incomplete coverage; an empty outcome never grants archive authority.
+  Copied Notes exceeding 3,500 UTF-16 units or more than 12 unique explicit codes
+  keep the extraction incomplete after AI enrichment, including on retry.
+  Deduplication, row recovery, and retry share descriptive case/whitespace rules,
+  preserve numeric zero, and keep code and URL path/query/fragment identity exact.
 - Reject unknown candidate or evidence keys and malformed control fields before
   normalizing proposed fields, including notes, against quoted source text.
   Candidate and evidence records must use own properties on plain or null
@@ -316,3 +341,17 @@ without authentication and that the homepage links to the same privacy policy
 URL configured in Branding. Register the hosting domain under Authorised domains.
 Do not enter placeholder or unrelated URLs. GitHub Pages publishes `docs/` from `main` at
 <https://marcomc.github.io/MyCoupons/>.
+
+## Future delivery
+
+The importer remains private. For future authenticated coupon access, direct
+Google OAuth plus Google Sheets access is the preferred first option: it reuses
+the owner-controlled spreadsheet and supports per-user consent, but exposes a
+Sheets-shaped client contract and requires careful sharing/refresh-token policy.
+A private authenticated API is preferable when a stable product contract,
+server-side authorization, rate limits, or application-specific auditing become
+necessary; it adds service hosting and identity lifecycle work. Do not expose the
+private Sheet or Gmail data through a public endpoint as a shortcut.
+
+See [TODO.md](TODO.md) for separate unimplemented Chrome and Safari extension
+deliverables.

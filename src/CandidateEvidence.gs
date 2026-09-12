@@ -49,10 +49,14 @@ function codeLexemes_(text) {
   });
 }
 function deterministicCandidates_(message) {
+  return deterministicCandidateOutcome_(message).candidates;
+}
+function deterministicCandidateOutcome_(message) {
   // Only explicit code syntax is deterministic. Preserve the full bounded terms
   // and require review: a regex cannot establish the completeness of an offer.
   const source = candidateSource_(message);
   const codes = [];
+  let complete = true;
   source.spans.forEach(function (text) {
     const re = /(?:^|[^\p{L}\p{N}\p{M}_])(?:coupon\s+code|promo(?:tional)?\s+code|discount\s+code|use\s+(?:the\s+)?code|codice\s+sconto|codice(?!\s+sconto(?:\s|[:=]|$)))(?:\s*[:=]\s*|\s+(?:is\b\s+)?)(\S+)/giu;
     let match;
@@ -61,11 +65,13 @@ function deterministicCandidates_(message) {
       const length = code ? Array.from(code).length : 0;
       if (length >= 3 && length <= 40 && /[\p{L}\p{N}\p{M}]/u.test(code) &&
         !codes.some(function (candidate) { return candidate.code === code; })) {
-        codes.push({code: code, notes: boundedText_(text, 3500), confidence: 'low', review: true});
+        const notes = boundedText_(text, 3500);
+        if (notes !== text) complete = false;
+        codes.push({code: code, notes: notes, confidence: 'low', review: true});
       }
     }
   });
-  return codes.slice(0, MC.maxCandidates);
+  return {candidates: codes.slice(0, MC.maxCandidates), complete: complete && codes.length <= MC.maxCandidates};
 }
 function rawOccurrences_(value, source, normalized) {
   if (!wellFormedUtf16_(value) || !wellFormedUtf16_(source)) return [];

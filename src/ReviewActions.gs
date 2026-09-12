@@ -27,8 +27,13 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   const row = range.getValues()[0];
   const displayRow = range.getDisplayValues()[0];
   const formulas = range.getFormulas()[0];
-  const key = String(row[16] || '');
-  const state = key && findMessageStateByDedupeKey_(journalSheet, key);
+  const noteKey = candidateKeyFromNote_(sheet.getRange(rowNumber, 14).getNote());
+  const visibleNotes = String(row[16] || '');
+  let state = noteKey ? findMessageStateByDedupeKey_(journalSheet, noteKey) : null;
+  // Deployed legacy rows used visible Notes for the technical key. Keep them
+  // reviewable without extending that legacy storage mistake.
+  if (!state && !noteKey && visibleNotes) state = findMessageStateByDedupeKey_(journalSheet, visibleNotes);
+  if (!state) state = findMessageStateByRowNumber_(journalSheet, rowNumber);
   if (!state) return reviewFailure_(sheet, rowNumber, 'STATE');
   if (!candidateStates_(state.candidateStates, state.candidateKeys, state.rowNumbers)) {
     state.candidateStates = state.candidateKeys.map(function (candidateKey, index) {
@@ -36,12 +41,13 @@ function processReviewAction_(sheet, rowNumber, action, c) {
     });
     state.version = 2;
   }
-  const candidate = state.candidateStates.filter(function (item) { return item.key === key; });
-  const currentRow = findCouponRowByDedupeKey_(sheet, key);
-  if (candidate.length !== 1 || currentRow !== rowNumber) return reviewFailure_(sheet, rowNumber, 'STATE');
-  candidate[0].rowNumber = rowNumber;
+  const key = reviewCandidateKey_(state, rowNumber, noteKey, visibleNotes);
   const stateIndex = state.candidateKeys.indexOf(key);
-  if (stateIndex < 0) return reviewFailure_(sheet, rowNumber, 'STATE');
+  const candidate = state.candidateStates.filter(function (item) { return item.key === key; });
+  const legacyTechnicalNotes = !noteKey && String(row[16] || '') === key;
+  if (candidate.length !== 1 || stateIndex < 0 || resolveCandidateRow_(sheet, state.messageId, key, state.rowNumbers[stateIndex]) !== rowNumber ||
+      sourceId_(row[13]) !== state.messageId) return reviewFailure_(sheet, rowNumber, 'STATE');
+  candidate[0].rowNumber = rowNumber;
   state.rowNumbers[stateIndex] = rowNumber;
   if (action === EN.actions.ignore) {
     setReviewStatus_(sheet, rowNumber, EN.statuses.ignored, '');
@@ -50,7 +56,7 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   }
   const message = getReviewMessage_(state.messageId);
   if (action === EN.actions.retry_ai) return retryReviewCandidate_(sheet, rowNumber, state, candidate[0], message, journalSheet, c);
-  if (!validateReviewRow_(row, message, displayRow, candidate[0].imageEvidence, formulas, c)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
+  if (!validateReviewRow_(row, message, displayRow, candidate[0].imageEvidence, formulas, c, key, legacyTechnicalNotes)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   setReviewStatus_(sheet, rowNumber, EN.statuses.confirmed, '');
   candidate[0].status = 'confirmed';
   completeReviewMessage_(state, sheet, journalSheet, c);
@@ -62,10 +68,18 @@ function getReviewMessage_(messageId) {
   return canonicalGmailMessage_(raw);
 }
 
-function validateReviewRow_(row, message, displayRow, imageEvidence, formulas, c) {
+function reviewCandidateKey_(state, rowNumber, noteKey, visibleNotes) {
+  if (noteKey) return noteKey;
+  const visible = String(visibleNotes || '');
+  if (state && Array.isArray(state.candidateKeys) && state.candidateKeys.indexOf(visible) >= 0) return visible;
+  const index = state && Array.isArray(state.rowNumbers) ? state.rowNumbers.indexOf(rowNumber) : -1;
+  return index < 0 ? '' : state.candidateKeys[index];
+}
+
+function validateReviewRow_(row, message, displayRow, imageEvidence, formulas, c, technicalKey, legacyTechnicalNotes) {
   if (!Array.isArray(row) || !message) return false;
   formulas = Array.isArray(formulas) ? formulas : Array(MC.headers.length).fill('');
-  if (formulas.slice(0, 14).concat(formulas.slice(20, 21)).some(function (formula) { return !!formula; })) return false;
+  if (formulas.slice(0, 14).concat([formulas[16]], formulas.slice(20, 21)).some(function (formula) { return !!formula; })) return false;
   const merchant = reviewSourceValue_(row[1]).trim();
   const code = reviewSourceValue_(row[3]).trim();
   const website = reviewSourceValue_(row[2]).trim();
@@ -77,7 +91,8 @@ function validateReviewRow_(row, message, displayRow, imageEvidence, formulas, c
   if (expiry && !validDate_(expiry)) return false;
   if (!reviewSourceColumnsMatch_(row, message)) return false;
   const candidate = {merchant: merchant, website: website, code: code, discountType: discountType, discountValue: discountValue,
-    minimumSpend: reviewSourceValue_(row[6]), validOn: reviewSourceValue_(row[7]), exclusions: reviewSourceValue_(row[8]), expiry: expiry, usageLimits: reviewSourceValue_(row[10]), currency: reviewSourceValue_(row[20])};
+    minimumSpend: reviewSourceValue_(row[6]), validOn: reviewSourceValue_(row[7]), exclusions: reviewSourceValue_(row[8]), expiry: expiry, usageLimits: reviewSourceValue_(row[10]), currency: reviewSourceValue_(row[20]),
+    notes: candidateNotesForReview_(row, technicalKey, legacyTechnicalNotes)};
   const source = candidateSource_(message);
   const spans = source.spans;
   if (discountType || discountValue) {
@@ -91,6 +106,11 @@ function validateReviewRow_(row, message, displayRow, imageEvidence, formulas, c
     return !value || reviewFieldImageEvidence_(imageEvidence, field, value, source.images) ||
       spans.some(function (span) { return fieldInQuote_(field, value, span); });
   });
+}
+
+function candidateNotesForReview_(row, key, legacyTechnicalNotes) {
+  const value = reviewSourceValue_(row[16]);
+  return legacyTechnicalNotes && value === key ? '' : value;
 }
 
 function reviewCandidateFieldsValid_(row) {
@@ -152,22 +172,29 @@ function reviewFailure_(sheet, rowNumber, code) {
 }
 
 function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, journalSheet, c) {
-  let candidates;
-  try { candidates = extractCouponCandidates_(message); } catch (e) { return reviewFailure_(sheet, rowNumber, errorCode_(e)); }
-  const row = sheet.getRange(rowNumber, 1, 1, MC.headers.length).getDisplayValues()[0];
+  if (!completeCandidateBatch_(state)) { keepIncompleteBatch_(state, journalSheet); return; }
+  let extraction;
+  try { extraction = extractCouponOutcome_(message); } catch (e) { return reviewFailure_(sheet, rowNumber, errorCode_(e)); }
+  const candidates = extraction.candidates;
+  const row = retryComparableRow_(sheet, rowNumber, candidate.key, c);
   const enriched = candidates.filter(function (item) { return retryCandidateMatchesRow_(item, row); });
   if (enriched.length !== 1) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   const knownRows = state.candidateStates.map(function (known) {
-    const knownRow = findCouponRowByDedupeKey_(sheet, known.key);
-    return knownRow && sheet.getRange(knownRow, 1, 1, MC.headers.length).getDisplayValues()[0];
+    const index = state.candidateKeys.indexOf(known.key);
+    if (index < 0) return null;
+    const resolved = resolveCandidateRow_(sheet, state.messageId, known.key, state.rowNumbers[index]);
+    known.rowNumber = resolved; state.rowNumbers[index] = resolved;
+    return retryComparableRow_(sheet, resolved, known.key, c);
   });
   if (knownRows.some(function (knownRow) { return !knownRow; })) return reviewFailure_(sheet, rowNumber, 'STATE');
-  if (candidates.some(function (item) {
-    return !knownRows.some(function (knownRow) {
-      return retryCandidateMatchesRow_(item, knownRow);
-    });
+  if (candidates.length !== knownRows.length || knownRows.some(function (knownRow) {
+    return candidates.filter(function (item) { return retryCandidateMatchesRow_(item, knownRow); }).length !== 1;
+  }) || candidates.some(function (item) {
+    return knownRows.filter(function (knownRow) { return retryCandidateMatchesRow_(item, knownRow); }).length !== 1;
   })) return reviewFailure_(sheet, rowNumber, 'REVIEW');
-  const updated = couponRow_(message, enriched[0], candidate.key);
+  const updatedCandidate = Object.assign({}, enriched[0], {review: enriched[0].review || !extraction.archiveAllowed});
+  const updated = couponRow_(message, updatedCandidate);
+  persistCandidateKey_(sheet, rowNumber, candidate.key);
   const existing = sheet.getRange(rowNumber, 1, 1, updated.length).getValues()[0];
   const existingFormulas = sheet.getRange(rowNumber, 1, 1, updated.length).getFormulas()[0];
   const merged = existing.slice();
@@ -179,20 +206,30 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
     if (formula && [18, 19, 21, 22, 23, 25].indexOf(index) >= 0) sheet.getRange(rowNumber, index + 1).setFormula(formula);
   });
   candidate.imageEvidence = enriched[0].imageEvidence || {};
-  candidate.status = enriched[0].review ? 'review' : 'confirmed';
+  candidate.status = updatedCandidate.review ? 'review' : 'confirmed';
   completeReviewMessage_(state, sheet, journalSheet, c);
 }
 
 function retryCandidateMatchesRow_(candidate, row) {
-  return !!candidate.merchant && [['merchant', 1], ['website', 2], ['code', 3],
-    ['discountType', 4], ['discountValue', 5]].every(function (identity) {
-    const value = String(row[identity[1]] || '');
-    return !value || String(candidate[identity[0]] || '') === value;
+  const factual = candidateFactualValuesFromRow_(row);
+  return !!candidate.merchant && MC.fields.every(function (field) {
+    const value = candidateFieldIdentity_(field, factual[field]);
+    return !value || candidateFieldIdentity_(field, candidate[field]) === value;
   });
 }
 
+function retryComparableRow_(sheet, rowNumber, key, c) {
+  const row = sheet.getRange(rowNumber, 1, 1, MC.headers.length).getValues()[0];
+  if (row[9] instanceof Date) row[9] = Utilities.formatDate(row[9], c.timeZone, 'yyyy-MM-dd');
+  if (!candidateKeyFromNote_(sheet.getRange(rowNumber, 14).getNote()) && row[16] === key) row[16] = '';
+  return row;
+}
+
 function completeReviewMessage_(state, sheet, journalSheet, c) {
-  state.outcome = messageOutcome_(state.candidateStates.map(function (item) { return {status: item.status}; }));
+  if (!completeCandidateBatch_(state)) { keepIncompleteBatch_(state, journalSheet); return; }
+  state.outcome = messageOutcome_(state.candidateStates.map(function (item) {
+    const status = Object.create(null); status.status = item.status; return status;
+  }));
   state.updatedAt = new Date().toISOString();
   if (state.outcome === 'review') {
     state.status = 'review';
@@ -204,28 +241,34 @@ function completeReviewMessage_(state, sheet, journalSheet, c) {
     try { saveMessageState_(journalSheet, state); } catch (e) { restoreReviewRows_(state, sheet); throw e; }
     return;
   }
+  state.status = 'processing'; state.failureStage = 'mail';
+  try { saveMessageState_(journalSheet, state); } catch (e) { restoreReviewRows_(state, sheet); throw e; }
   try {
     if (!refreshAndValidateReviewRows_(state, sheet, c)) { restoreReviewRows_(state, sheet); state.status = 'review'; state.outcome = 'review'; saveMessageState_(journalSheet, state); return; }
   } catch (e) {
     restoreReviewRows_(state, sheet); state.status = 'review'; state.outcome = 'review'; state.lastError = errorCode_(e); saveMessageState_(journalSheet, state); return;
   }
   try {
-    if (!state.labelApplied) { modifyReviewMessage_(state.messageId, {addLabelIds: [c.labelId]}); state.labelApplied = true; }
-    if (!state.archived) { modifyReviewMessage_(state.messageId, {removeLabelIds: ['INBOX']}); state.archived = true; }
+    if (!state.labelApplied) {
+      const labelled = modifyReviewMessage_(state.messageId, {addLabelIds: [c.labelId]});
+      if (labelled.labelIds.indexOf(c.labelId) < 0) fail_('MAIL');
+      state.labelApplied = true; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
+    }
+    if (!state.archived) {
+      const archived = modifyReviewMessage_(state.messageId, {removeLabelIds: ['INBOX']});
+      if (archived.labelIds.indexOf('INBOX') >= 0) fail_('MAIL');
+      state.archived = true; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
+    }
     state.status = 'confirmed'; state.outcome = 'archive'; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
   } catch (e) {
-    if (state.labelApplied || state.archived) {
-      restoreReviewRows_(state, sheet);
-      state.status = 'failed'; state.outcome = 'review'; state.failureStage = 'mail'; state.lastError = errorCode_(e); state.updatedAt = new Date().toISOString();
-      try { saveMessageState_(journalSheet, state); } catch (ignored) {}
-      throw e;
-    }
-    state.candidateStates.forEach(function (item) {
-      item.status = 'review';
-      setReviewStatus_(sheet, item.rowNumber, EN.statuses.review, EN.actions.confirm);
-    });
-    state.status = 'review'; state.outcome = 'review'; state.lastError = errorCode_(e);
-    state.failureStage = 'mail'; state.updatedAt = new Date().toISOString(); saveMessageState_(journalSheet, state);
+    // Gmail may have accepted an operation even when its acknowledgement is
+    // uncertain. Preserve the already validated confirmed rows and durable
+    // archive intent; the initial workflow retries idempotent per-message
+    // mutations instead of asking the user to confirm a second time.
+    state.status = 'failed'; state.outcome = 'archive'; state.failureStage = 'mail';
+    state.lastError = errorCode_(e); state.updatedAt = new Date().toISOString();
+    try { saveMessageState_(journalSheet, state); } catch (ignored) {}
+    throw e;
   }
 }
 
@@ -247,13 +290,13 @@ function restoreReviewRows_(state, sheet) {
 }
 
 function refreshAndValidateReviewRows_(state, sheet, c) {
+  if (!completeCandidateBatch_(state)) return false;
   const message = getReviewMessage_(state.messageId);
   const complete = state.candidateStates.every(function (item) {
-    const rowNumber = findCouponRowByDedupeKey_(sheet, item.key);
-    if (!rowNumber) return false;
-    item.rowNumber = rowNumber;
     const index = state.candidateKeys.indexOf(item.key);
     if (index < 0) return false;
+    const rowNumber = resolveCandidateRow_(sheet, state.messageId, item.key, state.rowNumbers[index]);
+    item.rowNumber = rowNumber;
     state.rowNumbers[index] = rowNumber;
     return true;
   });
@@ -261,7 +304,9 @@ function refreshAndValidateReviewRows_(state, sheet, c) {
   return state.candidateStates.every(function (item) {
     const range = sheet.getRange(item.rowNumber, 1, 1, MC.headers.length);
     const row = range.getValues()[0];
-    return String(row[17]) === EN.statuses.confirmed && validateReviewRow_(row, message, range.getDisplayValues()[0], item.imageEvidence, range.getFormulas()[0], c);
+    const noteKey = candidateKeyFromNote_(sheet.getRange(item.rowNumber, 14).getNote());
+    const legacyTechnicalNotes = !noteKey && String(row[16] || '') === item.key;
+    return String(row[17]) === EN.statuses.confirmed && validateReviewRow_(row, message, range.getDisplayValues()[0], item.imageEvidence, range.getFormulas()[0], c, item.key, legacyTechnicalNotes);
   });
 }
 
