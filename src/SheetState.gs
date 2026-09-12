@@ -416,6 +416,15 @@ function saveMessageStateUnlocked_(sheet, state) {
       // record can safely be overwritten: no coupon row was authorized yet.
       payloadRange.setValues([payloadCells]);
       if (joinedJournalChunks_(payloadRange.getValues()[0]) !== payload) fail_('STATE');
+    } else if (current[2]) {
+      // A prior attempt staged payload but never published v3. Remove and
+      // verify that staging before any non-batch checkpoint can replace the
+      // only metadata form that permits it (empty legacy processing state).
+      const payloadRange = sheet.getRange(row, 3, 1, width - 2);
+      payloadRange.setValues([Array(width - 2).fill('')]);
+      const cleared = payloadRange.getValues();
+      if (!Array.isArray(cleared) || cleared.length !== 1 || !Array.isArray(cleared[0]) ||
+          cleared[0].length !== width - 2 || cleared[0].some(function (cell) { return cell !== ''; })) fail_('STATE');
     }
     const metadataRange = sheet.getRange(row, 1, 1, 2);
     metadataRange.setValues([[id, metadataJson]]);
@@ -439,7 +448,7 @@ function journalCells_(range) {
   const values = range.getValues();
   if (!Array.isArray(values) || values.length !== 1 || !Array.isArray(values[0]) || values[0].length < 2 ||
       typeof values[0][0] !== 'string') fail_('STATE');
-  return [values[0][0], serializedJournalRow_(values[0])];
+  return [values[0][0], serializedJournalRow_(values[0]), values[0].slice(2).some(function (cell) { return cell !== ''; })];
 }
 
 function joinedJournalChunks_(chunks) {

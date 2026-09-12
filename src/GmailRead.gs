@@ -221,6 +221,7 @@ function mailboxRetryWindow_(scan, journal) {
 function mailboxProcessMessage_(state, scan, messageId, enforceWindow, onMessage, result) {
   const journal = getMessageState_(state.journalSheet, messageId);
   if (journal && completeCandidateBatch_(journal) && (MC_FINAL_MESSAGE_STATES.indexOf(journal.status) >= 0 || journal.status === 'review')) return true;
+  if (journal && journal.status === 'awaiting_extraction' && !awaitingMessageExtraction_(journal)) return true;
   if (!journal) {
     const pending = newMessageState_(messageId);
     pending.failureStage = 'read|' + scan.startMs + '|' + scan.endMs;

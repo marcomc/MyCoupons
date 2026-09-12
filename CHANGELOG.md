@@ -26,6 +26,10 @@
   identities. Collapse exact repeated AI offers before sparse-code enrichment
   while retaining distinct conditions for offers sharing a coupon code.
 
+- Honor extraction backoff for retained page IDs, clear abandoned payload staging
+  before non-batch checkpoints, and restore acknowledged legacy mail failures to
+  review without re-extraction or repeating completed Gmail mutations.
+
 - Treat the email subject as an independent evidence span, preserve exact
   case/Unicode/punctuation coupon identities, prevent sender metadata from
   grounding offer facts, consolidate sparse deterministic codes with their

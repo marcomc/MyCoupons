@@ -32,9 +32,18 @@ function completeCandidateBatch_(state) {
   if (!state || ![1, 2, 3].includes(state.version)) return false;
   if (state.version !== 3) return state.failureStage !== 'legacy_batch' &&
     (!state.candidateKeys.length || ['review', 'confirmed', 'ignored', 'nonoffer'].indexOf(state.status) >= 0 ||
-      state.outcome === 'archive' && state.failureStage === 'mail');
+      state.outcome === 'archive' && state.failureStage === 'mail' || legacyMailReviewBatch_(state));
   return validBatchIntent_(state) && candidateStates_(state.candidateStates, state.candidateKeys, state.rowNumbers) &&
     state.candidateKeys.length === state.batchIntent.candidates.length;
+}
+
+function legacyMailReviewBatch_(state) {
+  // Deployed v2 mail failures restored review rows after an acknowledged Gmail
+  // mutation. A subsequent read failure can replace the stage, but not these
+  // durable acknowledgement flags or the complete candidate bindings.
+  return !!state && state.version === 2 && state.status === 'failed' && state.outcome === 'review' && state.failureStage !== 'legacy_batch' &&
+    (state.labelApplied || state.archived) && Array.isArray(state.candidateKeys) && state.candidateKeys.length > 0 &&
+    Array.isArray(state.rowNumbers) && candidateStates_(state.candidateStates, state.candidateKeys, state.rowNumbers);
 }
 
 function createBatchIntent_(journal, extraction) {

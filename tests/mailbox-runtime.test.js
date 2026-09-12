@@ -532,6 +532,24 @@ test('later mailbox scans replay an incomplete batch even if a review status was
   assert.equal(f.ctx.completeCandidateBatch_(f.ctx.getMessageState_(f.state.journalSheet, 'a')), true);
 });
 
+test('a retained pending ID honors extraction backoff after the deadline interrupts page advancement', () => {
+  const f = fixture(1); let extracted = 0;
+  f.state.extractCouponOutcome = () => {
+    extracted++;
+    if (extracted === 1) f.advance(240000);
+    return {candidates: [], verifiedNonOffer: false};
+  };
+  f.ctx.runScheduledImport();
+  const pending = JSON.parse(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE);
+  assert.deepEqual(pending.pendingIds, ['1']); assert.equal(extracted, 1);
+  const fetched = f.fetched.length;
+  f.advance(300000); f.continuation();
+  assert.equal(extracted, 1); assert.equal(f.fetched.length, fetched);
+  assert.deepEqual(JSON.parse(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE).pendingIds, []);
+  f.advance(86400000); f.ctx.runScheduledImport();
+  assert.equal(extracted, 2); assert.equal(f.fetched.length, fetched + 1);
+});
+
 test('durable summary recovers confirmed counts and failed-review links without callback outcomes', () => {
   const f = fixture();
   const confirmed = f.ctx.newMessageState_('a'); confirmed.status = 'confirmed'; confirmed.rowNumbers = [2, 3];

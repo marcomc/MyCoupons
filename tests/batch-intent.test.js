@@ -254,6 +254,85 @@ test('batch preflight reserves metadata capacity for all future image-evidence b
   assert.equal(f.saved().version, 1);
 });
 
+function leaveUnpublishedPayload(f) {
+  const getRange = f.journal.getRange;
+  f.journal.getRange = (...args) => {
+    const range = getRange(...args);
+    return {...range, setValues: values => {
+      if (args[1] === 1 && JSON.parse(values[0][1]).version === 3) throw new Error('metadata publish interrupted');
+      range.setValues(values);
+    }};
+  };
+  assert.throws(f.run); assert.equal(f.saved().version, 1);
+  assert.ok(f.journal.rows[1].slice(2).some(Boolean));
+  f.journal.getRange = getRange; f.boot();
+}
+
+test('abandoned staging is cleared before empty, extraction-error and read-error outcomes', () => {
+  for (const mode of ['nonoffer', 'awaiting_extraction', 'extract-error', 'read-error']) {
+    const f = fixture(); leaveUnpublishedPayload(f);
+    if (mode === 'read-error') {
+      f.ctx.mailboxReadFailure_(f.journal, 'abc123', {startMs: 0, endMs: Date.now()}, false);
+    } else {
+      f.state.extractCouponOutcome = () => {
+        if (mode === 'extract-error') throw new Error('model unavailable');
+        return {candidates: [], verifiedNonOffer: mode === 'nonoffer'};
+      };
+      f.run();
+    }
+    assert.ok(f.journal.rows[1].slice(2).every(cell => cell === ''), mode);
+    f.boot(); const saved = f.saved();
+    assert.equal(saved.status, mode.endsWith('error') ? 'failed' : mode);
+    assert.equal(f.coupon.rows.length, 1); assert.equal(f.mutations.length, 0);
+    f.ctx.saveMessageState_(f.journal, f.ctx.newMessageState_('def456'));
+    assert.equal(Object.keys(f.ctx.readMessageJournal_(f.journal)).length, 2);
+  }
+});
+
+test('ambiguous staging clears cannot publish a non-batch outcome before verified cleanup', () => {
+  for (const mode of ['not-cleared', 'cleared-then-throw', 'readback-mismatch', 'empty-readback']) {
+    const f = fixture(); leaveUnpublishedPayload(f);
+    const getRange = f.journal.getRange;
+    f.journal.getRange = (...args) => {
+      const range = getRange(...args); let mismatch = false;
+      return {...range, getValues: () => mismatch ? (mode === 'empty-readback' ? [[]] : [['mycoupons-json:stale']]) : range.getValues(), setValues: values => {
+        if (args[1] === 3 && values[0].every(cell => cell === '')) {
+          if (mode !== 'not-cleared') range.setValues(values);
+          if (mode === 'readback-mismatch' || mode === 'empty-readback') { mismatch = true; return; }
+          throw new Error('ambiguous clear');
+        }
+        range.setValues(values);
+      }};
+    };
+    const next = f.saved(); next.status = 'nonoffer'; next.outcome = 'empty';
+    assert.throws(() => f.ctx.saveMessageState_(f.journal, next));
+    f.journal.getRange = getRange; f.boot();
+    assert.equal(f.saved().status, 'processing'); assert.equal(f.coupon.rows.length, 1);
+    const retry = f.saved(); retry.status = 'nonoffer'; retry.outcome = 'empty';
+    f.ctx.saveMessageState_(f.journal, retry); f.boot(); assert.equal(f.saved().status, 'nonoffer');
+  }
+});
+
+test('deployed completed mail failures return to review without re-extraction or repeated Gmail mutations', () => {
+  for (const archived of [false, true]) for (const readFailed of [false, true]) {
+    const f = fixture(); const key = 'a'.repeat(64);
+    const legacy = f.ctx.newMessageState_('abc123');
+    Object.assign(legacy, {version: 2, status: 'failed', outcome: 'review', failureStage: 'mail', lastError: 'MAIL',
+      labelApplied: true, archived, candidateKeys: [key], dedupeKeys: [key], rowNumbers: [2],
+      candidateStates: [{key, rowNumber: 2, status: 'review', imageEvidence: {}}]});
+    f.coupon.rows.push(f.ctx.couponRow_(f.message, candidate())); f.coupon.rows[1][16] = key;
+    f.ctx.saveMessageState_(f.journal, legacy);
+    if (readFailed) f.ctx.mailboxReadFailure_(f.journal, 'abc123', {startMs: 0, endMs: Date.now()}, false);
+    f.boot(); f.state.extractCouponOutcome = () => assert.fail('completed legacy batch must not be re-extracted');
+    assert.equal(f.ctx.completeCandidateBatch_(f.saved()), true);
+    assert.equal(f.run().messages[0].status, 'review'); assert.equal(f.coupon.rows.length, 2);
+    assert.equal(f.saved().lastError, ''); assert.equal(f.mutations.length, 0);
+    f.action(2, 'Confirm'); assert.equal(f.saved().status, 'confirmed');
+    assert.equal(f.mutations.length, archived ? 0 : 1);
+    if (!archived) assert.deepEqual(JSON.parse(JSON.stringify(f.mutations)), [{removeLabelIds: ['INBOX']}]);
+  }
+});
+
 test('deployed v2 interrupted batches stay fail-closed across retry and owner confirmation', () => {
   for (const priorStatus of ['failed', 'processing']) {
     const f = fixture();

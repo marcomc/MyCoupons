@@ -41,6 +41,12 @@ function runImportWorkflowInSession_(state) {
 function processCouponMessage_(state, message) {
   if (!message || typeof message.id !== 'string' || !validGmailApiId_(message.id)) fail_('MAIL');
   const existing = getMessageState_(state.journalSheet, message.id);
+  if (legacyMailReviewBatch_(existing)) {
+    reconcileCandidateRows_(state.couponSheet, existing);
+    existing.status = 'review'; existing.failureStage = ''; existing.lastError = ''; existing.nextRetryAt = '';
+    existing.updatedAt = new Date().toISOString(); saveMessageState_(state.journalSheet, existing);
+    return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
+  }
   if (existing && existing.version !== 3 && !completeCandidateBatch_(existing)) {
     keepIncompleteBatch_(existing, state.journalSheet);
     return {messageId: message.id, status: 'failed', rows: existing.rowNumbers.slice(), error: 'STATE'};
