@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Recognize gcloud's exact owner-pinned missing bootstrap-secret diagnostic and
+  either canonical project identity in its ancestor response, while rejecting
+  ambiguous aliases, foreign identities, and unrelated diagnostics.
+
 - Send Apps Script deployment updates in the endpoint-required
   `deploymentConfig` envelope and verify the exact updated deployment on
   read-back.
