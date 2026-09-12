@@ -75,6 +75,9 @@ function processCouponMessage_(state, message) {
     const rows = [];
     const statuses = [];
     candidates.forEach(function (candidate, index) {
+      // A surviving candidate cannot erase a discarded model proposal or an
+      // incomplete source. The complete outcome is the archive authority.
+      const persistedCandidate = Object.assign({}, candidate, {review: candidate.review || !extraction.archiveAllowed});
       const key = candidateDedupeKey_(message, candidate, index);
       const known = journal.candidateKeys.indexOf(key);
       let rowNumber;
@@ -82,7 +85,7 @@ function processCouponMessage_(state, message) {
         rowNumber = journal.rowNumbers[known];
         if (!rowNumber) fail_('STATE');
       } else {
-        const row = couponRow_(message, candidate);
+        const row = couponRow_(message, persistedCandidate);
         // Journal acknowledgement may have failed after the row write. Only a
         // fresh source-backed message and exact projected identity can recover it.
         const prior = findCouponRowByCandidateIdentity_(state.couponSheet, message, candidate);
@@ -91,11 +94,11 @@ function processCouponMessage_(state, message) {
         journal.candidateKeys.push(key);
         journal.rowNumbers.push(rowNumber);
       }
-      const status = Object.create(null); status.status = candidate.review ? 'review' : 'confirmed';
+      const status = Object.create(null); status.status = persistedCandidate.review ? 'review' : 'confirmed';
       statuses.push(status);
       rows.push(rowNumber);
       if (!journal.candidateStates.some(function (item) { return item.key === key; })) {
-        journal.candidateStates.push({key: key, rowNumber: rowNumber, status: candidate.review ? 'review' : 'confirmed', imageEvidence: candidate.imageEvidence || {}});
+        journal.candidateStates.push({key: key, rowNumber: rowNumber, status: persistedCandidate.review ? 'review' : 'confirmed', imageEvidence: candidate.imageEvidence || {}});
       }
     });
     journal.outcome = messageOutcome_(statuses);

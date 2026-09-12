@@ -154,8 +154,9 @@ function reviewFailure_(sheet, rowNumber, code) {
 }
 
 function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, journalSheet, c) {
-  let candidates;
-  try { candidates = extractCouponCandidates_(message); } catch (e) { return reviewFailure_(sheet, rowNumber, errorCode_(e)); }
+  let extraction;
+  try { extraction = extractCouponOutcome_(message); } catch (e) { return reviewFailure_(sheet, rowNumber, errorCode_(e)); }
+  const candidates = extraction.candidates;
   const row = sheet.getRange(rowNumber, 1, 1, MC.headers.length).getDisplayValues()[0];
   const enriched = candidates.filter(function (item) { return retryCandidateMatchesRow_(item, row); });
   if (enriched.length !== 1) return reviewFailure_(sheet, rowNumber, 'REVIEW');
@@ -168,7 +169,8 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
       return retryCandidateMatchesRow_(item, knownRow);
     });
   })) return reviewFailure_(sheet, rowNumber, 'REVIEW');
-  const updated = couponRow_(message, enriched[0]);
+  const updatedCandidate = Object.assign({}, enriched[0], {review: enriched[0].review || !extraction.archiveAllowed});
+  const updated = couponRow_(message, updatedCandidate);
   const existing = sheet.getRange(rowNumber, 1, 1, updated.length).getValues()[0];
   const existingFormulas = sheet.getRange(rowNumber, 1, 1, updated.length).getFormulas()[0];
   const merged = existing.slice();
@@ -180,7 +182,7 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
     if (formula && [18, 19, 21, 22, 23, 25].indexOf(index) >= 0) sheet.getRange(rowNumber, index + 1).setFormula(formula);
   });
   candidate.imageEvidence = enriched[0].imageEvidence || {};
-  candidate.status = enriched[0].review ? 'review' : 'confirmed';
+  candidate.status = updatedCandidate.review ? 'review' : 'confirmed';
   completeReviewMessage_(state, sheet, journalSheet, c);
 }
 

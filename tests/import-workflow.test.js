@@ -122,7 +122,7 @@ test('initial full extraction persists readable fields before verified label/arc
     return {id, labelIds: body.addLabelIds ? ['INBOX', 'UNREAD', 'coupon-label'] : ['UNREAD', 'coupon-label']};
   }};
   const state = {config, couponSheet: coupon, journalSheet: journal, extractCouponOutcome: () => ({
-    candidates: [confirmedCandidate()], verifiedNonOffer: false
+    candidates: [confirmedCandidate()], archiveAllowed: true, verifiedNonOffer: false
   }), messages: [{id: 'abc123', receivedAtMs: Date.parse('2026-09-01T10:00:00Z'), subject: 'Brand offer',
     sender: 'offers@brand.example', link: 'https://mail.google.com/mail/#all/abc123', text: 'Brand', html: '', incomplete: false}]};
   const result = ctx.runImportWorkflow_(state);
@@ -148,4 +148,16 @@ test('unverified empty extraction remains reachable and later recovers into the 
   assert.equal(ctx.getMessageState_(journal, 'abc123').archived, false);
   assert.equal(ctx.runImportWorkflow_(state).messages[0].status, 'review');
   assert.equal(coupon.getLastRow(), 2); assert.equal(attempts, 2);
+});
+
+test('a surviving candidate cannot archive when the same extraction invalidated another proposal', () => {
+  const {ctx, config} = harness(); config.labelId = 'coupon-label';
+  const mutations = []; ctx.Gmail.Users.Messages = {modify: body => { mutations.push(body); return {id: 'abc123', labelIds: []}; }};
+  const state = {config, couponSheet: sheet([HEADERS]), journalSheet: sheet([JOURNAL]), extractCouponOutcome: () => ({
+    candidates: [confirmedCandidate()], invalidated: true, archiveAllowed: false, verifiedNonOffer: false
+  }), messages: [{id: 'abc123', receivedAtMs: Date.parse('2026-09-01T10:00:00Z'), subject: 'Brand offer', sender: '',
+    link: 'https://mail.google.com/mail/#all/abc123', text: 'Brand', html: '', incomplete: false}]};
+  const result = ctx.runImportWorkflow_(state);
+  assert.equal(result.messages[0].status, 'review'); assert.equal(mutations.length, 0);
+  assert.equal(ctx.getMessageState_(state.journalSheet, 'abc123').archived, false);
 });
