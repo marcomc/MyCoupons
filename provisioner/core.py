@@ -530,7 +530,9 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
         raise ProvisionerError("installation state has an invalid Apps Script record")
     elif apps_script["versionNumber"] is None:
         if apps_script["deploymentId"] is not None and (
-            not isinstance(apps_script["deploymentId"], str) or not APPS_SCRIPT_ID_RE.fullmatch(apps_script["deploymentId"])
+            not isinstance(apps_script["deploymentId"], str)
+            or not APPS_SCRIPT_ID_RE.fullmatch(apps_script["deploymentId"])
+            or state["phase"] != "apps-script-version-creation-pending"
         ):
             raise ProvisionerError("installation state has an invalid Apps Script record")
         if state["phase"] not in {"apps-script-version-creation-intent", "apps-script-version-creation-pending"}:
@@ -540,7 +542,7 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
         or apps_script["versionNumber"] < 1
         or apps_script["deploymentId"] is not None
         and (not isinstance(apps_script["deploymentId"], str) or not APPS_SCRIPT_ID_RE.fullmatch(apps_script["deploymentId"]))
-        or state["phase"] not in {"apps-script-version-ready", "apps-script-deployment-creation-pending", "apps-script-ready", "bootstrap-complete"}
+        or state["phase"] not in {"apps-script-version-creation-pending", "apps-script-version-ready", "apps-script-deployment-creation-pending", "apps-script-ready", "bootstrap-complete"}
         or state["phase"] in {"apps-script-ready", "bootstrap-complete"}
         and apps_script["deploymentId"] is None
     ):
@@ -1869,6 +1871,18 @@ def _validate_expected_owner_only_deployment(
     return validated_id, validated_version
 
 
+def _verify_persisted_owner_only_deployment(
+    access_token: str, script_id: str, digest: str, version_number: int, deployment_id: str
+) -> tuple[str, int]:
+    """Read and verify a durable deployment identity before source changes."""
+    marker = f"MyCoupons owner-only {digest}"
+    deployment = _apps_script_json(access_token, "GET", f"https://script.googleapis.com/v1/projects/{script_id}/deployments/{deployment_id}")
+    verified = _validate_expected_owner_only_deployment(deployment, script_id, deployment_id, version_number, marker)
+    if _remote_bundle_digest(access_token, script_id, version_number) != digest:
+        raise ProvisionerError("Apps Script version content does not match the verified source bundle")
+    return verified
+
+
 def _is_automatic_head_deployment(deployment: Any, script_id: str) -> bool:
     """Recognize only the mutable automatic HEAD deployment Apps Script creates."""
     if not isinstance(deployment, dict):
@@ -1960,8 +1974,6 @@ def _create_bundle_version(access_token: str, script_id: str, digest: str) -> in
     number = created.get("versionNumber") if isinstance(created, dict) else None
     if type(number) is not int or number < 1 or created.get("description") != description:
         raise ProvisionerError("Apps Script version creation returned invalid data")
-    if _remote_bundle_digest(access_token, script_id, number) != digest:
-        raise ProvisionerError("Apps Script version creation content does not match the verified source bundle")
     return number
 
 
@@ -1975,29 +1987,33 @@ def _ensure_owner_only_deployment(
     creation_pending: bool = False,
     persist_creation_pending: Callable[[], None] | None = None,
     clear_creation_pending: Callable[[], None] | None = None,
+    persist_created_identity: Callable[[str], None] | None = None,
 ) -> tuple[str, int]:
-    deployments = _deployment_list(access_token, script_id)
     marker = f"MyCoupons owner-only {digest}"
     if persisted_deployment_id is not None:
-        matching = [
-            deployment
-            for deployment in deployments
-            if not _is_automatic_head_deployment(deployment, script_id) and deployment.get("deploymentId") == persisted_deployment_id
-        ]
-        if len(matching) != 1:
+        # deploy_apps_script verifies this durable identity against its prior
+        # immutable version before it can replace source. Re-read the exact
+        # resource for its owner-only shape, but do not replace that exact-ID
+        # operation with a potentially delayed collection listing.
+        persisted = _apps_script_json(access_token, "GET", f"https://script.googleapis.com/v1/projects/{script_id}/deployments/{persisted_deployment_id}")
+        verified_id, _ = _validate_owner_only_deployment(persisted, script_id)
+        if verified_id != persisted_deployment_id:
             raise ProvisionerError("Apps Script persisted deployment recovery is ambiguous")
+        matching = None
     else:
+        deployments = _deployment_list(access_token, script_id)
         matching = [deployment for deployment in deployments if isinstance(deployment, dict) and not _is_automatic_head_deployment(deployment, script_id) and isinstance(deployment.get("deploymentConfig"), dict) and deployment["deploymentConfig"].get("description") == marker]
-    if not matching and persisted_deployment_id is None and not creation_pending:
-        matching = [deployment for deployment in deployments if not _is_automatic_head_deployment(deployment, script_id)]
-    if len(matching) > 1:
-        raise ProvisionerError("Apps Script deployment recovery is ambiguous")
-    if _remote_bundle_digest(access_token, script_id, version) != digest:
-        raise ProvisionerError("Apps Script version content does not match the verified source bundle")
-    if len(matching) == 1:
-        deployment_id = matching[0].get("deploymentId")
-        if not isinstance(deployment_id, str) or not APPS_SCRIPT_ID_RE.fullmatch(deployment_id):
-            raise ProvisionerError("Apps Script deployment inspection returned invalid data")
+        if not matching and not creation_pending:
+            matching = [deployment for deployment in deployments if not _is_automatic_head_deployment(deployment, script_id)]
+        if len(matching) > 1:
+            raise ProvisionerError("Apps Script deployment recovery is ambiguous")
+    if persisted_deployment_id is not None or len(matching) == 1:
+        if persisted_deployment_id is not None:
+            deployment_id = persisted_deployment_id
+        else:
+            deployment_id = matching[0].get("deploymentId")
+            if not isinstance(deployment_id, str) or not APPS_SCRIPT_ID_RE.fullmatch(deployment_id):
+                raise ProvisionerError("Apps Script deployment inspection returned invalid data")
         updated = _apps_script_json(
             access_token,
             "PUT",
@@ -2031,6 +2047,10 @@ def _ensure_owner_only_deployment(
             clear_creation_pending()
         raise
     deployment_id, _ = _validate_owner_only_deployment(created, script_id, version)
+    _validate_expected_owner_only_deployment(created, script_id, deployment_id, version, marker)
+    if persist_created_identity is None:
+        raise ProvisionerError("Apps Script deployment identity cannot be persisted")
+    persist_created_identity(deployment_id)
     verified = _apps_script_json(access_token, "GET", f"https://script.googleapis.com/v1/projects/{script_id}/deployments/{deployment_id}")
     return _validate_expected_owner_only_deployment(verified, script_id, deployment_id, version, marker)
 
@@ -2456,9 +2476,74 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             }
             state["phase"] = "apps-script-adoption-pending"
             state = _persist_state_locked(state_dir, state, key)
+        pending_apps_script = state["appsScript"]
         # A project we can adopt may still have a deployment that violates the
-        # owner-only contract.  Reject it before replacing any remote source.
-        _deployment_list(access_token, script_id)
+        # owner-only contract. Reject unknown deployment state before replacing
+        # source, but a persisted exact ID must recover through that ID rather
+        # than a potentially delayed collection listing.
+        if pending_apps_script["deploymentId"] is None:
+            _deployment_list(access_token, script_id)
+        if state["phase"] == "apps-script-deployment-creation-pending":
+            if pending_apps_script["deploymentId"] is None:
+                deployment_id, version_number = _ensure_owner_only_deployment(
+                    access_token,
+                    script_id,
+                    pending_apps_script["bundleDigest"],
+                    pending_apps_script["versionNumber"],
+                    creation_pending=True,
+                )
+            else:
+                deployment_id, version_number = _verify_persisted_owner_only_deployment(
+                    access_token,
+                    script_id,
+                    pending_apps_script["bundleDigest"],
+                    pending_apps_script["versionNumber"],
+                    pending_apps_script["deploymentId"],
+                )
+            state = dict(state)
+            state["appsScript"] = {
+                "scriptId": script_id,
+                "provenance": provenance,
+                "bundleDigest": pending_apps_script["bundleDigest"],
+                "versionNumber": version_number,
+                "deploymentId": deployment_id,
+            }
+            state["phase"] = "bootstrap-complete" if state["bootstrap"]["status"] == "complete" else "apps-script-ready"
+            state = _persist_state_locked(state_dir, state, key)
+        elif state["phase"] == "apps-script-version-creation-pending":
+            recovered_version = pending_apps_script["versionNumber"]
+            if recovered_version is None:
+                recovered_version = _recover_bundle_version(access_token, script_id, pending_apps_script["bundleDigest"])
+                if recovered_version is None:
+                    raise ProvisionerError("Apps Script version creation is pending recovery")
+            elif _remote_bundle_digest(access_token, script_id, recovered_version) != pending_apps_script["bundleDigest"]:
+                raise ProvisionerError("Apps Script version creation content does not match the verified source bundle")
+            state = dict(state)
+            state["appsScript"] = {
+                "scriptId": script_id,
+                "provenance": provenance,
+                "bundleDigest": pending_apps_script["bundleDigest"],
+                "versionNumber": recovered_version,
+                "deploymentId": pending_apps_script["deploymentId"],
+            }
+            state["phase"] = "apps-script-version-ready"
+            state = _persist_state_locked(state_dir, state, key)
+        elif state["phase"] == "apps-script-version-ready" and pending_apps_script["deploymentId"] is not None:
+            _ensure_owner_only_deployment(
+                access_token,
+                script_id,
+                pending_apps_script["bundleDigest"],
+                pending_apps_script["versionNumber"],
+                pending_apps_script["deploymentId"],
+            )
+        elif pending_apps_script["deploymentId"] is not None:
+            _verify_persisted_owner_only_deployment(
+                access_token,
+                script_id,
+                pending_apps_script["bundleDigest"],
+                pending_apps_script["versionNumber"],
+                pending_apps_script["deploymentId"],
+            )
         if _remote_bundle_digest(access_token, script_id) != digest:
             _apps_script_json(
                 access_token,
@@ -2501,8 +2586,21 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
                     recovered_version = _create_bundle_version(access_token, script_id, digest)
                 except AppsScriptHttpError as exc:
                     if 400 <= exc.status < 500:
-                        persist_version_state(None, "apps-script-version-creation-intent")
+                        if persisted_deployment_id is None:
+                            persist_version_state(None, "apps-script-version-creation-intent")
+                        else:
+                            # The POST was definitively rejected. Restore the
+                            # prior verified deployment identity so the next
+                            # run can retry the new version without treating
+                            # its absent marker as an uncertain deployment.
+                            state = dict(state)
+                            state["appsScript"] = apps_script
+                            state["phase"] = "bootstrap-complete" if state["bootstrap"]["status"] == "complete" else "apps-script-ready"
+                            state = _persist_state_locked(state_dir, state, key)
                     raise
+                persist_version_state(recovered_version, "apps-script-version-creation-pending")
+                if _remote_bundle_digest(access_token, script_id, recovered_version) != digest:
+                    raise ProvisionerError("Apps Script version creation content does not match the verified source bundle")
             persist_version_state(recovered_version, "apps-script-version-ready")
             version_number = recovered_version
 
@@ -2532,6 +2630,19 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             state["phase"] = "apps-script-version-ready"
             state = _persist_state_locked(state_dir, state, key)
 
+        def persist_created_deployment_identity(deployment_id: str) -> None:
+            nonlocal state
+            state = dict(state)
+            state["appsScript"] = {
+                "scriptId": script_id,
+                "provenance": provenance,
+                "bundleDigest": digest,
+                "versionNumber": version_number,
+                "deploymentId": deployment_id,
+            }
+            state["phase"] = "apps-script-deployment-creation-pending"
+            state = _persist_state_locked(state_dir, state, key)
+
         deployment_id, version_number = _ensure_owner_only_deployment(
             access_token,
             script_id,
@@ -2541,6 +2652,7 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             creation_pending=state["phase"] == "apps-script-deployment-creation-pending",
             persist_creation_pending=persist_deployment_creation_pending,
             clear_creation_pending=clear_deployment_creation_pending,
+            persist_created_identity=persist_created_deployment_identity,
         )
         state = dict(state)
         state["appsScript"] = {"scriptId": script_id, "provenance": provenance, "bundleDigest": digest, "versionNumber": version_number, "deploymentId": deployment_id}
