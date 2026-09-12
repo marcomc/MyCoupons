@@ -391,10 +391,10 @@ function mimeDiagnosticPart_(trace, parent) {
   return record;
 }
 
-function parseMimePayload_(part, trace, parent) {
+function parseMimePayload_(part, trace, parent, omitted) {
   const record = mimeDiagnosticPart_(trace, parent);
   try {
-    const output = parseMimePart_(part, trace, record);
+    const output = parseMimePart_(part, trace, record, omitted);
     if (record) { record.stage = 'complete'; record.status = 'ok'; }
     return output;
   } catch (e) {
@@ -403,7 +403,7 @@ function parseMimePayload_(part, trace, parent) {
   }
 }
 
-function parseMimePart_(part, trace, record) {
+function parseMimePart_(part, trace, record, omitted) {
   if (record) {
     record.partType = mimeDiagnosticType_(part);
     record.mimeTypeType = part ? mimeDiagnosticType_(part.mimeType) : 'not-applicable';
@@ -418,6 +418,15 @@ function parseMimePart_(part, trace, record) {
   }
   const headers = mimeHeaders_(part.headers, record);
   const output = {headers: headers, text: '', html: '', incomplete: false};
+  if (record) record.stage = 'attachment-classification';
+  if (part.filename != null && typeof part.filename !== 'string') fail_('MAIL');
+  const fileAttachment = !!part.filename || headers.some(function (header) {
+    return header.name === 'content-disposition' && /^\s*attachment(?:\s*;|\s*$)/i.test(header.value);
+  });
+  // Documents are outside the body projection. Image acquisition independently
+  // handles supported image parts, including named attachments.
+  omitted = omitted || fileAttachment;
+  output.incomplete = !!omitted;
   if (mimeType.indexOf('multipart/') === 0) {
     if (record) {
       record.stage = 'multipart-validation';
@@ -429,12 +438,13 @@ function parseMimePart_(part, trace, record) {
         decodeBytePayload_(part.body.data, part.body.size).length) fail_('MAIL');
     }
     if (!Array.isArray(part.parts)) {
+      if (omitted && part.parts != null) fail_('MAIL');
       output.incomplete = true;
       return output;
     }
     if (record) record.stage = 'multipart-children';
     part.parts.forEach(function (child) {
-      const parsed = parseMimePayload_(child, trace, record);
+      const parsed = parseMimePayload_(child, trace, record, omitted);
       if (record) record.stage = 'multipart-composition';
       if (parsed.text) output.text = appendMimeText_(output.text, parsed.text);
       if (parsed.html) output.html = appendMimeText_(output.html, parsed.html);
@@ -444,14 +454,36 @@ function parseMimePart_(part, trace, record) {
     });
     return output;
   }
+  if (omitted) {
+    // Images keep their independent acquisition/validation outcome. Documents
+    // validate supplied bytes and metadata, but never decode them into text.
+    if (mimeType.indexOf('image/') !== 0) validateOmittedMimeBody_(part.body, record);
+    return output;
+  }
   if (mimeType === 'text/plain' || mimeType === 'text/html') {
-    const value = decodeMimeBody_(part.body, headers, record);
-    if (mimeType === 'text/plain') output.text = value;
-    else output.html = value;
+    const decoded = decodeMimeBodyOutcome_(part.body, headers, record);
+    if (mimeType === 'text/plain') output.text = decoded.text;
+    else output.html = decoded.text;
+    output.incomplete = decoded.incomplete;
     return output;
   }
   output.incomplete = true;
   return output;
+}
+
+function validateOmittedMimeBody_(body, record) {
+  if (record) { record.stage = 'body-validation'; record.bodyType = mimeDiagnosticType_(body); }
+  if (!body || typeof body !== 'object' || Array.isArray(body) ||
+    body.attachmentId != null && typeof body.attachmentId !== 'string') fail_('MAIL');
+  const empty = body.data == null || body.data === '' || Array.isArray(body.data) && body.data.length === 0;
+  // External documents are deliberately not fetched. Their absent data is
+  // legitimate only with an attachment reference; supplied bytes stay strict.
+  if (body.attachmentId && empty) {
+    if (record) record.stage = 'size-validation';
+    if (body.size != null && (!Number.isSafeInteger(body.size) || body.size < 0)) fail_('MAIL');
+    return;
+  }
+  decodeBytePayload_(body.data, body.size, record);
 }
 
 function appendMimeText_(left, right) {
@@ -481,10 +513,17 @@ function mimeHeader_(headers, name) {
 }
 
 function decodeMimeBody_(body, headers, record) {
+  const decoded = decodeMimeBodyOutcome_(body, headers, record);
+  if (decoded.incomplete) fail_('MAIL');
+  return decoded.text;
+}
+
+function decodeMimeBodyOutcome_(body, headers, record) {
   if (record) { record.stage = 'body-validation'; record.bodyType = mimeDiagnosticType_(body); }
-  if (!body || typeof body !== 'object') fail_('MAIL');
-  const bytes = decodeBytePayload_(body.data, body.size, record);
-  if (!bytes.length) return '';
+  if (!body || typeof body !== 'object' || Array.isArray(body)) fail_('MAIL');
+  const bytes = validatedBytePayloadContents_(body.data, body.size, record);
+  const incomplete = body.size != null && body.size !== bytes.length;
+  if (!bytes.length) return {text: '', incomplete: incomplete};
   if (record) record.stage = 'charset-validation';
   const charset = mimeCharset_(headers);
   if (record) {
@@ -499,7 +538,8 @@ function decodeMimeBody_(body, headers, record) {
     if (record) record.stage = 'string-decode';
     const value = blob.getDataAsString(charset);
     if (record) record.decodedType = mimeDiagnosticType_(value);
-    return value;
+    if (typeof value !== 'string') fail_('MAIL');
+    return {text: value, incomplete: incomplete};
   } catch (e) { fail_('MAIL'); }
 }
 

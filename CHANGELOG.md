@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- Recover usable MIME text with inconsistent declared byte sizes without trimming
+  or rewriting the source, and omit unsupported file attachments from body
+  extraction without fetching documents. Preserve incomplete coverage through
+  extraction, empty outcomes, AI retry, and batch replay; retain explicit
+  evidence-validated Confirm and strict image/byte validation.
+
 - Canonicalize padded Apps Script base64url image output before Gemini request
   validation, preserving signed and unsigned source bytes. Count every decoded
   unpadded remainder exactly before enforcing image and aggregate limits, and
