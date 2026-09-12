@@ -111,7 +111,11 @@ duplicate or malformed HEAD-shaped records stop recovery.
 Every other existing deployment must have exactly one `EXECUTION_API` entry
 point with `MYSELF` access; public, web, or malformed deployments stop the
 command. A digest-bound immutable source version and owner-only deployment are
-created or recovered uniquely and read back before the bootstrap runs.
+created or recovered and read back before the bootstrap runs. Creation intent
+is persisted before either non-idempotent request; ambiguous attempts
+reconcile verified resources and never repost them. If an interrupted version
+request left multiple candidates, each must read back as the reviewed bundle;
+the oldest verified version is then persisted as the deployment identity.
 
 For bootstrap, the command creates or adopts only the Vertex-project secret
 `mycoupons-bootstrap` bearing this installation label, rejects public or foreign
