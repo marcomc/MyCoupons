@@ -156,3 +156,44 @@ test('synthetic Advanced Gmail full message reaches canonicalization, evidenced 
   assert.equal(outcome.candidates[0].code, 'ÉTÉ+20');
   assert.equal(outcome.archiveAllowed, false); // Unsupported MIME coverage still requires review.
 });
+
+test('image byte budgets reject oversized arrays and base64 before decode or byte copying', () => {
+  const {ctx} = harness();
+  let decodes = 0; let copies = 0;
+  ctx.Utilities.base64DecodeWebSafe = () => { decodes++; throw Error('must not decode an oversized image'); };
+  const max = 2 * 1024 * 1024;
+  const oversized = new Array(max + 1).fill(0);
+  Object.defineProperty(oversized, 0, {get: () => { copies++; return 0; }});
+  const encoded = Buffer.alloc(max + 1).toString('base64url');
+  for (const data of [oversized, encoded]) {
+    for (const declaredSize of [undefined, png.length]) {
+      assert.equal(ctx.materializeImage_('abc123', 0, {mimeType: 'image/png', data, declaredSize}, 0), null);
+    }
+    ctx.Gmail.Users.Messages = {Attachments: {get: () => ({data, size: png.length})}};
+    assert.equal(ctx.materializeImage_('abc123', 0, {mimeType: 'image/png', attachmentId: 'att', declaredSize: png.length}, 0), null);
+  }
+  assert.equal(ctx.materializeImage_('abc123', 0, {mimeType: 'image/png', data: Buffer.from(png).toString('base64url')}, 8 * 1024 * 1024 - 1), null);
+  assert.equal(decodes, 0); assert.equal(copies, 0);
+  const fresh = harness().ctx;
+  // The exact cap remains valid; padding must not inflate the byte estimate.
+  for (const data of forms([1, 2])) assert.equal(fresh.decodeBytePayload_(data, 2, null, 2).length, 2);
+});
+
+
+test('remote image bytes reach the aggregate budget before normalization copies', () => {
+  const {ctx} = harness();
+  const large = png.concat(new Array(2 * 1024 * 1024 - png.length).fill(0));
+  let reads = 0; let copies = 0;
+  const blocked = png.slice();
+  Object.defineProperty(blocked, 0, {get: () => { copies++; return 137; }});
+  ctx.UrlFetchApp = {fetch: () => {
+    reads++;
+    return {getResponseCode: () => 200, getHeaders: () => ({'Content-Type': 'image/png'}),
+      getContent: () => reads <= 4 ? large : blocked};
+  }};
+  const html = Array.from({length: 5}, (_, i) => '<img src="https://example.com/' + i + '.png">').join('');
+  const result = ctx.acquireMessageImages_({id: 'abc123'}, html);
+  assert.equal(result.images.length, 4);
+  assert.equal(result.incomplete, true);
+  assert.equal(copies, 0);
+});

@@ -59,7 +59,7 @@ function fetchRemoteImage_(url) {
     if (MC_IMAGE_MIME_TYPES.indexOf(contentType) < 0) return null;
     const bytes = response.getContent();
     if (!Array.isArray(bytes) || !bytes.length || bytes.length > MC_IMAGE_MAX_BYTES) return null;
-    return {mimeType: contentType, data: validatedBytes_(bytes), declaredSize: bytes.length};
+    return {mimeType: contentType, data: bytes, declaredSize: bytes.length};
   } catch (e) { return null; }
 }
 
@@ -84,15 +84,16 @@ function materializeImage_(messageId, slot, resource, total) {
     resource.declaredSize > MC_IMAGE_MAX_BYTES || total + resource.declaredSize > MC_IMAGE_MAX_TOTAL_BYTES)) return null;
   if (resource.declaredSize != null && (!Number.isSafeInteger(resource.declaredSize) ||
     resource.declaredSize <= 0 || resource.declaredSize > MC_IMAGE_MAX_BYTES || total + resource.declaredSize > MC_IMAGE_MAX_TOTAL_BYTES)) return null;
+  const maxBytes = Math.min(MC_IMAGE_MAX_BYTES, MC_IMAGE_MAX_TOTAL_BYTES - total);
   let bytes = [];
   try {
     const empty = resource.data == null || resource.data === '' || Array.isArray(resource.data) && resource.data.length === 0;
     if (empty && resource.attachmentId) {
       const attachment = Gmail.Users.Messages.Attachments.get('me', messageId, resource.attachmentId);
       if (!attachment || typeof attachment !== 'object') return null;
-      bytes = decodeBytePayload_(attachment.data, attachment.size);
+      bytes = decodeBytePayload_(attachment.data, attachment.size, null, maxBytes);
       if (bytes.length !== resource.declaredSize) return null;
-    } else bytes = decodeBytePayload_(resource.data, resource.declaredSize);
+    } else bytes = decodeBytePayload_(resource.data, resource.declaredSize, null, maxBytes);
   } catch (e) { return null; }
   if (!Array.isArray(bytes) || !bytes.length || bytes.length > MC_IMAGE_MAX_BYTES || total + bytes.length > MC_IMAGE_MAX_TOTAL_BYTES) return null;
   if (!imageSignature_(resource.mimeType, bytes)) return null;

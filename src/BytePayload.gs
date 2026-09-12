@@ -24,7 +24,7 @@ function validBase64Url_(value) {
   return remainder === 2 ? last % 16 === 0 : remainder === 3 ? last % 4 === 0 : true;
 }
 
-function decodeBytePayload_(value, size, record) {
+function decodeBytePayload_(value, size, record, maxBytes) {
   const data = value == null ? '' : value;
   if (record) {
     record.stage = 'data-validation';
@@ -34,6 +34,14 @@ function decodeBytePayload_(value, size, record) {
     record.dataSyntaxValid = typeof data === 'string' && /^[A-Za-z0-9_-]*={0,2}$/.test(data);
     record.paddingLength = typeof data === 'string' ? (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0) : null;
     record.sizeType = mimeDiagnosticType_(size);
+  }
+  // Bound image allocations before decoding strings or copying byte arrays.
+  if (maxBytes != null) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) fail_('MAIL');
+    const padding = typeof data === 'string' ? (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0) : 0;
+    const byteLength = typeof data === 'string' ? Math.floor((data.length - padding) * 3 / 4) :
+      Array.isArray(data) ? data.length : 0;
+    if (byteLength > maxBytes) fail_('MAIL');
   }
   if (!Array.isArray(data) && !validBase64Url_(data)) fail_('MAIL');
   if (record) {
@@ -59,6 +67,7 @@ function decodeBytePayload_(value, size, record) {
     record.bytesLength = bytes != null && Number.isSafeInteger(bytes.length) && bytes.length >= 0 ? bytes.length : null;
     record.sizeMatches = size == null ? 'not-declared' : bytes != null && size === bytes.length;
   }
+  if (maxBytes != null && Array.isArray(bytes) && bytes.length > maxBytes) fail_('MAIL');
   bytes = validatedBytes_(bytes);
   if (record) record.stage = 'size-match';
   if (size != null && size !== bytes.length) fail_('MAIL');
