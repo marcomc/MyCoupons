@@ -95,7 +95,7 @@ test('acquisition omits excess attachment images before Gemini transport and pre
   const outcome = ctx.extractCouponOutcome_({text: 'Coupon code SAVE20', incomplete: acquired.incomplete, images: acquired.images}, {
     fetch: (_, options) => {
       request = JSON.parse(options.payload);
-      return {status: 200, body: JSON.stringify({candidates: [{content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})};
+      return {status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})};
     }
   });
   assert.equal(request.contents[0].parts.filter(part => part.inlineData).length, 6);

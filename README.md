@@ -146,8 +146,8 @@ The example configuration contains product defaults only.
 
 ## Gemini routing
 
-- `callGeminiModel_` provides a bounded generic text-plus-inline-image
-  transport; it does not infer coupon fields.
+- `callGeminiModel_` provides bounded text-plus-inline-image transport with the
+  same typed JSON extraction schema on both backends.
 - The configured `gemini-flash-latest` model uses the Gemini Developer API
   first. Its API key is read only from the `GEMINI_API_KEY` Script Property.
 - With `autoVertexFallback` enabled and `vertexProject` configured, paid Vertex
@@ -155,10 +155,12 @@ The example configuration contains product defaults only.
   HTTP 429 response. The temporary route lasts one hour and then expires.
 - Vertex `global` calls use `aiplatform.googleapis.com`; regional locations keep
   their location-prefixed host.
-- Network errors, HTTP 408, generic 429 responses, selected 5xx responses, and
-  malformed responses retry at most three times on the current backend. Production
+- Network errors, HTTP 408, generic 429 responses, and selected 5xx responses
+  retry at most three times on the current backend. Production
   retries sleep with bounded exponential backoff and stop when the execution
-  deadline would be exceeded.
+  deadline would be exceeded. HTTP 200 format/schema failures, missing or non-STOP
+  completion reasons, and multiple provider completions fail without another
+  request or paid fallback. A later user retry remains available.
 
 ## Core behavior
 
@@ -258,11 +260,25 @@ quotes must be well-formed UTF-16, including complete astral characters.
 
 AI extraction is read-only: `extractCouponCandidates_` builds a bounded prompt
 from independent text, HTML-derived source spans, and inspected images, then
-accepts only a JSON `{ "candidates": [...] }` response. Each candidate may
-contain exactly the existing fields plus `confidence`, `review`, and
-`evidence`. AI candidates use the same source-grounding rules as deterministic
-candidates and are deduplicated by stable offer identity; transport, schema,
-evidence, and bound failures remain retryable.
+accepts only a JSON `{ "candidates": [...] }` response. Every candidate has all
+existing factual fields plus `confidence` and `review`. Each factual field is
+`null` when absent or uncertain, or `{ "value": "...", "quote": "...", "image": null }`.
+A quote is one supporting excerpt within one original span. Image evidence uses
+one inspected integer index; image-only facts use an empty quote and require
+review. Notes follow the same evidence contract as every other fact.
+
+Both generateContent backends receive `responseMimeType: "application/json"` and
+`responseJsonSchema`. The contract uses their documented JSON Schema subset;
+see the [Gemini generation reference](https://ai.google.dev/api/generate-content#v1beta.GenerationConfig)
+and [Vertex generation reference](https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/GenerationConfig).
+The consumer validates the complete key set, scalar types, and evidence binding
+before projection into the internal candidate format. Existing source grounding,
+identity deduplication, incomplete-source restrictions, and manual Confirm rules
+then apply. Structured JSON alone does not establish factual accuracy.
+
+The schema does not cap the offer array: responses exceeding the local candidate
+limit fail for review/retry rather than selecting only some offers. Invalidated
+claims cannot become a verified non-offer. No format repair requests are added.
 
 Source identity recovery accepts canonical lowercase hexadecimal Gmail links under
 `mail.google.com` (case-insensitive with an optional decimal serialization of

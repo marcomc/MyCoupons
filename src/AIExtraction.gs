@@ -1,6 +1,56 @@
 const AI_EXTRACTION = Object.freeze({maxPromptText: 60000, maxCandidates: 12, maxResponse: 1024 * 1024});
 
-function aiCandidateKeys_() { return MC.fields.concat(['confidence', 'review', 'evidence']); }
+function aiCandidateKeys_() { return MC.fields.concat(['confidence', 'review']); }
+
+function candidateResponseSchema_() {
+  const properties = {};
+  MC.fields.forEach(function (field) {
+    properties[field] = {type: ['object', 'null'], additionalProperties: false,
+      properties: {value: {type: 'string'}, quote: {type: 'string'}, image: {type: ['integer', 'null'], minimum: 0}},
+      required: ['value', 'quote', 'image']};
+  });
+  properties.confidence = {type: 'string', enum: ['high', 'medium', 'low']};
+  properties.review = {type: 'boolean'};
+  // Do not constrain maxItems: excess offers must reach the rejecting consumer,
+  // rather than asking the provider to silently select a subset of the message.
+  return {type: 'object', additionalProperties: false, required: ['candidates'],
+    properties: {candidates: {type: 'array', items: {type: 'object', additionalProperties: false,
+      properties: properties, required: aiCandidateKeys_()}}}};
+}
+
+function exactAIKeys_(value, keys) {
+  return plainObjectWithKeys_(value, keys) && Object.getOwnPropertyNames(value).length === keys.length;
+}
+
+function validateAIWireCandidate_(candidate, source) {
+  if (!exactAIKeys_(candidate, aiCandidateKeys_()) ||
+      ['high', 'medium', 'low'].indexOf(candidate.confidence) < 0 || typeof candidate.review !== 'boolean') fail_('AI');
+  MC.fields.forEach(function (field) {
+    const fact = candidate[field];
+    if (fact === null) return;
+    if (!exactAIKeys_(fact, ['value', 'quote', 'image']) ||
+        typeof fact.value !== 'string' || !fact.value.trim() || !wellFormedUtf16_(fact.value) ||
+        typeof fact.quote !== 'string' || !wellFormedUtf16_(fact.quote) ||
+        fact.image !== null && (!Number.isInteger(fact.image) || fact.image < 0 ||
+          fact.image >= source.images.length || !inspectedImageAt_(source.images, fact.image)) ||
+        !fact.quote.trim() && fact.image === null) fail_('AI');
+  });
+}
+
+function projectAIWireCandidate_(candidate) {
+  const raw = Object.create(null);
+  raw.confidence = candidate.confidence; raw.review = candidate.review; raw.evidence = Object.create(null);
+  MC.fields.forEach(function (field) {
+    const fact = candidate[field];
+    raw[field] = fact === null ? '' : fact.value;
+    if (fact !== null) {
+      raw.evidence[field] = Object.create(null);
+      if (fact.quote) raw.evidence[field].quote = fact.quote;
+      if (fact.image !== null) raw.evidence[field].image = fact.image;
+    }
+  });
+  return raw;
+}
 
 function buildCandidatePrompt_(message) {
   return candidatePrompt_(message).text;
@@ -10,13 +60,19 @@ function candidatePrompt_(message) {
   const source = candidateSource_(message);
   const instruction = [
     'Extract coupon offers from the supplied message. Return JSON only, with no prose or Markdown.',
-    'Leave uncertain facts empty. Never invent a merchant, condition, expiry, link, or code.',
-    'Every non-empty factual field must have evidence.quote and/or evidence.image.',
-    'An image-only fact is always review=true. Use only inspected image indexes.',
-    'Response schema: {"candidates":[candidate, ...]}. Each candidate has exactly these keys: ' +
-      aiCandidateKeys_().join(', ') + '.',
-    'Candidate fields: ' + MC.fields.join(', ') + '. confidence is high, medium, or low; review is boolean.',
-    'Evidence keys are candidate field names; each evidence value has only quote and/or image.',
+    'Extract all offers; never select only a subset. An empty candidates array means no offer was found in the supplied source.',
+    'Every factual field, including notes, is null when absent or uncertain; otherwise it is {value, quote, image}.',
+    'value and quote are single strings, never arrays. image is one integer index or null, never a string or array.',
+    'Keep each value together with its evidence: quote is one exact source excerpt supporting that value within one independent span.',
+    'Use image only for a supplied inspected image supporting the value; use null otherwise. Use an empty quote only for image-only evidence.',
+    'Never emit an empty value object or a value without evidence. Never invent facts or evidence.',
+    'Set review=true for uncertain facts or actual offer information that could not be represented. Optional fields absent from the source may be null without requiring review.',
+    'Preserve exact code case, Unicode and punctuation. Use source wording for descriptive values including notes, not summaries.',
+    'Use HTTPS websites and explicit YYYY-MM-DD expiry supported by the source. discountValue and minimumSpend are scalar numeric strings without units.',
+    'discountType is the exact unit beside the discount amount, such as %, EUR, or a currency symbol; never a phrase such as percent off or % off. The type and value quotes must support the same adjacent amount and unit.',
+    'An image-only fact is always review=true. Incomplete source coverage requires review=true and cannot verify absence of an offer.',
+    'Each candidate has exactly these keys: ' + aiCandidateKeys_().join(', ') + '.',
+    'confidence is high, medium, or low; review is boolean. Follow the supplied response schema.',
     'INSPECTED IMAGES: ' + source.images.length + ' images, indexed from 0.'
   ].join('\n\n');
   const subjectLabel = '\n\nSUBJECT (independent evidence span):\n';
@@ -57,19 +113,16 @@ function parseAICandidateOutcome_(response, message) {
       /^\s*```|```\s*$/.test(response.text) || duplicateJsonKeys_(response.text)) fail_('AI');
   let body;
   try { body = JSON.parse(response.text); } catch (e) { fail_('AI'); }
-  if (!plainObjectWithKeys_(body, ['candidates']) || !Array.isArray(body.candidates) ||
+  if (!exactAIKeys_(body, ['candidates']) || !Array.isArray(body.candidates) ||
       body.candidates.length > AI_EXTRACTION.maxCandidates) fail_('AI');
+  const source = candidateSource_(message);
+  // Validate the entire wire response, including keys and types in later offers,
+  // before projecting any facts into the internal evidence representation.
+  body.candidates.forEach(function (candidate) { validateAIWireCandidate_(candidate, source); });
   let invalidated = 0;
   const candidates = body.candidates.map(function (candidate) {
-    if (!plainObjectWithKeys_(candidate, aiCandidateKeys_()) ||
-        Object.getOwnPropertyNames(candidate).length !== aiCandidateKeys_().length) fail_('AI');
-    const evidence = candidate.evidence;
-    if (!plainObjectWithKeys_(evidence || {}, MC.fields) ||
-        Object.keys(evidence || {}).some(function (key) {
-          return !candidate[key] || !plainObjectWithKeys_(evidence[key], ['quote', 'image']) ||
-            Object.keys(evidence[key]).length < 1;
-        }) || MC.fields.some(function (key) { return candidate[key] && !Object.prototype.hasOwnProperty.call(evidence, key); })) fail_('AI');
-    const normalized = normalizeCandidate_(candidate, message);
+    const raw = projectAIWireCandidate_(candidate);
+    const normalized = normalizeCandidate_(raw, message);
     if (!(normalized.merchant || normalized.code || normalized.website || normalized.discountType && normalized.discountValue)) {
       invalidated++;
       return null;

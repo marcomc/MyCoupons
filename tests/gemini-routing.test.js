@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {harness} = require('./harness');
 
 const request = {text: 'Extract candidates.', images: []};
-const ok = JSON.stringify({candidates: [{content: {parts: [{text: 'result'}]}}]});
+const ok = JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: 'result'}]}}]});
 function response(status, body) { return {status, body: JSON.stringify(body)}; }
 function setup() {
   const h = harness();
@@ -66,7 +66,7 @@ test('generic 429, transient text, and network failures never activate Vertex', 
 test('production retries sleep within the runtime deadline', () => {
   const {ctx, properties} = harness(); properties.GEMINI_API_KEY = 'test-key';
   const sleeps = []; ctx.Utilities.sleep = milliseconds => sleeps.push(milliseconds);
-  const response = JSON.stringify({candidates: [{content: {parts: [{text: 'ok'}]}}]});
+  const response = JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: 'ok'}]}}]});
   const result = ctx.callGeminiModel_({text: 'offer', images: []}, {fetch: (() => {
     let calls = 0; return () => ++calls < 3 ? {status: 503, body: ''} : {status: 200, body: response};
   })(), deadlineMs: Date.now() + 5000});

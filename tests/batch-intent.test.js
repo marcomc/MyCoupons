@@ -1,6 +1,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {harness} = require('./harness');
+const {wireCandidate} = require('./ai-wire-fixtures');
 
 function sheet(headers) {
   const rows = [headers.slice()]; const notes = []; let capacity = 26;
@@ -70,7 +71,7 @@ function modelResponse(proposals) {
     const result = {...proposal}; delete result.imageEvidence;
     result.evidence = Object.fromEntries(Object.entries(result).filter(([key, value]) =>
       typeof value === 'string' && value && key !== 'confidence').map(([key, value]) => [key, {quote: value}]));
-    return result;
+    return wireCandidate(result);
   })})};
 }
 
@@ -482,7 +483,7 @@ test('real extraction persists duplicated coded proposals once and distinct URL 
       proposal.evidence = Object.fromEntries(Object.entries(proposal).filter(([key, value]) =>
         typeof value === 'string' && value && key !== 'confidence').map(([key, value]) => [key, {quote: value}]));
     });
-    f.ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: proposals})});
+    f.ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: proposals.map(wireCandidate)})});
     assert.equal(f.run().messages[0].status, 'confirmed');
     const expected = mode === 'duplicate-code' ? 1 : 2;
     assert.equal(f.coupon.rows.length, expected + 1);
@@ -593,5 +594,33 @@ test('recovered MIME partial batches cannot finalize missing candidates or a mix
         }
       }
     }
+  }
+});
+
+test('malformed typed responses leave initial imports and AI retries without coupon or Gmail mutations', () => {
+  for (const mode of ['missing-evidence', 'array-evidence', 'excess-offers']) {
+    const badResponse = () => {
+      const proposals = JSON.parse(modelResponse([candidate('Save+20', {review: false})]).text).candidates;
+      if (mode === 'missing-evidence') proposals[0].notes = {value: 'Members only', quote: '', image: null};
+      if (mode === 'array-evidence') proposals[0].code.quote = ['Save+20'];
+      if (mode === 'excess-offers') while (proposals.length < 13) proposals.push(proposals[0]);
+      return {text: JSON.stringify({candidates: proposals})};
+    };
+    const initial = fixture(); delete initial.state.extractCouponOutcome;
+    initial.ctx.callGeminiModel_ = badResponse;
+    assert.equal(initial.run().messages[0].status, 'failed');
+    assert.equal(initial.saved().batchIntent, undefined);
+    assert.equal(initial.coupon.rows.length, 1); assert.equal(initial.mutations.length, 0);
+    initial.run(); assert.equal(initial.coupon.rows.length, 1); assert.equal(initial.mutations.length, 0);
+
+    const retry = fixture(); retry.run();
+    const beforeRows = JSON.stringify(retry.coupon.rows);
+    const beforeIntent = JSON.stringify(retry.saved().batchIntent);
+    retry.ctx.callGeminiModel_ = badResponse;
+    retry.action(2, 'Retry with AI');
+    retry.coupon.rows[1][24] = '';
+    assert.equal(JSON.stringify(retry.coupon.rows), beforeRows);
+    assert.equal(JSON.stringify(retry.saved().batchIntent), beforeIntent);
+    assert.equal(retry.saved().status, 'review'); assert.equal(retry.mutations.length, 0);
   }
 });
