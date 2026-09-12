@@ -91,7 +91,8 @@ function scanCouponMessages_(state, onMessage, accumulator) {
   const retryCandidates = Object.keys(journalSnapshot).filter(function (id) {
     const journal = journalSnapshot[id];
     return journal && (journal.status === 'pending' || journal.status === 'processing' ||
-      journal.status === 'failed' && !!journal.failureStage) &&
+      journal.status === 'failed' && /^read\|\d+\|\d+$/.test(journal.failureStage || '') ||
+      journal.status === 'failed' && journal.failureStage !== 'read' && !!journal.failureStage) &&
       scan.pendingIds.indexOf(id) < 0 && validGmailApiId_(id);
   }).sort();
   const retryStart = scan.retryCursor ? (retryCandidates.indexOf(scan.retryCursor) + 1) % retryCandidates.length : 0;

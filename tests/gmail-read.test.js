@@ -83,7 +83,7 @@ test('rejects a mismatched fetched identity and rotates durable retries', () => 
   installGmail(ctx, () => ({messages: [{id: 'abc123'}]}), () => message('deadbeef', start + 1));
   const mismatch = ctx.scanCouponMessages_(state(journal, start), () => assert.fail('must not dispatch'));
   assert.deepEqual(JSON.parse(JSON.stringify(mismatch.errors)), [{messageId: 'abc123', code: 'MAIL', retryable: true}]);
-  ['aa', 'bb', 'cc', 'dd'].forEach(id => { const failed = ctx.newMessageState_(id); failed.status = 'failed'; failed.failureStage = 'read'; ctx.saveMessageState_(journal, failed); });
+  ['aa', 'bb', 'cc', 'dd'].forEach(id => { const failed = ctx.newMessageState_(id); failed.status = 'failed'; failed.failureStage = 'read|' + start + '|' + end; ctx.saveMessageState_(journal, failed); });
   const fetched = [];
   installGmail(ctx, () => ({messages: []}), id => { fetched.push(id); throw new Error('retry'); });
   ctx.scanCouponMessages_(state(journal, start), () => {});
