@@ -116,6 +116,8 @@ is persisted before either non-idempotent request; ambiguous attempts
 reconcile verified resources and never repost them. If an interrupted version
 request left multiple candidates, each must read back as the reviewed bundle;
 the oldest verified version is then persisted as the deployment identity.
+Definitive HTTP rejections restore a retryable state; only ambiguous
+outcomes remain pending recovery.
 
 For bootstrap, the command creates or adopts only the Vertex-project secret
 `mycoupons-bootstrap` bearing this installation label, rejects public or foreign

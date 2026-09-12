@@ -491,7 +491,7 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
     }:
         raise ProvisionerError("installation state has an unsupported shape")
     if state["version"] != STATE_VERSION or not isinstance(state["phase"], str) or state["phase"] not in {
-        "initialized", "bundle-validated", "cloud-projects-reconciled", "cloud-ready", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-adoption-pending", "apps-script-version-creation-pending", "apps-script-version-ready", "apps-script-deployment-creation-pending", "apps-script-ready", "bootstrap-complete"
+        "initialized", "bundle-validated", "cloud-projects-reconciled", "cloud-ready", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-adoption-pending", "apps-script-version-creation-intent", "apps-script-version-creation-pending", "apps-script-version-ready", "apps-script-deployment-creation-pending", "apps-script-ready", "bootstrap-complete"
     }:
         raise ProvisionerError("installation state has an unsupported version or phase")
     _validate_common_state_identity(state)
@@ -533,7 +533,7 @@ def _validate_state(state: Any, key: bytes) -> dict[str, Any]:
             not isinstance(apps_script["deploymentId"], str) or not APPS_SCRIPT_ID_RE.fullmatch(apps_script["deploymentId"])
         ):
             raise ProvisionerError("installation state has an invalid Apps Script record")
-        if state["phase"] != "apps-script-version-creation-pending":
+        if state["phase"] not in {"apps-script-version-creation-intent", "apps-script-version-creation-pending"}:
             raise ProvisionerError("installation state has an invalid Apps Script record")
     elif (
         not isinstance(apps_script["versionNumber"], int)
@@ -1506,7 +1506,18 @@ def provision_cloud(state_dir: Path, config: Mapping[str, Any]) -> dict[str, Any
         if state["bundleDigest"] is None or state["phase"] == "initialized":
             raise ProvisionerError("validate the Apps Script source bundle before Cloud provisioning")
         key = _load_or_create_identity_key(state_dir)
-        app_script_pending = state["phase"] in {"apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-adoption-pending"}
+        app_script_pending = state["phase"] in {
+            "apps-script-creation-intent",
+            "apps-script-creation-pending",
+            "apps-script-creation-posted",
+            "apps-script-association-required",
+            "apps-script-adoption-pending",
+            "apps-script-version-creation-intent",
+            "apps-script-version-creation-pending",
+            "apps-script-version-ready",
+            "apps-script-deployment-creation-pending",
+            "apps-script-ready",
+        }
         gcloud = discover_tools(("gcloud",))["gcloud"]
         if gcloud is None:
             raise ProvisionerError("gcloud is required for Cloud provisioning")
@@ -1963,6 +1974,7 @@ def _ensure_owner_only_deployment(
     *,
     creation_pending: bool = False,
     persist_creation_pending: Callable[[], None] | None = None,
+    clear_creation_pending: Callable[[], None] | None = None,
 ) -> tuple[str, int]:
     deployments = _deployment_list(access_token, script_id)
     marker = f"MyCoupons owner-only {digest}"
@@ -2007,12 +2019,17 @@ def _ensure_owner_only_deployment(
     if persist_creation_pending is None:
         raise ProvisionerError("Apps Script deployment creation cannot be persisted")
     persist_creation_pending()
-    created = _apps_script_json(
-        access_token,
-        "POST",
-        f"https://script.googleapis.com/v1/projects/{script_id}/deployments",
-        {"versionNumber": version, "description": marker, "manifestFileName": "appsscript"},
-    )
+    try:
+        created = _apps_script_json(
+            access_token,
+            "POST",
+            f"https://script.googleapis.com/v1/projects/{script_id}/deployments",
+            {"versionNumber": version, "description": marker, "manifestFileName": "appsscript"},
+        )
+    except AppsScriptHttpError as exc:
+        if 400 <= exc.status < 500 and clear_creation_pending is not None:
+            clear_creation_pending()
+        raise
     deployment_id, _ = _validate_owner_only_deployment(created, script_id, version)
     verified = _apps_script_json(access_token, "GET", f"https://script.googleapis.com/v1/projects/{script_id}/deployments/{deployment_id}")
     return _validate_expected_owner_only_deployment(verified, script_id, deployment_id, version, marker)
@@ -2043,7 +2060,7 @@ def _validate_bootstrap_payload(path: Path, config: Mapping[str, Any]) -> bytes:
 
 def _require_cloud_ready_state(state: Mapping[str, Any], config: Mapping[str, Any]) -> Mapping[str, Any]:
     vertex = state["cloud"].get("vertex") if isinstance(state.get("cloud"), dict) else None
-    if state["phase"] not in {"cloud-ready", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-adoption-pending", "apps-script-version-creation-pending", "apps-script-version-ready", "apps-script-deployment-creation-pending", "apps-script-ready", "bootstrap-complete"} or not isinstance(vertex, dict):
+    if state["phase"] not in {"cloud-ready", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-adoption-pending", "apps-script-version-creation-intent", "apps-script-version-creation-pending", "apps-script-version-ready", "apps-script-deployment-creation-pending", "apps-script-ready", "bootstrap-complete"} or not isinstance(vertex, dict):
         raise ProvisionerError("Cloud provisioning must complete before Apps Script deployment")
     if vertex.get("projectId") != config["vertexProject"] or vertex.get("provenance") not in {"created", "adopted"}:
         raise ProvisionerError("persisted Vertex project identity does not match the installation")
@@ -2480,7 +2497,12 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             recovered_version = _recover_bundle_version(access_token, script_id, digest)
             if recovered_version is None:
                 persist_version_state(None, "apps-script-version-creation-pending")
-                recovered_version = _create_bundle_version(access_token, script_id, digest)
+                try:
+                    recovered_version = _create_bundle_version(access_token, script_id, digest)
+                except AppsScriptHttpError as exc:
+                    if 400 <= exc.status < 500:
+                        persist_version_state(None, "apps-script-version-creation-intent")
+                    raise
             persist_version_state(recovered_version, "apps-script-version-ready")
             version_number = recovered_version
 
@@ -2497,6 +2519,19 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             state["phase"] = "apps-script-deployment-creation-pending"
             state = _persist_state_locked(state_dir, state, key)
 
+        def clear_deployment_creation_pending() -> None:
+            nonlocal state
+            state = dict(state)
+            state["appsScript"] = {
+                "scriptId": script_id,
+                "provenance": provenance,
+                "bundleDigest": digest,
+                "versionNumber": version_number,
+                "deploymentId": None,
+            }
+            state["phase"] = "apps-script-version-ready"
+            state = _persist_state_locked(state_dir, state, key)
+
         deployment_id, version_number = _ensure_owner_only_deployment(
             access_token,
             script_id,
@@ -2505,6 +2540,7 @@ def deploy_apps_script(state_dir: Path, config: Mapping[str, Any], source_dir: P
             persisted_deployment_id,
             creation_pending=state["phase"] == "apps-script-deployment-creation-pending",
             persist_creation_pending=persist_deployment_creation_pending,
+            clear_creation_pending=clear_deployment_creation_pending,
         )
         state = dict(state)
         state["appsScript"] = {"scriptId": script_id, "provenance": provenance, "bundleDigest": digest, "versionNumber": version_number, "deploymentId": deployment_id}

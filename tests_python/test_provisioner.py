@@ -563,24 +563,38 @@ class ProvisionerCloudTests(unittest.TestCase):
                 resumed = core.provision_cloud(state_dir, config)
             self.assertEqual(resumed["phase"], "bootstrap-complete")
             self.assertEqual(commands, [])
-            with core.InstallationLock(state_dir):
-                key = core._load_or_create_identity_key(state_dir)
-                association = core._load_state_locked(state_dir, key)
-                association["appsScript"] = {
-                    "scriptId": "script-1",
-                    "provenance": "created",
-                    "bundleDigest": None,
-                    "versionNumber": None,
-                    "deploymentId": None,
-                }
-                association["bootstrap"] = {"secretVersion": None, "status": "not-started"}
-                association["phase"] = "apps-script-association-required"
-                core._persist_state_locked(state_dir, association, key)
-            with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
-                "provisioner.core._run_json", side_effect=responder
-            ), mock.patch("provisioner.core._run_success", side_effect=mutate):
-                association_resumed = core.provision_cloud(state_dir, config)
-            self.assertEqual(association_resumed["phase"], "apps-script-association-required")
+            empty_script = {"scriptId": None, "provenance": None, "bundleDigest": None, "versionNumber": None, "deploymentId": None}
+            created_script = {"scriptId": "script-1", "provenance": "created", "bundleDigest": None, "versionNumber": None, "deploymentId": None}
+            adopted_script = {"scriptId": "script-1", "provenance": "adopted", "bundleDigest": None, "versionNumber": None, "deploymentId": None}
+            version_pending_script = {"scriptId": "script-1", "provenance": "adopted", "bundleDigest": "a" * 64, "versionNumber": None, "deploymentId": None}
+            version_ready_script = {"scriptId": "script-1", "provenance": "adopted", "bundleDigest": "a" * 64, "versionNumber": 1, "deploymentId": None}
+            deployed_script = {"scriptId": "script-1", "provenance": "adopted", "bundleDigest": "a" * 64, "versionNumber": 1, "deploymentId": "deployment-1"}
+            resumable_states = (
+                ("apps-script-creation-intent", empty_script),
+                ("apps-script-creation-pending", empty_script),
+                ("apps-script-creation-posted", empty_script),
+                ("apps-script-association-required", created_script),
+                ("apps-script-adoption-pending", adopted_script),
+                ("apps-script-version-creation-intent", version_pending_script),
+                ("apps-script-version-creation-pending", version_pending_script),
+                ("apps-script-version-ready", version_ready_script),
+                ("apps-script-deployment-creation-pending", version_ready_script),
+                ("apps-script-ready", deployed_script),
+            )
+            for phase, apps_script in resumable_states:
+                with self.subTest(phase=phase):
+                    with core.InstallationLock(state_dir):
+                        key = core._load_or_create_identity_key(state_dir)
+                        resumed = core._load_state_locked(state_dir, key)
+                        resumed["appsScript"] = apps_script
+                        resumed["bootstrap"] = {"secretVersion": None, "status": "not-started"}
+                        resumed["phase"] = phase
+                        core._persist_state_locked(state_dir, resumed, key)
+                    with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+                        "provisioner.core._run_json", side_effect=responder
+                    ), mock.patch("provisioner.core._run_success", side_effect=mutate):
+                        resumed = core.provision_cloud(state_dir, config)
+                    self.assertEqual(resumed["phase"], phase)
 
     def test_cloud_provision_rejects_foreign_labels_and_billed_developer_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1311,6 +1325,25 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 ("deployment-1", 2),
             )
 
+    def test_deployment_create_failure_distinguishes_definitive_from_ambiguous_outcomes(self) -> None:
+        digest = "a" * 64
+        for status, expected_events in ((429, ["pending", "retryable"]), (503, ["pending"])):
+            with self.subTest(status=status):
+                events: list[str] = []
+                with mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                    "provisioner.core._remote_bundle_digest", return_value=digest
+                ), mock.patch("provisioner.core._apps_script_json", side_effect=core.AppsScriptHttpError(status)):
+                    with self.assertRaises(core.AppsScriptHttpError):
+                        core._ensure_owner_only_deployment(
+                            "private-token",
+                            "script-1",
+                            digest,
+                            2,
+                            persist_creation_pending=lambda: events.append("pending"),
+                            clear_creation_pending=lambda: events.append("retryable"),
+                        )
+                self.assertEqual(events, expected_events)
+
     def test_pending_version_creation_never_reposts_before_provider_visibility(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1432,6 +1465,76 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(core.ProvisionerError, "stop before deployment mutation"):
                     core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+
+    def test_definitive_version_create_failure_restores_a_retryable_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            digest = "a" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": None,
+                    "versionNumber": None,
+                    "deploymentId": None,
+                }
+                state["phase"] = "apps-script-adoption-pending"
+                core._persist_state_locked(state_dir, state, key)
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._recover_bundle_version", return_value=None
+            ), mock.patch("provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
+                "provisioner.core._create_bundle_version", side_effect=core.AppsScriptHttpError(403)
+            ):
+                with self.assertRaises(core.AppsScriptHttpError):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+            persisted = core._read_json_file(state_dir / core.STATE_FILE, maximum_bytes=4096)
+            self.assertEqual(persisted["phase"], "apps-script-version-creation-intent")
+            self.assertIsNone(persisted["appsScript"]["versionNumber"])
+
+    def test_ambiguous_version_create_failure_leaves_pending_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            digest = "a" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": None,
+                    "versionNumber": None,
+                    "deploymentId": None,
+                }
+                state["phase"] = "apps-script-adoption-pending"
+                core._persist_state_locked(state_dir, state, key)
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._recover_bundle_version", return_value=None
+            ), mock.patch("provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
+                "provisioner.core._create_bundle_version", side_effect=core.AppsScriptHttpError(503)
+            ):
+                with self.assertRaises(core.AppsScriptHttpError):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+            persisted = core._read_json_file(state_dir / core.STATE_FILE, maximum_bytes=4096)
+            self.assertEqual(persisted["phase"], "apps-script-version-creation-pending")
+            self.assertIsNone(persisted["appsScript"]["versionNumber"])
 
     def test_deploy_creates_private_script_verifies_content_and_completes_bootstrap(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
