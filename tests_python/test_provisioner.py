@@ -1263,6 +1263,196 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
         self.assertEqual(persisted, ["pending"])
         self.assertEqual(created_identities, ["deployment-1"])
 
+    def test_deployment_update_reconciles_only_the_exact_prior_readback(self) -> None:
+        digest = "a" * 64
+        previous = self._deployment(version=1)
+        previous["deploymentConfig"]["description"] = "MyCoupons owner-only old-digest"
+        updated = self._deployment(version=2)
+        updated["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+        reads = 0
+        mutations: list[str] = []
+
+        def api(_token: str, method: str, resource: str, _body: object = None, **_kwargs: object) -> object:
+            nonlocal reads
+            if method == "PUT" and resource.endswith("/deployments/deployment-1"):
+                mutations.append(method)
+                return updated
+            if method == "GET" and resource.endswith("/deployments/deployment-1"):
+                reads += 1
+                return previous if reads < 6 else updated
+            raise AssertionError((method, resource))
+
+        with mock.patch("provisioner.core._deployment_list", return_value=[previous]), mock.patch(
+            "provisioner.core._remote_bundle_digest", return_value=digest
+        ), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch("provisioner.core.time.sleep") as wait:
+            self.assertEqual(core._ensure_owner_only_deployment("private-token", "script-1", digest, 2), ("deployment-1", 2))
+        self.assertEqual(mutations, ["PUT"])
+        self.assertEqual(reads, 6)
+        self.assertEqual(
+            wait.call_args_list,
+            [mock.call(1.0), mock.call(2.0), mock.call(4.0), mock.call(8.0), mock.call(15.0)],
+        )
+        self.assertEqual(sum(call.args[0] for call in wait.call_args_list), 30.0)
+
+    def test_deployment_update_accepts_an_immediate_target_readback_without_waiting(self) -> None:
+        digest = "a" * 64
+        previous = self._deployment(version=1)
+        previous["deploymentConfig"]["description"] = "MyCoupons owner-only old-digest"
+        updated = self._deployment(version=2)
+        updated["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+
+        def api(_token: str, method: str, resource: str, _body: object = None, **_kwargs: object) -> object:
+            if method == "PUT" and resource.endswith("/deployments/deployment-1"):
+                return updated
+            if method == "GET" and resource.endswith("/deployments/deployment-1"):
+                return updated
+            raise AssertionError((method, resource))
+
+        with mock.patch("provisioner.core._deployment_list", return_value=[previous]), mock.patch(
+            "provisioner.core._remote_bundle_digest", return_value=digest
+        ), mock.patch("provisioner.core._apps_script_json", side_effect=api) as request, mock.patch("provisioner.core.time.sleep") as wait:
+            self.assertEqual(core._ensure_owner_only_deployment("private-token", "script-1", digest, 2), ("deployment-1", 2))
+        self.assertEqual([call.args[1] for call in request.call_args_list], ["PUT", "GET"])
+        wait.assert_not_called()
+
+    def test_deployment_update_stale_readback_exhaustion_is_resumable_without_a_second_put(self) -> None:
+        digest = "a" * 64
+        previous = self._deployment(version=1)
+        previous["deploymentConfig"]["description"] = "MyCoupons owner-only old-digest"
+        updated = self._deployment(version=2)
+        updated["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+        requests: list[str] = []
+
+        def api(_token: str, method: str, resource: str, _body: object = None, **_kwargs: object) -> object:
+            requests.append(method)
+            if method == "PUT":
+                return updated
+            if method == "GET":
+                return previous
+            raise AssertionError((method, resource))
+
+        with mock.patch("provisioner.core._deployment_list", return_value=[previous]), mock.patch(
+            "provisioner.core._remote_bundle_digest", return_value=digest
+        ), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch("provisioner.core.time.sleep") as wait:
+            with self.assertRaisesRegex(core.ProvisionerError, "readback remained stale"):
+                core._ensure_owner_only_deployment("private-token", "script-1", digest, 2)
+        self.assertEqual(requests, ["PUT", "GET", "GET", "GET", "GET", "GET", "GET"])
+        self.assertEqual(
+            wait.call_args_list,
+            [mock.call(1.0), mock.call(2.0), mock.call(4.0), mock.call(8.0), mock.call(15.0)],
+        )
+        self.assertEqual(sum(call.args[0] for call in wait.call_args_list), 30.0)
+
+    def test_deployment_update_does_not_retry_nonstale_readbacks(self) -> None:
+        digest = "a" * 64
+        previous = self._deployment(version=1)
+        previous["deploymentConfig"]["description"] = "MyCoupons owner-only old-digest"
+        updated = self._deployment(version=2)
+        updated["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+        foreign_version = self._deployment(version=3)
+        foreign_version["deploymentConfig"]["description"] = updated["deploymentConfig"]["description"]
+        wrong_identity = self._deployment(deployment_id="deployment-other", version=2)
+        wrong_identity["deploymentConfig"]["description"] = updated["deploymentConfig"]["description"]
+        wrong_description = self._deployment(version=2)
+        wrong_description["deploymentConfig"]["description"] = "wrong"
+        stale_extra_config = self._deployment(version=1)
+        stale_extra_config["deploymentConfig"]["description"] = previous["deploymentConfig"]["description"]
+        stale_extra_config["deploymentConfig"]["unexpected"] = "foreign"
+        stale_extra_access = self._deployment(version=1)
+        stale_extra_access["deploymentConfig"]["description"] = previous["deploymentConfig"]["description"]
+        stale_extra_access["entryPoints"][0]["executionApi"]["unexpected"] = "foreign"
+        stale_boolean_version = self._deployment(version=True)
+        stale_boolean_version["deploymentConfig"]["description"] = previous["deploymentConfig"]["description"]
+        invalid_readbacks: dict[str, object] = {
+            "foreign-version": foreign_version,
+            "wrong-identity": wrong_identity,
+            "wrong-description": wrong_description,
+            "stale-extra-config": stale_extra_config,
+            "stale-extra-access": stale_extra_access,
+            "stale-boolean-version": stale_boolean_version,
+            "wrong-access": {
+                **self._deployment(version=2),
+                "entryPoints": [{"entryPointType": "EXECUTION_API", "executionApi": {"entryPointConfig": {"access": "ANYONE"}}}],
+            },
+            "malformed": {},
+            "http-failure": core.AppsScriptHttpError(503),
+        }
+
+        for name, readback in invalid_readbacks.items():
+            with self.subTest(readback=name):
+                requests: list[str] = []
+
+                def api(_token: str, method: str, resource: str, _body: object = None, *, result: object = readback, **_kwargs: object) -> object:
+                    requests.append(method)
+                    if method == "PUT":
+                        return updated
+                    if method == "GET":
+                        if isinstance(result, Exception):
+                            raise result
+                        return result
+                    raise AssertionError((method, resource))
+
+                with mock.patch("provisioner.core._deployment_list", return_value=[previous]), mock.patch(
+                    "provisioner.core._remote_bundle_digest", return_value=digest
+                ), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch("provisioner.core.time.sleep") as wait:
+                    with self.assertRaises(core.ProvisionerError):
+                        core._ensure_owner_only_deployment("private-token", "script-1", digest, 2)
+                self.assertEqual(requests, ["PUT", "GET"])
+                wait.assert_not_called()
+
+    def test_deployment_update_rejects_nonexact_target_response_before_readback(self) -> None:
+        digest = "a" * 64
+        previous = self._deployment(version=1)
+        previous["deploymentConfig"]["description"] = "MyCoupons owner-only old-digest"
+        updated = self._deployment(version=2)
+        updated["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+        extra_config = self._deployment(version=2)
+        extra_config["deploymentConfig"]["description"] = updated["deploymentConfig"]["description"]
+        extra_config["deploymentConfig"]["unexpected"] = "foreign"
+        extra_access = self._deployment(version=2)
+        extra_access["deploymentConfig"]["description"] = updated["deploymentConfig"]["description"]
+        extra_access["entryPoints"][0]["executionApi"]["unexpected"] = "foreign"
+
+        for name, response in {"extra-config": extra_config, "extra-access": extra_access}.items():
+            with self.subTest(response=name):
+                requests: list[str] = []
+
+                def api(_token: str, method: str, _resource: str, _body: object = None, *, result: object = response, **_kwargs: object) -> object:
+                    requests.append(method)
+                    if method == "PUT":
+                        return result
+                    raise AssertionError("nonexact update response must not be read back")
+
+                with mock.patch("provisioner.core._deployment_list", return_value=[previous]), mock.patch(
+                    "provisioner.core._remote_bundle_digest", return_value=digest
+                ), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch("provisioner.core.time.sleep") as wait:
+                    with self.assertRaises(core.ProvisionerError):
+                        core._ensure_owner_only_deployment("private-token", "script-1", digest, 2)
+                self.assertEqual(requests, ["PUT"])
+                wait.assert_not_called()
+
+    def test_deployment_update_rejects_a_boolean_target_version_before_readback(self) -> None:
+        digest = "a" * 64
+        previous = self._deployment(version=2)
+        previous["deploymentConfig"]["description"] = "MyCoupons owner-only old-digest"
+        response = self._deployment(version=True)
+        response["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+        requests: list[str] = []
+
+        def api(_token: str, method: str, _resource: str, _body: object = None, **_kwargs: object) -> object:
+            requests.append(method)
+            if method == "PUT":
+                return response
+            raise AssertionError("boolean update response must not be read back")
+
+        with mock.patch("provisioner.core._deployment_list", return_value=[previous]), mock.patch(
+            "provisioner.core._remote_bundle_digest", return_value=digest
+        ), mock.patch("provisioner.core._apps_script_json", side_effect=api), mock.patch("provisioner.core.time.sleep") as wait:
+            with self.assertRaises(core.ProvisionerError):
+                core._ensure_owner_only_deployment("private-token", "script-1", digest, 1)
+        self.assertEqual(requests, ["PUT"])
+        wait.assert_not_called()
+
     def test_deployment_update_rejects_mismatched_returned_or_read_back_identity(self) -> None:
         digest = "a" * 64
         existing = self._deployment()

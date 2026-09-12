@@ -123,6 +123,13 @@ APPS_SCRIPT_TITLE = "MyCoupons"
 APPS_SCRIPT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
 BOOTSTRAP_SECRET_NAME = "mycoupons-bootstrap"
 BOOTSTRAP_SECRET_LABEL = "mycoupons-installation"
+DEPLOYMENT_UPDATE_READBACK_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0)
+OWNER_ONLY_EXECUTION_API_ENTRY_POINTS = [
+    {
+        "entryPointType": "EXECUTION_API",
+        "executionApi": {"entryPointConfig": {"access": "MYSELF"}},
+    }
+]
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -1855,17 +1862,11 @@ def _validate_owner_only_deployment(deployment: Any, script_id: str, version_num
         or not APPS_SCRIPT_ID_RE.fullmatch(deployment_id)
         or not isinstance(config, dict)
         or config.get("scriptId") != script_id
-        or not isinstance(config.get("versionNumber"), int)
+        or type(config.get("versionNumber")) is not int
         or config["versionNumber"] < 1
         or config.get("manifestFileName") != "appsscript"
         or version_number is not None and config["versionNumber"] != version_number
-        or not isinstance(entry_points, list)
-        or len(entry_points) != 1
-        or not isinstance(entry_points[0], dict)
-        or entry_points[0].get("entryPointType") != "EXECUTION_API"
-        or not isinstance(entry_points[0].get("executionApi"), dict)
-        or not isinstance(entry_points[0]["executionApi"].get("entryPointConfig"), dict)
-        or entry_points[0]["executionApi"]["entryPointConfig"].get("access") != "MYSELF"
+        or entry_points != OWNER_ONLY_EXECUTION_API_ENTRY_POINTS
     ):
         raise ProvisionerError("Apps Script deployment is not an owner-only API executable")
     return deployment_id, config["versionNumber"]
@@ -1876,9 +1877,47 @@ def _validate_expected_owner_only_deployment(
 ) -> tuple[str, int]:
     """Validate a deployment response is for the exact resource requested."""
     validated_id, validated_version = _validate_owner_only_deployment(deployment, script_id, version_number)
-    if validated_id != deployment_id or deployment["deploymentConfig"].get("description") != description:
+    if validated_id != deployment_id or deployment["deploymentConfig"] != {
+        "scriptId": script_id,
+        "versionNumber": version_number,
+        "description": description,
+        "manifestFileName": "appsscript",
+    }:
         raise ProvisionerError("Apps Script deployment response returned a different deployment")
     return validated_id, validated_version
+
+
+def _reconcile_updated_owner_only_deployment(
+    access_token: str,
+    script_id: str,
+    deployment_id: str,
+    version_number: int,
+    description: str,
+    previous_deployment: Any,
+) -> tuple[str, int]:
+    """Read an update until it is visible, accepting only the exact prior value."""
+    previous_id, previous_version = _validate_owner_only_deployment(previous_deployment, script_id)
+    previous_config = previous_deployment["deploymentConfig"]
+    previous_description = previous_config.get("description")
+    if previous_id != deployment_id or not isinstance(previous_description, str):
+        raise ProvisionerError("Apps Script deployment update recovery is ambiguous")
+
+    resource = f"https://script.googleapis.com/v1/projects/{script_id}/deployments/{deployment_id}"
+    for delay in (*DEPLOYMENT_UPDATE_READBACK_DELAYS, None):
+        readback = _apps_script_json(access_token, "GET", resource)
+        try:
+            return _validate_expected_owner_only_deployment(readback, script_id, deployment_id, version_number, description)
+        except ProvisionerError as expected_error:
+            try:
+                _validate_expected_owner_only_deployment(
+                    readback, script_id, deployment_id, previous_version, previous_description
+                )
+            except ProvisionerError:
+                raise expected_error
+            if delay is None:
+                raise ProvisionerError("Apps Script deployment update readback remained stale") from expected_error
+            time.sleep(delay)
+    raise AssertionError("deployment update readback retry loop did not return")
 
 
 def _verify_persisted_owner_only_deployment(
@@ -2020,8 +2059,10 @@ def _ensure_owner_only_deployment(
     if persisted_deployment_id is not None or len(matching) == 1:
         if persisted_deployment_id is not None:
             deployment_id = persisted_deployment_id
+            previous_deployment = persisted
         else:
-            deployment_id = matching[0].get("deploymentId")
+            previous_deployment = matching[0]
+            deployment_id = previous_deployment.get("deploymentId")
             if not isinstance(deployment_id, str) or not APPS_SCRIPT_ID_RE.fullmatch(deployment_id):
                 raise ProvisionerError("Apps Script deployment inspection returned invalid data")
         updated = _apps_script_json(
@@ -2038,8 +2079,9 @@ def _ensure_owner_only_deployment(
             },
         )
         _validate_expected_owner_only_deployment(updated, script_id, deployment_id, version, marker)
-        verified = _apps_script_json(access_token, "GET", f"https://script.googleapis.com/v1/projects/{script_id}/deployments/{deployment_id}")
-        return _validate_expected_owner_only_deployment(verified, script_id, deployment_id, version, marker)
+        return _reconcile_updated_owner_only_deployment(
+            access_token, script_id, deployment_id, version, marker, previous_deployment
+        )
     if creation_pending:
         raise ProvisionerError("Apps Script deployment creation is pending recovery")
     if persist_creation_pending is None:
