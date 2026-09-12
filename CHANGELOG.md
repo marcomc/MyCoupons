@@ -17,6 +17,11 @@
   operations, preserve unread and unrelated messages, and use bounded production
   Gemini retry delays that respect the runtime deadline.
 
+- Verify the complete immutable candidate batch before row writes, replay
+  interrupted imports without re-extraction, and gate every archive entrypoint
+  on full-batch persistence. Keep interrupted legacy batches fail-closed and
+  preserve completed legacy review, including Notes keys and typed expiry dates.
+
 - Treat the email subject as an independent evidence span, preserve exact
   case/Unicode/punctuation coupon identities, prevent sender metadata from
   grounding offer facts, consolidate sparse deterministic codes with their

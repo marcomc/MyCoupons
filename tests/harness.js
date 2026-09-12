@@ -37,7 +37,7 @@ function harness({sourceOrder, vendorLast = false} = {}) {
   };
   vm.createContext(ctx);
   let names = sourceOrder || ['locales/en', 'Config', 'GeminiRouting', 'Digest', 'TextSafety', 'NumericEvidence', 'HtmlEvidence', 'ImageAcquisition',
-    'CandidateEvidence', 'AIExtraction', 'GmailIdentity', 'SheetSafety', 'SheetState', 'GmailRead', 'ImportWorkflow', 'ReviewActions', 'Scheduler', 'Installer'];
+    'CandidateEvidence', 'AIExtraction', 'GmailIdentity', 'SheetSafety', 'SheetState', 'BatchIntent', 'GmailRead', 'ImportWorkflow', 'ReviewActions', 'Scheduler', 'Installer'];
   if (!sourceOrder) {
     if (vendorLast) names.push('vendor/Html');
     else names.unshift('vendor/Html');

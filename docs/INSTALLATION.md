@@ -112,6 +112,14 @@ on that same journal-backed candidate; Ignore intentionally leaves the source
 message unchanged. The journal checkpoints label and archive acknowledgements
 individually, so reruns recover partial operations without duplicate rows.
 
+New imports checkpoint the full bounded candidate payload before any coupon
+write. Interrupted batches replay that immutable payload without calling AI;
+Confirm, Ignore, and Retry with AI cannot finalize a partly written batch.
+Do not edit the private journal's metadata or payload columns. A legacy bound
+batch without a completed review checkpoint reports `STATE` / `legacy_batch`
+and leaves Gmail unchanged: recovery requires inspecting the original source
+and existing rows, not rerunning AI or marking the partial batch complete.
+
 ## Live validation
 
 This repository contains no live deployment proof for this increment. After

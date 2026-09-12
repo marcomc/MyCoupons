@@ -172,10 +172,11 @@ function reviewFailure_(sheet, rowNumber, code) {
 }
 
 function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, journalSheet, c) {
+  if (!completeCandidateBatch_(state)) { keepIncompleteBatch_(state, journalSheet); return; }
   let extraction;
   try { extraction = extractCouponOutcome_(message); } catch (e) { return reviewFailure_(sheet, rowNumber, errorCode_(e)); }
   const candidates = extraction.candidates;
-  const row = sheet.getRange(rowNumber, 1, 1, MC.headers.length).getDisplayValues()[0];
+  const row = retryComparableRow_(sheet, rowNumber, candidate.key, c);
   const enriched = candidates.filter(function (item) { return retryCandidateMatchesRow_(item, row); });
   if (enriched.length !== 1) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   const knownRows = state.candidateStates.map(function (known) {
@@ -183,7 +184,7 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
     if (index < 0) return null;
     const resolved = resolveCandidateRow_(sheet, state.messageId, known.key, state.rowNumbers[index]);
     known.rowNumber = resolved; state.rowNumbers[index] = resolved;
-    return sheet.getRange(resolved, 1, 1, MC.headers.length).getDisplayValues()[0];
+    return retryComparableRow_(sheet, resolved, known.key, c);
   });
   if (knownRows.some(function (knownRow) { return !knownRow; })) return reviewFailure_(sheet, rowNumber, 'STATE');
   if (candidates.length !== knownRows.length || knownRows.some(function (knownRow) {
@@ -218,8 +219,18 @@ function retryCandidateMatchesRow_(candidate, row) {
   });
 }
 
+function retryComparableRow_(sheet, rowNumber, key, c) {
+  const row = sheet.getRange(rowNumber, 1, 1, MC.headers.length).getValues()[0];
+  if (row[9] instanceof Date) row[9] = Utilities.formatDate(row[9], c.timeZone, 'yyyy-MM-dd');
+  if (!candidateKeyFromNote_(sheet.getRange(rowNumber, 14).getNote()) && row[16] === key) row[16] = '';
+  return row;
+}
+
 function completeReviewMessage_(state, sheet, journalSheet, c) {
-  state.outcome = messageOutcome_(state.candidateStates.map(function (item) { return {status: item.status}; }));
+  if (!completeCandidateBatch_(state)) { keepIncompleteBatch_(state, journalSheet); return; }
+  state.outcome = messageOutcome_(state.candidateStates.map(function (item) {
+    const status = Object.create(null); status.status = item.status; return status;
+  }));
   state.updatedAt = new Date().toISOString();
   if (state.outcome === 'review') {
     state.status = 'review';
@@ -280,6 +291,7 @@ function restoreReviewRows_(state, sheet) {
 }
 
 function refreshAndValidateReviewRows_(state, sheet, c) {
+  if (!completeCandidateBatch_(state)) return false;
   const message = getReviewMessage_(state.messageId);
   const complete = state.candidateStates.every(function (item) {
     const index = state.candidateKeys.indexOf(item.key);

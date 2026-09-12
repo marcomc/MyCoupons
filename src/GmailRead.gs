@@ -100,7 +100,8 @@ function scanCouponMessagesInSession_(state, onMessage, accumulator) {
   const journalSnapshot = readMessageJournal_(state.journalSheet);
   const retryCandidates = Object.keys(journalSnapshot).filter(function (id) {
     const journal = journalSnapshot[id];
-    return journal && (journal.status === 'pending' && /^read\|\d+\|\d+$/.test(journal.failureStage || '') || journal.status === 'processing' ||
+    return journal && (journal.version === 3 && !completeCandidateBatch_(journal) ||
+      journal.status === 'pending' && /^read\|\d+\|\d+$/.test(journal.failureStage || '') || journal.status === 'processing' ||
       awaitingMessageExtraction_(journal) ||
       journal.status === 'failed' && /^read\|\d+\|\d+$/.test(journal.failureStage || '') ||
       journal.status === 'failed' && journal.failureStage !== 'read' && !!journal.failureStage) &&
@@ -219,7 +220,7 @@ function mailboxRetryWindow_(scan, journal) {
 
 function mailboxProcessMessage_(state, scan, messageId, enforceWindow, onMessage, result) {
   const journal = getMessageState_(state.journalSheet, messageId);
-  if (journal && (MC_FINAL_MESSAGE_STATES.indexOf(journal.status) >= 0 || journal.status === 'review')) return true;
+  if (journal && completeCandidateBatch_(journal) && (MC_FINAL_MESSAGE_STATES.indexOf(journal.status) >= 0 || journal.status === 'review')) return true;
   if (!journal) {
     const pending = newMessageState_(messageId);
     pending.failureStage = 'read|' + scan.startMs + '|' + scan.endMs;

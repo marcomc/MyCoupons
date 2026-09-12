@@ -41,16 +41,21 @@ function runImportWorkflowInSession_(state) {
 function processCouponMessage_(state, message) {
   if (!message || typeof message.id !== 'string' || !validGmailApiId_(message.id)) fail_('MAIL');
   const existing = getMessageState_(state.journalSheet, message.id);
-  if (existing && MC_FINAL_MESSAGE_STATES.indexOf(existing.status) >= 0) {
+  if (existing && existing.version !== 3 && !completeCandidateBatch_(existing)) {
+    keepIncompleteBatch_(existing, state.journalSheet);
+    return {messageId: message.id, status: 'failed', rows: existing.rowNumbers.slice(), error: 'STATE'};
+  }
+  if (existing && completeCandidateBatch_(existing) && MC_FINAL_MESSAGE_STATES.indexOf(existing.status) >= 0) {
     return {messageId: message.id, status: existing.status, rows: existing.rowNumbers.slice()};
   }
-  if (existing && existing.status === 'review') {
+  if (existing && completeCandidateBatch_(existing) && existing.status === 'review') {
     return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
   }
-  if (existing && existing.outcome === 'archive' && existing.candidateStates &&
+  if (existing && completeCandidateBatch_(existing) && existing.outcome === 'archive' && existing.candidateStates &&
       existing.candidateStates.length && existing.candidateStates.every(function (item) { return item.status === 'confirmed'; })) {
     reconcileCandidateRows_(state.couponSheet, existing);
     if (!refreshAndValidateReviewRows_(existing, state.couponSheet, state.config)) {
+      restoreReviewRows_(existing, state.couponSheet);
       existing.status = 'review'; existing.outcome = 'review'; existing.updatedAt = new Date().toISOString();
       saveMessageState_(state.journalSheet, existing);
       return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
@@ -72,8 +77,10 @@ function processCouponMessage_(state, message) {
         });
       } else journal.candidateStates = [];
     }
-    journal.version = 2;
-    const extraction = extractCouponOutcomeForState_(state, message);
+    const resumingBatch = journal.version === 3;
+    if (!resumingBatch) journal.version = 2;
+    const extraction = resumingBatch ? {candidates: journal.batchIntent.candidates,
+      archiveAllowed: false, verifiedNonOffer: false} : extractCouponOutcomeForState_(state, message);
     const candidates = extraction.candidates;
     if (extraction.verifiedNonOffer) {
       if (journal.candidateStates.length) {
@@ -101,8 +108,16 @@ function processCouponMessage_(state, message) {
       journal.updatedAt = new Date().toISOString(); saveMessageState_(state.journalSheet, journal);
       return {messageId: message.id, status: 'awaiting_extraction', rows: []};
     }
+    if (!resumingBatch) {
+      createBatchIntent_(journal, extraction);
+      // This verified write contains EVERY payload before any coupon row is
+      // touched. Interruption can replay it without asking the model again.
+      journal.failureStage = 'write';
+      saveMessageState_(state.journalSheet, journal);
+    }
     const rows = [];
     candidates.forEach(function (candidate) {
+      if (state._deadlineMs && Date.now() >= state._deadlineMs) fail_('WRITE');
       // A surviving candidate cannot erase a discarded model proposal or an
       // incomplete source. The complete outcome is the archive authority.
       const persistedCandidate = Object.assign({}, candidate, {review: candidate.review || !extraction.archiveAllowed});
@@ -112,12 +127,21 @@ function processCouponMessage_(state, message) {
       if (known >= 0) {
         rowNumber = resolveCandidateRow_(state.couponSheet, message.id, key, journal.rowNumbers[known]);
         journal.rowNumbers[known] = rowNumber;
+        if (resumingBatch) {
+          const retained = journal.candidateStates.filter(function (item) { return item.key === key; });
+          if (retained.length !== 1) fail_('STATE');
+          retained[0].rowNumber = rowNumber;
+          rows.push(rowNumber);
+          return;
+        }
       } else {
         const row = couponRow_(message, persistedCandidate);
         // Journal acknowledgement may have failed after the row write. Only a
         // fresh source-backed message and exact projected identity can recover it.
-        const prior = findCouponRowByCandidateIdentity_(state.couponSheet, message, candidate);
+        const keyedRow = findCouponRowByDedupeKey_(state.couponSheet, key);
+        const prior = keyedRow || findCouponRowByCandidateIdentity_(state.couponSheet, message, candidate, state.config);
         if (prior) {
+          if (sourceId_(state.couponSheet.getRange(prior, 14).getValues()[0][0]) !== message.id) fail_('STATE');
           const priorKey = candidateKeyFromNote_(state.couponSheet.getRange(prior, 14).getNote());
           if (priorKey && priorKey !== key) fail_('STATE');
           persistCandidateKey_(state.couponSheet, prior, key);
@@ -129,7 +153,6 @@ function processCouponMessage_(state, message) {
       }
       const storedStatus = String(state.couponSheet.getRange(rowNumber, 18, 1, 1).getValues()[0][0]);
       if (storedStatus !== EN.statuses.confirmed) persistedCandidate.review = true;
-      if (persistedCandidate.review && storedStatus !== EN.statuses.review) setReviewStatus_(state.couponSheet, rowNumber, EN.statuses.review, EN.actions.confirm);
       rows.push(rowNumber);
       const persistedState = journal.candidateStates.filter(function (item) { return item.key === key; });
       if (!persistedState.length) {
@@ -141,26 +164,28 @@ function processCouponMessage_(state, message) {
       } else {
         fail_('STATE');
       }
+      if (persistedCandidate.review && storedStatus !== EN.statuses.review) setReviewStatus_(state.couponSheet, rowNumber, EN.statuses.review, EN.actions.confirm);
+      saveMessageState_(state.journalSheet, journal);
     });
+    if (!completeCandidateBatch_(journal)) fail_('STATE');
     const persistedStatuses = journal.candidateStates.map(function (item) {
       const status = Object.create(null); status.status = item.status; return status;
     });
     journal.outcome = messageOutcome_(persistedStatuses);
-    journal.status = journal.outcome === 'archive' ? 'processing' : 'review';
+    if (resumingBatch && journal.outcome === 'archive' &&
+        !refreshAndValidateReviewRows_(journal, state.couponSheet, state.config)) {
+      restoreReviewRows_(journal, state.couponSheet);
+      journal.outcome = 'review';
+    }
+    journal.status = journal.outcome === 'archive' ? 'processing' : journal.outcome === 'unchanged' ? 'ignored' : 'review';
     journal.failureStage = journal.outcome === 'archive' ? 'mail' : '';
     journal.updatedAt = new Date().toISOString();
     saveMessageState_(state.journalSheet, journal);
     if (journal.outcome === 'archive') return finalizeImportedMessage_(state, journal);
     return {messageId: message.id, status: journal.status, rows: rows};
   } catch (e) {
-    // A failed multi-candidate write cannot prove that the retained subset was
-    // exhaustive. Preserve every retained candidate for explicit review.
-    journal.candidateStates.forEach(function (candidate) {
-      candidate.status = 'review';
-      if (candidate.rowNumber > 1) {
-        try { setReviewStatus_(state.couponSheet, candidate.rowNumber, EN.statuses.review, EN.actions.confirm); } catch (ignored) {}
-      }
-    });
+    // The durable batch remains authoritative, including payloads whose rows
+    // were never written. Do not overwrite reviewed rows during recovery.
     journal.status = 'failed'; journal.retryCount++; journal.failureStage = journal.failureStage || 'write';
     journal.lastError = errorCode_(e); journal.updatedAt = new Date().toISOString();
     saveMessageState_(state.journalSheet, journal);
@@ -223,11 +248,15 @@ function resolveCandidateRow_(sheet, messageId, key, persistedRowNumber) {
   return located;
 }
 
-function findCouponRowByCandidateIdentity_(sheet, message, candidate) {
-  const rows = sheet.getDataRange().getDisplayValues();
+function findCouponRowByCandidateIdentity_(sheet, message, candidate, c) {
+  const rows = sheet.getDataRange().getValues();
   const identity = candidateRowIdentity_(message, candidate);
   const matches = [];
   for (let index = 1; index < rows.length; index++) {
+    if (rows[index][9] instanceof Date) {
+      if (!c || !c.timeZone) fail_('CONFIG');
+      rows[index][9] = Utilities.formatDate(rows[index][9], c.timeZone, 'yyyy-MM-dd');
+    }
     if (candidateRowIdentityFromRow_(rows[index]) === identity) matches.push(index + 1);
   }
   if (matches.length > 1) fail_('STATE');
@@ -292,6 +321,7 @@ function reconcileCandidateRows_(sheet, journal) {
 }
 
 function finalizeImportedMessage_(state, journal) {
+  if (!completeCandidateBatch_(journal)) fail_('STATE');
   const c = state && state.config;
   if (!c || !c.labelId) fail_('CONFIG');
   try {

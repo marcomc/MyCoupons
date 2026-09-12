@@ -39,7 +39,8 @@ The example configuration contains product defaults only.
   title match; fail closed on ambiguous or mismatched resources.
 - Preserve the existing 26-column coupon schema and create only missing coupon
   and journal tabs. The journal is `_MyCoupons Messages` with `Message ID` and
-  `State JSON` columns.
+  `State JSON` columns. New batch payloads use bounded, marked JSON chunks in
+  additional unlabelled journal columns; the coupon schema remains unchanged.
 - Resolve or create each missing prefix of a nested Gmail label path. This
   setup does not read, label, archive, or otherwise mutate messages.
 - Persist the resolved spreadsheet and label identities after verification.
@@ -88,10 +89,20 @@ The example configuration contains product defaults only.
   journal; `Notes / dedupe key` contains readable evidenced notes and `Currency`
   is projected to its matching column. Failed extraction, writes, and Gmail
   acknowledgements stay retryable without duplicate rows.
+- Before writing any coupon row, persist and verify the entire extraction batch
+  (at most 12 candidates). Its payload remains immutable; row/mail checkpoints
+  update only the metadata cell. Interrupted imports replay pending payloads
+  without another model call, preserve reviewed rows, and cannot archive until
+  every intended candidate is durably bound. New rows recovered after an
+  interruption require review.
 - Legacy `awaiting_extraction` records are recovered through full extraction. A
   complete, structurally valid empty model list becomes a non-offer checkpoint
   with no Gmail archive authority. Empty results caused by incomplete coverage or
   validation/filtering remain reachable rather than becoming non-offers.
+  Legacy bound batches interrupted before a completed review checkpoint remain
+  fail-closed with `STATE` / `legacy_batch`; their missing payloads cannot be
+  reconstructed safely from a new model response. Completed legacy review rows
+  remain actionable, including their original technical Notes keys.
 - Before Gmail mutation, candidate rows and journal state are verified. Only an
   all-confirmed message is labelled and removed from `INBOX`, preserving `UNREAD`
   and unrelated thread messages. A mixed Confirm/Ignore disposition leaves the

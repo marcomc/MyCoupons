@@ -507,6 +507,31 @@ test('ambiguous final journal writes preserve durable outcomes and recover witho
   }
 });
 
+test('later mailbox scans replay an incomplete batch even if a review status was persisted', () => {
+  const f = fixture(10); f.messages.splice(0, 9);
+  const extract = f.state.extractCouponOutcome; let calls = 0;
+  f.state.extractCouponOutcome = message => {
+    calls++; const first = extract(message).candidates[0];
+    return {candidates: [first, {...first, code: 'SAVE30'}], archiveAllowed: false};
+  };
+  const getRange = f.state.couponSheet.getRange; let failed = false;
+  f.state.couponSheet.getRange = (...args) => {
+    const range = getRange(...args);
+    return {...range, setValues: values => {
+      if (!failed && args[0] === 3 && args[1] === 1) { failed = true; throw new Error('B append failed'); }
+      range.setValues(values);
+    }};
+  };
+  f.ctx.runScheduledImport();
+  const partial = f.ctx.getMessageState_(f.state.journalSheet, 'a');
+  assert.equal(partial.candidateKeys.length, 1); partial.status = 'review';
+  f.ctx.saveMessageState_(f.state.journalSheet, partial);
+  f.state.extractCouponOutcome = () => assert.fail('mailbox replay must use persisted payload');
+  f.advance(86400000); f.ctx.runScheduledImport();
+  assert.equal(f.state.couponSheet.rows.length, 3); assert.equal(calls, 1);
+  assert.equal(f.ctx.completeCandidateBatch_(f.ctx.getMessageState_(f.state.journalSheet, 'a')), true);
+});
+
 test('durable summary recovers confirmed counts and failed-review links without callback outcomes', () => {
   const f = fixture();
   const confirmed = f.ctx.newMessageState_('a'); confirmed.status = 'confirmed'; confirmed.rowNumbers = [2, 3];

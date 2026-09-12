@@ -10,13 +10,17 @@ function sheet(rows, failWrites = 0) {
     getLastColumn: () => values.reduce((max, row) => Math.max(max, row.length), 0),
     getDataRange: () => ({getValues: () => values.map(row => row.slice()),
       getDisplayValues: () => values.map(row => row.map(value => String(value ?? '')))}),
-    getRange: (r, c, rc, cc) => ({
+    getRange: (r, c, rc = 1, cc = 1) => ({
       getValues: () => Array.from({length: rc}, (_, i) => Array.from({length: cc}, (_, j) => values[r - 1 + i]?.[c - 1 + j] ?? '')),
       getDisplayValues: () => values.slice(r - 1, r - 1 + rc).map(row => row.slice(c - 1, c - 1 + cc).map(value => String(value ?? ''))),
       setValues: next => {
         if (failWrites > 0) { failWrites--; throw new Error('temporary write failure'); }
-        while (values.length < r) values.push([]); values[r - 1] = next[0].slice();
+        next.forEach((row, i) => {
+          values[r - 1 + i] ||= [];
+          row.forEach((value, j) => { values[r - 1 + i][c - 1 + j] = value; });
+        });
       },
+      getFormulas: () => Array.from({length: rc}, () => Array(cc).fill('')),
       setNote: note => { notes[r - 1] ||= []; notes[r - 1][c - 1] = note; },
       getNote: () => notes[r - 1]?.[c - 1] || '',
       getNotes: () => Array.from({length: rc}, (_, i) => [notes[r - 1 + i]?.[c - 1] || ''])
@@ -157,7 +161,7 @@ test('partial review-row recovery cannot auto-archive before the row is confirme
   assert.deepEqual(mutations, []);
 });
 
-test('a later non-offer result retains unresolved candidates for review', () => {
+test('an interrupted legacy batch cannot become complete through a later non-offer result', () => {
   const {ctx, config} = harness(); config.labelId = 'coupon-label';
   const message = {id: 'abc123', receivedAtMs: Date.parse('2026-09-01T10:00:00Z'), subject: 'Brand offer', sender: '',
     link: 'https://mail.google.com/mail/#all/abc123', text: 'Brand', html: '', incomplete: false};
@@ -171,8 +175,9 @@ test('a later non-offer result retains unresolved candidates for review', () => 
     candidates: [], archiveAllowed: false, verifiedNonOffer: true
   })};
   const result = ctx.runImportWorkflow_(state);
-  assert.equal(result.messages[0].status, 'review');
+  assert.equal(result.messages[0].status, 'failed');
   assert.equal(ctx.getMessageState_(journal, 'abc123').outcome, 'review');
+  assert.equal(ctx.getMessageState_(journal, 'abc123').failureStage, 'legacy_batch');
   assert.equal(coupon._values[1][17], 'Needs review');
 });
 
@@ -184,6 +189,7 @@ test('resumed archive intent revalidates rows before Gmail mutation', () => {
   const coupon = sheet([HEADERS, ctx.couponRow_(message, candidate)]); coupon.getRange(2, 14).setNote(ctx.candidateKeyNote_(key));
   const journal = sheet([JOURNAL]); const saved = ctx.newMessageState_(message.id);
   saved.version = 2; saved.status = 'processing'; saved.outcome = 'archive'; saved.candidateKeys = [key]; saved.dedupeKeys = [key]; saved.rowNumbers = [2];
+  saved.failureStage = 'mail';
   saved.candidateStates = [{key, rowNumber: 2, status: 'confirmed', imageEvidence: {}}]; ctx.saveMessageState_(journal, saved);
   ctx.refreshAndValidateReviewRows_ = () => false;
   ctx.Gmail.Users.Messages = {modify: () => assert.fail('must not mutate Gmail')};
