@@ -563,24 +563,38 @@ class ProvisionerCloudTests(unittest.TestCase):
                 resumed = core.provision_cloud(state_dir, config)
             self.assertEqual(resumed["phase"], "bootstrap-complete")
             self.assertEqual(commands, [])
-            with core.InstallationLock(state_dir):
-                key = core._load_or_create_identity_key(state_dir)
-                association = core._load_state_locked(state_dir, key)
-                association["appsScript"] = {
-                    "scriptId": "script-1",
-                    "provenance": "created",
-                    "bundleDigest": None,
-                    "versionNumber": None,
-                    "deploymentId": None,
-                }
-                association["bootstrap"] = {"secretVersion": None, "status": "not-started"}
-                association["phase"] = "apps-script-association-required"
-                core._persist_state_locked(state_dir, association, key)
-            with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
-                "provisioner.core._run_json", side_effect=responder
-            ), mock.patch("provisioner.core._run_success", side_effect=mutate):
-                association_resumed = core.provision_cloud(state_dir, config)
-            self.assertEqual(association_resumed["phase"], "apps-script-association-required")
+            empty_script = {"scriptId": None, "provenance": None, "bundleDigest": None, "versionNumber": None, "deploymentId": None}
+            created_script = {"scriptId": "script-1", "provenance": "created", "bundleDigest": None, "versionNumber": None, "deploymentId": None}
+            adopted_script = {"scriptId": "script-1", "provenance": "adopted", "bundleDigest": None, "versionNumber": None, "deploymentId": None}
+            version_pending_script = {"scriptId": "script-1", "provenance": "adopted", "bundleDigest": "a" * 64, "versionNumber": None, "deploymentId": None}
+            version_ready_script = {"scriptId": "script-1", "provenance": "adopted", "bundleDigest": "a" * 64, "versionNumber": 1, "deploymentId": None}
+            deployed_script = {"scriptId": "script-1", "provenance": "adopted", "bundleDigest": "a" * 64, "versionNumber": 1, "deploymentId": "deployment-1"}
+            resumable_states = (
+                ("apps-script-creation-intent", empty_script),
+                ("apps-script-creation-pending", empty_script),
+                ("apps-script-creation-posted", empty_script),
+                ("apps-script-association-required", created_script),
+                ("apps-script-adoption-pending", adopted_script),
+                ("apps-script-version-creation-intent", version_pending_script),
+                ("apps-script-version-creation-pending", version_pending_script),
+                ("apps-script-version-ready", version_ready_script),
+                ("apps-script-deployment-creation-pending", version_ready_script),
+                ("apps-script-ready", deployed_script),
+            )
+            for phase, apps_script in resumable_states:
+                with self.subTest(phase=phase):
+                    with core.InstallationLock(state_dir):
+                        key = core._load_or_create_identity_key(state_dir)
+                        resumed = core._load_state_locked(state_dir, key)
+                        resumed["appsScript"] = apps_script
+                        resumed["bootstrap"] = {"secretVersion": None, "status": "not-started"}
+                        resumed["phase"] = phase
+                        core._persist_state_locked(state_dir, resumed, key)
+                    with mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
+                        "provisioner.core._run_json", side_effect=responder
+                    ), mock.patch("provisioner.core._run_success", side_effect=mutate):
+                        resumed = core.provision_cloud(state_dir, config)
+                    self.assertEqual(resumed["phase"], phase)
 
     def test_cloud_provision_rejects_foreign_labels_and_billed_developer_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -917,6 +931,23 @@ class ProvisionerCommandTests(unittest.TestCase):
         emitted = json.loads("".join(str(call.args[0]) for call in stdout.write.call_args_list))
         self.assertEqual(emitted, {"cloudReady": True, "phase": "bootstrap-complete"})
 
+    def test_cloud_command_reports_all_resumable_apps_script_phases_as_cloud_ready(self) -> None:
+        phases = (
+            "apps-script-version-creation-intent",
+            "apps-script-version-creation-pending",
+            "apps-script-version-ready",
+            "apps-script-deployment-creation-pending",
+            "apps-script-ready",
+        )
+        for phase in phases:
+            with self.subTest(phase=phase), mock.patch("provisioner.cli.load_config", return_value=valid_cloud_config()), mock.patch(
+                "provisioner.cli.provision_cloud", return_value={"phase": phase}
+            ), mock.patch("sys.stdout") as stdout:
+                exit_code = main(["--state-dir", "/private/state", "provision-cloud", "--config", "/private/config.json"])
+            self.assertEqual(exit_code, 0)
+            emitted = json.loads("".join(str(call.args[0]) for call in stdout.write.call_args_list))
+            self.assertEqual(emitted, {"cloudReady": True, "phase": phase})
+
     def test_oauth_command_targets_the_active_gcloud_credential_store(self) -> None:
         self.assertEqual(
             core.oauth_authorization_command(),
@@ -1149,18 +1180,860 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
         deployment["deploymentConfig"]["description"] = "MyCoupons owner-only old-digest"
         updated = self._deployment(version=2)
         updated["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+
+        def api(_token: str, method: str, resource: str, body: object = None, **_kwargs: object) -> object:
+            if method == "PUT" and resource.endswith("/deployments/deployment-1"):
+                self.assertEqual(
+                    body,
+                    {
+                        "deploymentConfig": {
+                            "scriptId": "script-1",
+                            "versionNumber": 2,
+                            "description": "MyCoupons owner-only " + digest,
+                            "manifestFileName": "appsscript",
+                        }
+                    },
+                )
+                return updated
+            if method == "GET" and resource.endswith("/deployments/deployment-1"):
+                return updated
+            raise AssertionError((method, resource, body))
+
         with mock.patch("provisioner.core._deployment_list", return_value=[deployment]), mock.patch(
-            "provisioner.core._version_for_bundle", return_value=2
-        ), mock.patch("provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
-            "provisioner.core._apps_script_json", return_value=updated
+            "provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
+            "provisioner.core._apps_script_json", side_effect=api
         ) as api:
-            self.assertEqual(core._ensure_owner_only_deployment("private-token", "script-1", digest), ("deployment-1", 2))
-        self.assertEqual(api.call_args.args[1], "PUT")
-        self.assertTrue(api.call_args.args[2].endswith("/deployments/deployment-1"))
+            self.assertEqual(core._ensure_owner_only_deployment("private-token", "script-1", digest, 2), ("deployment-1", 2))
+        self.assertEqual(api.call_args_list[0].args[1], "PUT")
+        self.assertTrue(api.call_args_list[0].args[2].endswith("/deployments/deployment-1"))
         metadata = self._owner_metadata()
         metadata["permissions"] = [{"type": "user", "role": "owner", "emailAddress": None}]
         with self.assertRaisesRegex(core.ProvisionerError, "private and owner-only"):
             core._assert_private_owner_script(metadata, "owner@example.com")
+
+    def test_new_deployment_keeps_the_create_endpoint_payload_shape(self) -> None:
+        digest = "a" * 64
+        created = self._deployment(version=2)
+        created["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+
+        def api(_token: str, method: str, resource: str, body: object = None, **_kwargs: object) -> object:
+            if method == "POST" and resource.endswith("/deployments"):
+                self.assertEqual(
+                    body,
+                    {"versionNumber": 2, "description": "MyCoupons owner-only " + digest, "manifestFileName": "appsscript"},
+                )
+                return created
+            if method == "GET" and resource.endswith("/deployments/deployment-1"):
+                return created
+            raise AssertionError((method, resource, body))
+
+        persisted: list[str] = []
+        created_identities: list[str] = []
+        with mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+            "provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
+            "provisioner.core._apps_script_json", side_effect=api
+        ):
+            self.assertEqual(
+                core._ensure_owner_only_deployment(
+                    "private-token",
+                    "script-1",
+                    digest,
+                    2,
+                    persist_creation_pending=lambda: persisted.append("pending"),
+                    persist_created_identity=created_identities.append,
+                ),
+                ("deployment-1", 2),
+            )
+        self.assertEqual(persisted, ["pending"])
+        self.assertEqual(created_identities, ["deployment-1"])
+
+    def test_deployment_update_rejects_mismatched_returned_or_read_back_identity(self) -> None:
+        digest = "a" * 64
+        existing = self._deployment()
+        existing["deploymentConfig"]["description"] = "MyCoupons owner-only old-digest"
+        expected = self._deployment(version=2)
+        expected["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+        for update_id, readback_id in (("deployment-other", "deployment-1"), ("deployment-1", "deployment-other")):
+            with self.subTest(update_id=update_id, readback_id=readback_id):
+                updated = dict(expected)
+                updated["deploymentId"] = update_id
+                readback = dict(expected)
+                readback["deploymentId"] = readback_id
+                with mock.patch("provisioner.core._deployment_list", return_value=[existing]), mock.patch(
+                    "provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
+                    "provisioner.core._apps_script_json", side_effect=[updated, readback]
+                ):
+                    with self.assertRaisesRegex(core.ProvisionerError, "different deployment"):
+                        core._ensure_owner_only_deployment("private-token", "script-1", digest, 2)
+
+    def test_deployment_update_rejects_mismatched_returned_or_read_back_description(self) -> None:
+        digest = "a" * 64
+        expected_description = "MyCoupons owner-only " + digest
+        existing = self._deployment()
+        existing["deploymentConfig"]["description"] = "MyCoupons owner-only old-digest"
+        for updated_description, readback_description in (("wrong", expected_description), (expected_description, "wrong")):
+            with self.subTest(updated_description=updated_description, readback_description=readback_description):
+                updated = self._deployment(version=2)
+                updated["deploymentConfig"]["description"] = updated_description
+                readback = self._deployment(version=2)
+                readback["deploymentConfig"]["description"] = readback_description
+                with mock.patch("provisioner.core._deployment_list", return_value=[existing]), mock.patch(
+                    "provisioner.core._remote_bundle_digest", return_value=digest
+                ), mock.patch("provisioner.core._apps_script_json", side_effect=[updated, readback]):
+                    with self.assertRaisesRegex(core.ProvisionerError, "different deployment"):
+                        core._ensure_owner_only_deployment("private-token", "script-1", digest, 2)
+
+    def test_persisted_deployment_identity_never_falls_back_to_a_matching_marker(self) -> None:
+        digest = "a" * 64
+        other = self._deployment(deployment_id="deployment-other", version=2)
+        other["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+        expected = self._deployment(deployment_id="deployment-expected", version=2)
+        expected["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+
+        def api(_token: str, _method: str, resource: str, _body: object = None, **_kwargs: object) -> object:
+            self.assertTrue(resource.endswith("/deployments/deployment-expected"))
+            self.assertNotIn("deployment-other", resource)
+            return expected
+
+        with mock.patch("provisioner.core._deployment_list", return_value=[other]), mock.patch(
+            "provisioner.core._apps_script_json", side_effect=api
+        ), mock.patch("provisioner.core._remote_bundle_digest", return_value=digest):
+            self.assertEqual(
+                core._ensure_owner_only_deployment("private-token", "script-1", digest, 2, "deployment-expected"),
+                ("deployment-expected", 2),
+            )
+
+    def test_bundle_version_recovery_selects_only_a_verified_oldest_duplicate(self) -> None:
+        digest = "a" * 64
+        description = "MyCoupons owner-only " + digest
+        versions = [{"versionNumber": 3, "description": description}, {"versionNumber": 2, "description": description}]
+        with mock.patch("provisioner.core._apps_script_list", return_value=versions), mock.patch(
+            "provisioner.core._remote_bundle_digest", return_value=digest
+        ) as source:
+            self.assertEqual(core._recover_bundle_version("private-token", "script-1", digest), 2)
+        self.assertEqual([call.args[2] for call in source.call_args_list], [3, 2])
+
+    def test_bundle_version_recovery_rejects_any_duplicate_with_unverified_content(self) -> None:
+        digest = "a" * 64
+        description = "MyCoupons owner-only " + digest
+        versions = [{"versionNumber": 2, "description": description}, {"versionNumber": 3, "description": description}]
+        with mock.patch("provisioner.core._apps_script_list", return_value=versions), mock.patch(
+            "provisioner.core._remote_bundle_digest", side_effect=[digest, "b" * 64]
+        ):
+            with self.assertRaisesRegex(core.ProvisionerError, "content does not match"):
+                core._recover_bundle_version("private-token", "script-1", digest)
+
+    def test_bundle_version_recovery_rejects_duplicate_provider_identities(self) -> None:
+        digest = "a" * 64
+        description = "MyCoupons owner-only " + digest
+        versions = [{"versionNumber": 2, "description": description}, {"versionNumber": 2, "description": description}]
+        with mock.patch("provisioner.core._apps_script_list", return_value=versions), mock.patch(
+            "provisioner.core._remote_bundle_digest", return_value=digest
+        ):
+            with self.assertRaisesRegex(core.ProvisionerError, "recovery is ambiguous"):
+                core._recover_bundle_version("private-token", "script-1", digest)
+
+    def test_pending_deployment_creation_never_reposts_when_recovery_is_empty(self) -> None:
+        digest = "a" * 64
+        with mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+            "provisioner.core._remote_bundle_digest", return_value=digest
+        ), mock.patch("provisioner.core._apps_script_json", side_effect=AssertionError("must not repost")):
+            with self.assertRaisesRegex(core.ProvisionerError, "pending recovery"):
+                core._ensure_owner_only_deployment("private-token", "script-1", digest, 2, creation_pending=True)
+
+    def test_pending_deployment_creation_recovers_the_matching_record_without_reposting(self) -> None:
+        digest = "a" * 64
+        deployment = self._deployment(version=2)
+        deployment["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+
+        def api(_token: str, method: str, resource: str, _body: object = None, **_kwargs: object) -> object:
+            self.assertNotEqual(method, "POST")
+            self.assertTrue(resource.endswith("/deployments/deployment-1"))
+            return deployment
+
+        with mock.patch("provisioner.core._deployment_list", return_value=[deployment]), mock.patch(
+            "provisioner.core._remote_bundle_digest", return_value=digest
+        ), mock.patch("provisioner.core._apps_script_json", side_effect=api):
+            self.assertEqual(
+                core._ensure_owner_only_deployment("private-token", "script-1", digest, 2, creation_pending=True),
+                ("deployment-1", 2),
+            )
+
+    def test_deployment_create_readback_failure_keeps_the_known_identity_pending(self) -> None:
+        digest = "a" * 64
+        deployment = self._deployment(version=2)
+        deployment["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+        events: list[str] = []
+
+        def api(_token: str, method: str, resource: str, _body: object = None, **_kwargs: object) -> object:
+            if method == "POST" and resource.endswith("/deployments"):
+                return deployment
+            if method == "GET" and resource.endswith("/deployments/deployment-1"):
+                raise core.AppsScriptHttpError(429)
+            raise AssertionError((method, resource))
+
+        with mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+            "provisioner.core._remote_bundle_digest", return_value=digest
+        ), mock.patch("provisioner.core._apps_script_json", side_effect=api):
+            with self.assertRaises(core.AppsScriptHttpError):
+                core._ensure_owner_only_deployment(
+                    "private-token",
+                    "script-1",
+                    digest,
+                    2,
+                    persist_creation_pending=lambda: events.append("pending"),
+                    clear_creation_pending=lambda: events.append("retryable"),
+                    persist_created_identity=lambda deployment_id: events.append("known:" + deployment_id),
+                )
+        self.assertEqual(events, ["pending", "known:deployment-1"])
+
+    def test_deployment_create_not_found_readback_keeps_the_known_identity_pending(self) -> None:
+        digest = "a" * 64
+        deployment = self._deployment(version=2)
+        deployment["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+        events: list[str] = []
+
+        def api(_token: str, method: str, resource: str, _body: object = None, **_kwargs: object) -> object:
+            if method == "POST" and resource.endswith("/deployments"):
+                return deployment
+            if method == "GET" and resource.endswith("/deployments/deployment-1"):
+                raise core.AppsScriptHttpError(404)
+            raise AssertionError((method, resource))
+
+        with mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+            "provisioner.core._remote_bundle_digest", return_value=digest
+        ), mock.patch("provisioner.core._apps_script_json", side_effect=api):
+            with self.assertRaises(core.AppsScriptHttpError):
+                core._ensure_owner_only_deployment(
+                    "private-token",
+                    "script-1",
+                    digest,
+                    2,
+                    persist_creation_pending=lambda: events.append("pending"),
+                    persist_created_identity=lambda deployment_id: events.append("known:" + deployment_id),
+                )
+        self.assertEqual(events, ["pending", "known:deployment-1"])
+
+    def test_deployment_create_failure_distinguishes_definitive_from_ambiguous_outcomes(self) -> None:
+        digest = "a" * 64
+        for status, expected_events in ((429, ["pending", "retryable"]), (503, ["pending"])):
+            with self.subTest(status=status):
+                events: list[str] = []
+                with mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                    "provisioner.core._remote_bundle_digest", return_value=digest
+                ), mock.patch("provisioner.core._apps_script_json", side_effect=core.AppsScriptHttpError(status)):
+                    with self.assertRaises(core.AppsScriptHttpError):
+                        core._ensure_owner_only_deployment(
+                            "private-token",
+                            "script-1",
+                            digest,
+                            2,
+                            persist_creation_pending=lambda: events.append("pending"),
+                            clear_creation_pending=lambda: events.append("retryable"),
+                        )
+                self.assertEqual(events, expected_events)
+
+    def test_pending_version_creation_never_reposts_before_provider_visibility(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            digest = "a" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": digest,
+                    "versionNumber": None,
+                    "deploymentId": None,
+                }
+                state["phase"] = "apps-script-version-creation-pending"
+                core._persist_state_locked(state_dir, state, key)
+            payload = root / "payload.json"
+            self._payload(payload, config)
+
+            def api(_token: str, method: str, resource: str, _body: object = None, **_kwargs: object) -> object:
+                self.assertEqual(method, "GET")
+                self.assertTrue(resource.endswith("/versions"))
+                return {"versions": []}
+
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._remote_bundle_digest", return_value=digest
+            ), mock.patch("provisioner.core._apps_script_json", side_effect=api):
+                with self.assertRaisesRegex(core.ProvisionerError, "version creation is pending"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+
+    def test_version_recovery_persists_the_exact_version_before_deployment_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            digest = "a" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": digest,
+                    "versionNumber": None,
+                    "deploymentId": None,
+                }
+                state["phase"] = "apps-script-version-creation-pending"
+                core._persist_state_locked(state_dir, state, key)
+            payload = root / "payload.json"
+            self._payload(payload, config)
+
+            def assert_persisted_version(*_args: object, **_kwargs: object) -> tuple[str, int]:
+                persisted = core._read_json_file(state_dir / core.STATE_FILE, maximum_bytes=4096)
+                self.assertEqual(persisted["phase"], "apps-script-version-ready")
+                self.assertEqual(persisted["appsScript"]["versionNumber"], 2)
+                raise core.ProvisionerError("stop before deployment mutation")
+
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._apps_script_json", return_value={"versions": [{"versionNumber": 2, "description": "MyCoupons owner-only " + digest}]}
+            ), mock.patch("provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
+                "provisioner.core._ensure_owner_only_deployment", side_effect=assert_persisted_version
+            ):
+                with self.assertRaisesRegex(core.ProvisionerError, "stop before deployment mutation"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+
+    def test_new_version_persists_pending_before_the_non_idempotent_create(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            digest = "a" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": None,
+                    "versionNumber": None,
+                    "deploymentId": None,
+                }
+                state["phase"] = "apps-script-adoption-pending"
+                core._persist_state_locked(state_dir, state, key)
+            payload = root / "payload.json"
+            self._payload(payload, config)
+
+            def assert_pending_then_create(*_args: object, **_kwargs: object) -> int:
+                persisted = core._read_json_file(state_dir / core.STATE_FILE, maximum_bytes=4096)
+                self.assertEqual(persisted["phase"], "apps-script-version-creation-pending")
+                self.assertIsNone(persisted["appsScript"]["versionNumber"])
+                return 2
+
+            def assert_persisted_version(*_args: object, **_kwargs: object) -> tuple[str, int]:
+                persisted = core._read_json_file(state_dir / core.STATE_FILE, maximum_bytes=4096)
+                self.assertEqual(persisted["phase"], "apps-script-version-ready")
+                self.assertEqual(persisted["appsScript"]["versionNumber"], 2)
+                raise core.ProvisionerError("stop before deployment mutation")
+
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._recover_bundle_version", return_value=None
+            ), mock.patch("provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
+                "provisioner.core._create_bundle_version", side_effect=assert_pending_then_create
+            ), mock.patch(
+                "provisioner.core._ensure_owner_only_deployment", side_effect=assert_persisted_version
+            ):
+                with self.assertRaisesRegex(core.ProvisionerError, "stop before deployment mutation"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+
+    def test_definitive_version_create_failure_restores_a_retryable_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            digest = "a" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": None,
+                    "versionNumber": None,
+                    "deploymentId": None,
+                }
+                state["phase"] = "apps-script-adoption-pending"
+                core._persist_state_locked(state_dir, state, key)
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._recover_bundle_version", return_value=None
+            ), mock.patch("provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
+                "provisioner.core._create_bundle_version", side_effect=core.AppsScriptHttpError(403)
+            ):
+                with self.assertRaises(core.AppsScriptHttpError):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+            persisted = core._read_json_file(state_dir / core.STATE_FILE, maximum_bytes=4096)
+            self.assertEqual(persisted["phase"], "apps-script-version-creation-intent")
+            self.assertIsNone(persisted["appsScript"]["versionNumber"])
+
+    def test_ambiguous_version_create_failure_leaves_pending_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            digest = "a" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": None,
+                    "versionNumber": None,
+                    "deploymentId": None,
+                }
+                state["phase"] = "apps-script-adoption-pending"
+                core._persist_state_locked(state_dir, state, key)
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._recover_bundle_version", return_value=None
+            ), mock.patch("provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
+                "provisioner.core._create_bundle_version", side_effect=core.AppsScriptHttpError(503)
+            ):
+                with self.assertRaises(core.AppsScriptHttpError):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+            persisted = core._read_json_file(state_dir / core.STATE_FILE, maximum_bytes=4096)
+            self.assertEqual(persisted["phase"], "apps-script-version-creation-pending")
+            self.assertIsNone(persisted["appsScript"]["versionNumber"])
+
+    def test_version_readback_failure_after_create_leaves_pending_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            digest = "a" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": None,
+                    "versionNumber": None,
+                    "deploymentId": None,
+                }
+                state["phase"] = "apps-script-adoption-pending"
+                core._persist_state_locked(state_dir, state, key)
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._recover_bundle_version", return_value=None
+            ), mock.patch("provisioner.core._create_bundle_version", return_value=2), mock.patch(
+                "provisioner.core._remote_bundle_digest", side_effect=[digest, core.AppsScriptHttpError(429)]
+            ):
+                with self.assertRaises(core.AppsScriptHttpError):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+            persisted = core._read_json_file(state_dir / core.STATE_FILE, maximum_bytes=4096)
+            self.assertEqual(persisted["phase"], "apps-script-version-creation-pending")
+            self.assertEqual(persisted["appsScript"]["versionNumber"], 2)
+
+    def test_known_pending_version_is_read_back_on_retry_before_deployment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            digest = "a" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": None,
+                    "versionNumber": None,
+                    "deploymentId": None,
+                }
+                state["phase"] = "apps-script-adoption-pending"
+                core._persist_state_locked(state_dir, state, key)
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            exact_readbacks = 0
+
+            def remote_digest(_token: str, _script_id: str, version: int | None = None) -> str:
+                nonlocal exact_readbacks
+                if version is None:
+                    return digest
+                self.assertEqual(version, 2)
+                exact_readbacks += 1
+                if exact_readbacks == 1:
+                    raise core.AppsScriptHttpError(429)
+                return digest
+
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._recover_bundle_version", return_value=None
+            ), mock.patch("provisioner.core._create_bundle_version", return_value=2) as create_version, mock.patch(
+                "provisioner.core._remote_bundle_digest", side_effect=remote_digest
+            ), mock.patch(
+                "provisioner.core._ensure_owner_only_deployment", side_effect=core.ProvisionerError("stop after version recovery")
+            ), mock.patch("provisioner.core._apps_script_json", side_effect=AssertionError("must not rewrite source")):
+                with self.assertRaises(core.AppsScriptHttpError):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+                with self.assertRaisesRegex(core.ProvisionerError, "stop after version recovery"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+            self.assertEqual(create_version.call_count, 1)
+            self.assertEqual(exact_readbacks, 2)
+
+    def test_definitive_version_rejection_restores_a_pinned_deployment_for_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            old_digest = "a" * 64
+            next_digest = "b" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": old_digest,
+                    "versionNumber": 1,
+                    "deploymentId": "deployment-1",
+                }
+                state["bootstrap"] = {
+                    "secretVersion": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1",
+                    "status": "complete",
+                }
+                state["phase"] = "bootstrap-complete"
+                core._persist_state_locked(state_dir, state, key)
+            create_attempts = 0
+
+            def create_version(*_args: object, **_kwargs: object) -> int:
+                nonlocal create_attempts
+                create_attempts += 1
+                if create_attempts == 1:
+                    raise core.AppsScriptHttpError(403)
+                return 2
+
+            def no_source_mutation(_token: str, method: str, resource: str, _body: object = None, **_kwargs: object) -> object:
+                if method == "PUT" and resource.endswith("/content"):
+                    raise AssertionError("must not rewrite already verified source")
+                raise AssertionError((method, resource))
+
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(next_digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._verify_persisted_owner_only_deployment", return_value=("deployment-1", 1)
+            ) as verify_deployment, mock.patch("provisioner.core._remote_bundle_digest", return_value=next_digest), mock.patch(
+                "provisioner.core._recover_bundle_version", return_value=None
+            ), mock.patch("provisioner.core._create_bundle_version", side_effect=create_version), mock.patch(
+                "provisioner.core._ensure_owner_only_deployment", return_value=("deployment-1", 2)
+            ), mock.patch("provisioner.core._apps_script_json", side_effect=no_source_mutation):
+                with self.assertRaises(core.AppsScriptHttpError):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", None)
+                with core.InstallationLock(state_dir):
+                    key = core._load_or_create_identity_key(state_dir)
+                    persisted = core._load_state_locked(state_dir, key)
+                self.assertEqual(persisted["appsScript"]["bundleDigest"], old_digest)
+                self.assertEqual(persisted["appsScript"]["versionNumber"], 1)
+                self.assertEqual(persisted["appsScript"]["deploymentId"], "deployment-1")
+                self.assertEqual(persisted["phase"], "bootstrap-complete")
+                retried = core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", None)
+            self.assertEqual(retried["appsScript"]["versionNumber"], 2)
+            self.assertEqual(create_attempts, 2)
+            self.assertEqual(verify_deployment.call_count, 2)
+
+    def test_deployment_readback_retry_uses_the_persisted_identity_without_reposting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            digest = "a" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": digest,
+                    "versionNumber": 2,
+                    "deploymentId": None,
+                }
+                state["bootstrap"] = {
+                    "secretVersion": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1",
+                    "status": "complete",
+                }
+                state["phase"] = "apps-script-version-ready"
+                core._persist_state_locked(state_dir, state, key)
+            deployment = self._deployment(version=2)
+            deployment["deploymentConfig"]["description"] = "MyCoupons owner-only " + digest
+            post_count = 0
+            read_count = 0
+
+            def api(_token: str, method: str, resource: str, _body: object = None, **_kwargs: object) -> object:
+                nonlocal post_count, read_count
+                if method == "POST" and resource.endswith("/deployments"):
+                    post_count += 1
+                    return deployment
+                if method == "GET" and resource.endswith("/deployments/deployment-1"):
+                    read_count += 1
+                    if read_count == 1:
+                        raise core.AppsScriptHttpError(429)
+                    return deployment
+                if method == "PUT" and resource.endswith("/deployments/deployment-1"):
+                    return deployment
+                raise AssertionError((method, resource))
+
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]) as deployments, mock.patch(
+                "provisioner.core._remote_bundle_digest", return_value=digest
+            ), mock.patch("provisioner.core._apps_script_json", side_effect=api):
+                with self.assertRaises(core.AppsScriptHttpError):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", None)
+                recovered = core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", None)
+            self.assertEqual(recovered["appsScript"]["deploymentId"], "deployment-1")
+            self.assertEqual(post_count, 1)
+            self.assertEqual(deployments.call_count, 2)
+
+    def test_pending_deployment_is_reconciled_before_a_new_bundle_can_mutate_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            pending_digest = "a" * 64
+            next_digest = "b" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": pending_digest,
+                    "versionNumber": 1,
+                    "deploymentId": None,
+                }
+                state["phase"] = "apps-script-deployment-creation-pending"
+                core._persist_state_locked(state_dir, state, key)
+            payload = root / "payload.json"
+            self._payload(payload, config)
+
+            def pending_recovery(*args: object, **kwargs: object) -> tuple[str, int]:
+                self.assertEqual(args[2:4], (pending_digest, 1))
+                self.assertTrue(kwargs["creation_pending"])
+                raise core.ProvisionerError("deployment creation is pending recovery")
+
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(next_digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._ensure_owner_only_deployment", side_effect=pending_recovery
+            ), mock.patch("provisioner.core._apps_script_json", side_effect=AssertionError("must not mutate source")):
+                with self.assertRaisesRegex(core.ProvisionerError, "pending recovery"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+
+    def test_pending_version_is_reconciled_before_a_new_bundle_can_mutate_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            pending_digest = "a" * 64
+            next_digest = "b" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": pending_digest,
+                    "versionNumber": None,
+                    "deploymentId": None,
+                }
+                state["phase"] = "apps-script-version-creation-pending"
+                core._persist_state_locked(state_dir, state, key)
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(next_digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._recover_bundle_version", return_value=None
+            ), mock.patch("provisioner.core._apps_script_json", side_effect=AssertionError("must not mutate source")):
+                with self.assertRaisesRegex(core.ProvisionerError, "version creation is pending"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+
+    def test_known_deployment_is_verified_before_a_new_bundle_can_mutate_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            persisted_digest = "a" * 64
+            next_digest = "b" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": persisted_digest,
+                    "versionNumber": 1,
+                    "deploymentId": "deployment-1",
+                }
+                state["phase"] = "apps-script-ready"
+                core._persist_state_locked(state_dir, state, key)
+            payload = root / "payload.json"
+            self._payload(payload, config)
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(next_digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._verify_persisted_owner_only_deployment", side_effect=core.ProvisionerError("persisted deployment is missing")
+            ), mock.patch("provisioner.core._apps_script_json", side_effect=AssertionError("must not mutate source")):
+                with self.assertRaisesRegex(core.ProvisionerError, "persisted deployment is missing"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", payload)
+
+    def test_established_deployment_validates_the_full_collection_before_source_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": "a" * 64,
+                    "versionNumber": 1,
+                    "deploymentId": "deployment-1",
+                }
+                state["bootstrap"] = {
+                    "secretVersion": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1",
+                    "status": "complete",
+                }
+                state["phase"] = "bootstrap-complete"
+                core._persist_state_locked(state_dir, state, key)
+            with mock.patch("provisioner.core._deployment_bundle", return_value=("b" * 64, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch(
+                "provisioner.core._deployment_list", side_effect=core.ProvisionerError("unsafe deployment collection")
+            ) as deployments, mock.patch(
+                "provisioner.core._apps_script_json", side_effect=AssertionError("must not mutate source")
+            ):
+                with self.assertRaisesRegex(core.ProvisionerError, "unsafe deployment collection"):
+                    core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", None)
+            deployments.assert_called_once_with("private-token", "script-1")
+
+    def test_verified_deployment_updates_its_known_id_after_a_new_version_is_read_back(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = valid_cloud_config()
+            state_dir = self._cloud_ready_state(root, config)
+            old_digest = "a" * 64
+            next_digest = "b" * 64
+            with core.InstallationLock(state_dir):
+                key = core._load_or_create_identity_key(state_dir)
+                state = core._load_state_locked(state_dir, key)
+                state["appsScript"] = {
+                    "scriptId": "script-1",
+                    "provenance": "adopted",
+                    "bundleDigest": old_digest,
+                    "versionNumber": 1,
+                    "deploymentId": "deployment-1",
+                }
+                state["bootstrap"] = {
+                    "secretVersion": "projects/vertex-project/secrets/mycoupons-bootstrap/versions/1",
+                    "status": "complete",
+                }
+                state["phase"] = "bootstrap-complete"
+                core._persist_state_locked(state_dir, state, key)
+            old_deployment = self._deployment(version=1)
+            old_deployment["deploymentConfig"]["description"] = "MyCoupons owner-only " + old_digest
+            updated_deployment = self._deployment(version=2)
+            updated_deployment["deploymentConfig"]["description"] = "MyCoupons owner-only " + next_digest
+            events: list[tuple[str, str]] = []
+
+            def api(_token: str, method: str, resource: str, body: object = None, **_kwargs: object) -> object:
+                events.append((method, resource))
+                if method == "GET" and resource.endswith("/deployments/deployment-1"):
+                    return old_deployment if len([event for event in events if event == ("GET", resource)]) == 1 else updated_deployment
+                if method == "PUT" and resource.endswith("/content"):
+                    self.assertEqual(body, {"files": []})
+                    return {"files": []}
+                if method == "POST" and resource.endswith("/versions"):
+                    return {"versionNumber": 2, "description": "MyCoupons owner-only " + next_digest}
+                if method == "PUT" and resource.endswith("/deployments/deployment-1"):
+                    self.assertEqual(
+                        body,
+                        {
+                            "deploymentConfig": {
+                                "scriptId": "script-1",
+                                "versionNumber": 2,
+                                "description": "MyCoupons owner-only " + next_digest,
+                                "manifestFileName": "appsscript",
+                            }
+                        },
+                    )
+                    return updated_deployment
+                raise AssertionError((method, resource, body))
+
+            with mock.patch("provisioner.core._deployment_bundle", return_value=(next_digest, [])), mock.patch(
+                "provisioner.core._require_isolated_clasp_owner", return_value="private-token"
+            ), mock.patch("provisioner.core._find_or_create_apps_script", return_value=("script-1", "adopted")), mock.patch(
+                "provisioner.core._drive_script_metadata", return_value=self._owner_metadata()
+            ), mock.patch("provisioner.core._deployment_list", return_value=[]), mock.patch(
+                "provisioner.core._recover_bundle_version", return_value=None
+            ), mock.patch(
+                "provisioner.core._remote_bundle_digest", side_effect=[old_digest, old_digest, next_digest, next_digest]
+            ), mock.patch("provisioner.core._apps_script_json", side_effect=api):
+                result = core.deploy_apps_script(state_dir, config, ROOT / "src", root / "unused-auth.json", None)
+            self.assertEqual(result["appsScript"]["versionNumber"], 2)
+            self.assertLess(
+                events.index(("PUT", "https://script.googleapis.com/v1/projects/script-1/content")),
+                events.index(("POST", "https://script.googleapis.com/v1/projects/script-1/versions")),
+            )
+            self.assertLess(
+                events.index(("POST", "https://script.googleapis.com/v1/projects/script-1/versions")),
+                events.index(("PUT", "https://script.googleapis.com/v1/projects/script-1/deployments/deployment-1")),
+            )
 
     def test_deploy_creates_private_script_verifies_content_and_completes_bootstrap(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1629,7 +2502,7 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 if resource.startswith("https://www.googleapis.com/drive/v3/files/script-1"): return self._owner_metadata()
                 if "/content" in resource: return {"files": files}
                 if resource.endswith("/deployments"): return {"deployments": [deployment]}
-                if resource.endswith("/deployments/deployment-1") and method == "PUT": return deployment
+                if resource.endswith("/deployments/deployment-1") and method in {"GET", "PUT"}: return deployment
                 if resource.endswith("/versions"): return {"versions": [{"versionNumber": 1, "description": deployment["deploymentConfig"]["description"]}]}
                 if resource.endswith(":run"): return {"done": True, "response": {"result": {"version": 1, "ready": True}}}
                 raise AssertionError((method, resource))
@@ -1705,8 +2578,10 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 "provisioner.core._assert_private_owner_script"
             ), mock.patch(
                 "provisioner.core._deployment_list", return_value=[self._deployment()]
-            ), mock.patch("provisioner.core._remote_bundle_digest", return_value=digest), mock.patch(
-                "provisioner.core._ensure_owner_only_deployment", return_value=("deployment-1", 1)
+            ), mock.patch("provisioner.core._remote_bundle_digest", return_value=digest), mock.patch.multiple(
+                core,
+                _ensure_owner_only_deployment=mock.Mock(return_value=("deployment-1", 1)),
+                _verify_persisted_owner_only_deployment=mock.Mock(return_value=("deployment-1", 1)),
             ), mock.patch("provisioner.core.discover_tools", return_value={"gcloud": "/safe/gcloud"}), mock.patch(
                 "provisioner.core._require_active_gcloud_owner", return_value="owner@example.com"
             ), mock.patch("provisioner.core._revalidate_project_before_mutation"), mock.patch(

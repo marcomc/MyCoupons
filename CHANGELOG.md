@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- Send Apps Script deployment updates in the endpoint-required
+  `deploymentConfig` envelope and verify the exact updated deployment on
+  read-back.
+
+- Persist immutable Apps Script version and deployment creation boundaries so
+  an interrupted request recovers verified resources without reposting them.
+
 - Defer localized review-action lookup until execution so Apps Script source
   evaluation cannot fail when the locale module loads later.
 

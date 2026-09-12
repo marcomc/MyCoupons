@@ -80,7 +80,26 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "provision-cloud":
             state = provision_cloud(args.state_dir, config)
-            _emit({"cloudReady": state["phase"] in {"cloud-ready", "bootstrap-complete", "apps-script-creation-intent", "apps-script-creation-pending", "apps-script-creation-posted", "apps-script-association-required", "apps-script-adoption-pending"}, "phase": state["phase"]})
+            _emit(
+                {
+                    "cloudReady": state["phase"]
+                    in {
+                        "cloud-ready",
+                        "bootstrap-complete",
+                        "apps-script-creation-intent",
+                        "apps-script-creation-pending",
+                        "apps-script-creation-posted",
+                        "apps-script-association-required",
+                        "apps-script-adoption-pending",
+                        "apps-script-version-creation-intent",
+                        "apps-script-version-creation-pending",
+                        "apps-script-version-ready",
+                        "apps-script-deployment-creation-pending",
+                        "apps-script-ready",
+                    },
+                    "phase": state["phase"],
+                }
+            )
             return 0
         if args.command == "deploy-apps-script":
             state = deploy_apps_script(args.state_dir, config, args.source_dir, args.clasp_auth, args.bootstrap_payload, association_acknowledged=args.acknowledge_association)
