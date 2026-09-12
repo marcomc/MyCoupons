@@ -263,8 +263,9 @@ from independent text, HTML-derived source spans, and inspected images, then
 accepts only a JSON `{ "candidates": [...] }` response. Every candidate has all
 existing factual fields plus `confidence` and `review`. Each factual field is
 `null` when absent or uncertain, or `{ "value": "...", "quote": "...", "image": null }`.
-A quote is one supporting excerpt within one original span. Image evidence uses
-one inspected integer index; image-only facts use an empty quote and require
+A quote is one supporting excerpt within one original span. Descriptive quotes
+retain case/whitespace normalization inside that span; code and URL quotes remain
+exact. Image evidence uses one inspected integer index; image-only facts use an empty quote and require
 review. Notes follow the same evidence contract as every other fact.
 
 Both generateContent backends receive `responseMimeType: "application/json"` and
