@@ -4,6 +4,7 @@ const {harness} = require('./harness');
 
 function sheet(headers) {
   const rows = [headers];
+  const notes = [];
   return {
     getSheetId: () => 7, getLastRow: () => rows.length,
     getLastColumn: () => Math.max(...rows.map(row => row.length)),
@@ -15,7 +16,9 @@ function sheet(headers) {
       setValues: values => values.forEach((row, i) => {
         rows[r - 1 + i] ||= [];
         row.forEach((value, j) => { rows[r - 1 + i][c - 1 + j] = value; });
-      })
+      }),
+      setNote: note => { notes[r - 1] ||= []; notes[r - 1][c - 1] = note; },
+      getNote: () => notes[r - 1]?.[c - 1] || ''
     }), rows
   };
 }

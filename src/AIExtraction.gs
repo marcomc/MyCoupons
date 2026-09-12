@@ -3,6 +3,10 @@ const AI_EXTRACTION = Object.freeze({maxPromptText: 60000, maxCandidates: 12, ma
 function aiCandidateKeys_() { return MC.fields.concat(['confidence', 'review', 'evidence']); }
 
 function buildCandidatePrompt_(message) {
+  return candidatePrompt_(message).text;
+}
+
+function candidatePrompt_(message) {
   const source = candidateSource_(message);
   const instruction = [
     'Extract coupon offers from the supplied message. Return JSON only, with no prose or Markdown.',
@@ -31,7 +35,8 @@ function buildCandidatePrompt_(message) {
   const boundedSubject = boundedText_(subject, subjectBudget);
   const boundedText = boundedText_(text, textBudget);
   const boundedHtml = boundedText_(htmlContext, budget - boundedSubject.length - boundedText.length);
-  return instruction + subjectLabel + boundedSubject + textLabel + boundedText + htmlLabel + boundedHtml;
+  return {text: instruction + subjectLabel + boundedSubject + textLabel + boundedText + htmlLabel + boundedHtml,
+    truncated: boundedSubject !== subject || boundedText !== text || boundedHtml !== htmlContext};
 }
 
 function duplicateJsonKeys_(json) {
@@ -83,15 +88,15 @@ function parseAICandidates_(response, message) {
 }
 
 function candidateMergeKey_(candidate) {
-  return [normalized_(candidate.merchant), normalized_(candidate.website), String(candidate.code || ''),
+  return JSON.stringify([normalized_(candidate.merchant), normalized_(candidate.website), String(candidate.code || ''),
     normalized_(candidate.discountType), normalized_(candidate.discountValue), normalized_(candidate.minimumSpend),
-    normalized_(candidate.expiry)].join('|');
+    normalized_(candidate.expiry)]);
 }
 
 function exactCandidateIdentityKey_(candidate) {
-  return MC.fields.map(function (field) {
+  return JSON.stringify(MC.fields.map(function (field) {
     return field === 'code' ? String(candidate[field] || '') : normalized_(candidate[field]);
-  }).join('|');
+  }));
 }
 
 function mergeCouponCandidates_(left, right) {
@@ -119,12 +124,12 @@ function sameCouponOffer_(left, right) {
 function extractCouponOutcome_(message, hooks) {
   // Validate all source ownership, HTML coverage, and image records before any fetch.
   const source = candidateSource_(message);
-  const prompt = buildCandidatePrompt_(message);
+  const prompt = candidatePrompt_(message);
   const images = source.images.map(function (image) {
     if (!image || typeof image.mimeType !== 'string' || !Array.isArray(image.bytes)) fail_('AI');
     return {mimeType: image.mimeType, data: Utilities.base64EncodeWebSafe(image.bytes)};
   });
-  const aiOutcome = parseAICandidateOutcome_(callGeminiModel_({text: prompt, images: images}, hooks), message);
+  const aiOutcome = parseAICandidateOutcome_(callGeminiModel_({text: prompt.text, images: images}, hooks), message);
   const ai = aiOutcome.candidates;
   const deterministic = deterministicCandidates_(message).map(function (candidate) {
     return {merchant: '', website: '', code: candidate.code, discountType: '', discountValue: '', minimumSpend: '',
@@ -140,7 +145,7 @@ function extractCouponOutcome_(message, hooks) {
   if (result.length > MC.maxCandidates) fail_('AI');
   // This is deliberately descriptive, not authorization to mutate Gmail. In
   // particular, an empty complete outcome only means no candidate was found.
-  const complete = !source.incomplete;
+  const complete = !source.incomplete && !prompt.truncated;
   const autoConfirmed = result.length > 0 && complete && !aiOutcome.invalidated && result.every(function (candidate) {
     return candidateAutomaticallyConfirmed_(candidate);
   });

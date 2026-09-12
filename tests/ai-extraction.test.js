@@ -18,6 +18,19 @@ test('AI prompt is bounded and strict response parsing normalizes evidence', () 
   assert.equal(result[0].review, false);
 });
 
+test('truncated prompt coverage and candidate identity remain fail-closed', () => {
+  const {ctx, properties} = harness();
+  const prompt = ctx.candidatePrompt_({text: 'X'.repeat(70000), incomplete: false});
+  assert.equal(prompt.truncated, true);
+  properties.GEMINI_API_KEY = 'test-key';
+  const outcome = ctx.extractCouponOutcome_({text: 'X'.repeat(70000), incomplete: false}, {fetch: () => ({status: 200,
+    body: JSON.stringify({candidates: [{content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})})});
+  assert.equal(outcome.status, 'incomplete'); assert.equal(outcome.archiveAllowed, false); assert.equal(outcome.verifiedNonOffer, false);
+  const left = {merchant: 'Brand', website: '', code: 'X|Y', discountType: '', discountValue: '', minimumSpend: '', validOn: '', exclusions: '', expiry: '', usageLimits: '', currency: '', notes: ''};
+  const right = {merchant: 'Brand', website: '', code: 'X', discountType: '|Y', discountValue: '', minimumSpend: '', validOn: '', exclusions: '', expiry: '', usageLimits: '', currency: '', notes: ''};
+  assert.notEqual(ctx.exactCandidateIdentityKey_(left), ctx.exactCandidateIdentityKey_(right));
+});
+
 test('subject is independent factual evidence while sender remains metadata only', () => {
   const {ctx} = harness();
   const message = {subject: 'Brand coupon code SAVE20', sender: 'Brand <offers@example.com>', text: 'Body', incomplete: false};

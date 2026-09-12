@@ -256,11 +256,18 @@ function validMessageState_(state) {
     !stringArray_(state.dedupeKeys) || !stringArray_(state.candidateKeys) ||
     (state.version === 2 && !isLegacy && !candidateStates_(state.candidateStates, state.candidateKeys, state.rowNumbers)) ||
     !nonNegativeIntegerArray_(state.rowNumbers) ||
-    !stringValue_(state.lastAttemptAt) || !stringValue_(state.nextRetryAt) ||
+    !stringValue_(state.lastAttemptAt) || !validRetryTimestamp_(state.nextRetryAt) ||
     !stringValue_(state.lastError) || !stringValue_(state.failureStage) ||
     !stringValue_(state.outcome) || typeof state.labelApplied !== 'boolean' ||
     typeof state.archived !== 'boolean' || !stringValue_(state.updatedAt)) return false;
   return true;
+}
+
+function validRetryTimestamp_(value) {
+  if (value === '') return true;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
 function candidateStates_(value, keys, rows) {

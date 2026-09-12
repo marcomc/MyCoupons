@@ -27,10 +27,13 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   const row = range.getValues()[0];
   const displayRow = range.getDisplayValues()[0];
   const formulas = range.getFormulas()[0];
-  let state = findMessageStateByRowNumber_(journalSheet, rowNumber);
-  // Pre-increment rows used the visible Notes cell for the technical key. Keep
-  // them reviewable without extending that legacy storage mistake.
-  if (!state && String(row[16] || '')) state = findMessageStateByDedupeKey_(journalSheet, String(row[16]));
+  const noteKey = candidateKeyFromNote_(sheet.getRange(rowNumber, 14).getNote());
+  const visibleNotes = String(row[16] || '');
+  let state = noteKey ? findMessageStateByDedupeKey_(journalSheet, noteKey) : null;
+  // Deployed legacy rows used visible Notes for the technical key. Keep them
+  // reviewable without extending that legacy storage mistake.
+  if (!state && !noteKey && visibleNotes) state = findMessageStateByDedupeKey_(journalSheet, visibleNotes);
+  if (!state) state = findMessageStateByRowNumber_(journalSheet, rowNumber);
   if (!state) return reviewFailure_(sheet, rowNumber, 'STATE');
   if (!candidateStates_(state.candidateStates, state.candidateKeys, state.rowNumbers)) {
     state.candidateStates = state.candidateKeys.map(function (candidateKey, index) {
@@ -38,10 +41,11 @@ function processReviewAction_(sheet, rowNumber, action, c) {
     });
     state.version = 2;
   }
-  const stateIndex = state.rowNumbers.indexOf(rowNumber);
-  const key = stateIndex < 0 ? '' : state.candidateKeys[stateIndex];
+  const key = reviewCandidateKey_(state, rowNumber, noteKey, visibleNotes);
+  const stateIndex = state.candidateKeys.indexOf(key);
   const candidate = state.candidateStates.filter(function (item) { return item.key === key; });
-  if (candidate.length !== 1 || stateIndex < 0 || state.rowNumbers[stateIndex] !== rowNumber ||
+  const legacyTechnicalNotes = !noteKey && String(row[16] || '') === key;
+  if (candidate.length !== 1 || stateIndex < 0 || resolveCandidateRow_(sheet, state.messageId, key, state.rowNumbers[stateIndex]) !== rowNumber ||
       sourceId_(row[13]) !== state.messageId) return reviewFailure_(sheet, rowNumber, 'STATE');
   candidate[0].rowNumber = rowNumber;
   state.rowNumbers[stateIndex] = rowNumber;
@@ -52,7 +56,7 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   }
   const message = getReviewMessage_(state.messageId);
   if (action === EN.actions.retry_ai) return retryReviewCandidate_(sheet, rowNumber, state, candidate[0], message, journalSheet, c);
-  if (!validateReviewRow_(row, message, displayRow, candidate[0].imageEvidence, formulas, c)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
+  if (!validateReviewRow_(row, message, displayRow, candidate[0].imageEvidence, formulas, c, key, legacyTechnicalNotes)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   setReviewStatus_(sheet, rowNumber, EN.statuses.confirmed, '');
   candidate[0].status = 'confirmed';
   completeReviewMessage_(state, sheet, journalSheet, c);
@@ -64,10 +68,18 @@ function getReviewMessage_(messageId) {
   return canonicalGmailMessage_(raw);
 }
 
-function validateReviewRow_(row, message, displayRow, imageEvidence, formulas, c) {
+function reviewCandidateKey_(state, rowNumber, noteKey, visibleNotes) {
+  if (noteKey) return noteKey;
+  const visible = String(visibleNotes || '');
+  if (state && Array.isArray(state.candidateKeys) && state.candidateKeys.indexOf(visible) >= 0) return visible;
+  const index = state && Array.isArray(state.rowNumbers) ? state.rowNumbers.indexOf(rowNumber) : -1;
+  return index < 0 ? '' : state.candidateKeys[index];
+}
+
+function validateReviewRow_(row, message, displayRow, imageEvidence, formulas, c, technicalKey, legacyTechnicalNotes) {
   if (!Array.isArray(row) || !message) return false;
   formulas = Array.isArray(formulas) ? formulas : Array(MC.headers.length).fill('');
-  if (formulas.slice(0, 14).concat(formulas.slice(20, 21)).some(function (formula) { return !!formula; })) return false;
+  if (formulas.slice(0, 14).concat([formulas[16]], formulas.slice(20, 21)).some(function (formula) { return !!formula; })) return false;
   const merchant = reviewSourceValue_(row[1]).trim();
   const code = reviewSourceValue_(row[3]).trim();
   const website = reviewSourceValue_(row[2]).trim();
@@ -79,7 +91,8 @@ function validateReviewRow_(row, message, displayRow, imageEvidence, formulas, c
   if (expiry && !validDate_(expiry)) return false;
   if (!reviewSourceColumnsMatch_(row, message)) return false;
   const candidate = {merchant: merchant, website: website, code: code, discountType: discountType, discountValue: discountValue,
-    minimumSpend: reviewSourceValue_(row[6]), validOn: reviewSourceValue_(row[7]), exclusions: reviewSourceValue_(row[8]), expiry: expiry, usageLimits: reviewSourceValue_(row[10]), currency: reviewSourceValue_(row[20])};
+    minimumSpend: reviewSourceValue_(row[6]), validOn: reviewSourceValue_(row[7]), exclusions: reviewSourceValue_(row[8]), expiry: expiry, usageLimits: reviewSourceValue_(row[10]), currency: reviewSourceValue_(row[20]),
+    notes: candidateNotesForReview_(row, technicalKey, legacyTechnicalNotes)};
   const source = candidateSource_(message);
   const spans = source.spans;
   if (discountType || discountValue) {
@@ -93,6 +106,11 @@ function validateReviewRow_(row, message, displayRow, imageEvidence, formulas, c
     return !value || reviewFieldImageEvidence_(imageEvidence, field, value, source.images) ||
       spans.some(function (span) { return fieldInQuote_(field, value, span); });
   });
+}
+
+function candidateNotesForReview_(row, key, legacyTechnicalNotes) {
+  const value = reviewSourceValue_(row[16]);
+  return legacyTechnicalNotes && value === key ? '' : value;
 }
 
 function reviewCandidateFieldsValid_(row) {
@@ -161,16 +179,21 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
   const enriched = candidates.filter(function (item) { return retryCandidateMatchesRow_(item, row); });
   if (enriched.length !== 1) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   const knownRows = state.candidateStates.map(function (known) {
-    return known.rowNumber && sheet.getRange(known.rowNumber, 1, 1, MC.headers.length).getDisplayValues()[0];
+    const index = state.candidateKeys.indexOf(known.key);
+    if (index < 0) return null;
+    const resolved = resolveCandidateRow_(sheet, state.messageId, known.key, state.rowNumbers[index]);
+    known.rowNumber = resolved; state.rowNumbers[index] = resolved;
+    return sheet.getRange(resolved, 1, 1, MC.headers.length).getDisplayValues()[0];
   });
   if (knownRows.some(function (knownRow) { return !knownRow; })) return reviewFailure_(sheet, rowNumber, 'STATE');
-  if (candidates.some(function (item) {
-    return !knownRows.some(function (knownRow) {
-      return retryCandidateMatchesRow_(item, knownRow);
-    });
+  if (candidates.length !== knownRows.length || knownRows.some(function (knownRow) {
+    return candidates.filter(function (item) { return retryCandidateMatchesRow_(item, knownRow); }).length !== 1;
+  }) || candidates.some(function (item) {
+    return knownRows.filter(function (knownRow) { return retryCandidateMatchesRow_(item, knownRow); }).length !== 1;
   })) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   const updatedCandidate = Object.assign({}, enriched[0], {review: enriched[0].review || !extraction.archiveAllowed});
   const updated = couponRow_(message, updatedCandidate);
+  persistCandidateKey_(sheet, rowNumber, candidate.key);
   const existing = sheet.getRange(rowNumber, 1, 1, updated.length).getValues()[0];
   const existingFormulas = sheet.getRange(rowNumber, 1, 1, updated.length).getFormulas()[0];
   const merged = existing.slice();
@@ -187,10 +210,11 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
 }
 
 function retryCandidateMatchesRow_(candidate, row) {
-  return !!candidate.merchant && [['merchant', 1], ['website', 2], ['code', 3],
-    ['discountType', 4], ['discountValue', 5]].every(function (identity) {
-    const value = String(row[identity[1]] || '');
-    return !value || String(candidate[identity[0]] || '') === value;
+  const columns = {merchant: 1, website: 2, code: 3, discountType: 4, discountValue: 5, minimumSpend: 6,
+    validOn: 7, exclusions: 8, expiry: 9, usageLimits: 10, currency: 20, notes: 16};
+  return !!candidate.merchant && MC.fields.every(function (field) {
+    const value = reviewSourceValue_(row[columns[field]] || '');
+    return !value || String(candidate[field] || '') === value;
   });
 }
 
@@ -258,11 +282,10 @@ function restoreReviewRows_(state, sheet) {
 function refreshAndValidateReviewRows_(state, sheet, c) {
   const message = getReviewMessage_(state.messageId);
   const complete = state.candidateStates.every(function (item) {
-    const rowNumber = item.rowNumber;
-    if (!rowNumber) return false;
-    item.rowNumber = rowNumber;
     const index = state.candidateKeys.indexOf(item.key);
     if (index < 0) return false;
+    const rowNumber = resolveCandidateRow_(sheet, state.messageId, item.key, state.rowNumbers[index]);
+    item.rowNumber = rowNumber;
     state.rowNumbers[index] = rowNumber;
     return true;
   });
@@ -270,7 +293,9 @@ function refreshAndValidateReviewRows_(state, sheet, c) {
   return state.candidateStates.every(function (item) {
     const range = sheet.getRange(item.rowNumber, 1, 1, MC.headers.length);
     const row = range.getValues()[0];
-    return String(row[17]) === EN.statuses.confirmed && validateReviewRow_(row, message, range.getDisplayValues()[0], item.imageEvidence, range.getFormulas()[0], c);
+    const noteKey = candidateKeyFromNote_(sheet.getRange(item.rowNumber, 14).getNote());
+    const legacyTechnicalNotes = !noteKey && String(row[16] || '') === item.key;
+    return String(row[17]) === EN.statuses.confirmed && validateReviewRow_(row, message, range.getDisplayValues()[0], item.imageEvidence, range.getFormulas()[0], c, item.key, legacyTechnicalNotes);
   });
 }
 

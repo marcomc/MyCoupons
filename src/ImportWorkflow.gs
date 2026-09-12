@@ -49,6 +49,14 @@ function processCouponMessage_(state, message) {
   }
   if (existing && existing.outcome === 'archive' && existing.candidateStates &&
       existing.candidateStates.length && existing.candidateStates.every(function (item) { return item.status === 'confirmed'; })) {
+    reconcileCandidateRows_(state.couponSheet, existing);
+    if (!refreshAndValidateReviewRows_(existing, state.couponSheet, state.config)) {
+      existing.status = 'review'; existing.outcome = 'review'; existing.updatedAt = new Date().toISOString();
+      saveMessageState_(state.journalSheet, existing);
+      return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
+    }
+    // Persist refreshed row locations before granting Gmail mutation authority.
+    saveMessageState_(state.journalSheet, existing);
     return finalizeImportedMessage_(state, existing);
   }
   let journal = existing || newMessageState_(message.id);
@@ -56,11 +64,31 @@ function processCouponMessage_(state, message) {
   journal.status = 'processing'; journal.failureStage = 'extract'; journal.lastError = '';
   saveMessageState_(state.journalSheet, journal);
   try {
-    if (!Array.isArray(journal.candidateStates)) journal.candidateStates = [];
+    if (!Array.isArray(journal.candidateStates)) {
+      if (journal.candidateKeys.length || journal.rowNumbers.length) {
+        if (journal.candidateKeys.length !== journal.rowNumbers.length) fail_('STATE');
+        journal.candidateStates = journal.candidateKeys.map(function (key, index) {
+          return {key: key, rowNumber: journal.rowNumbers[index], status: 'review'};
+        });
+      } else journal.candidateStates = [];
+    }
     journal.version = 2;
     const extraction = extractCouponOutcomeForState_(state, message);
     const candidates = extraction.candidates;
     if (extraction.verifiedNonOffer) {
+      if (journal.candidateStates.length) {
+        if (!candidateStates_(journal.candidateStates, journal.candidateKeys, journal.rowNumbers)) fail_('STATE');
+        reconcileCandidateRows_(state.couponSheet, journal);
+        const retainedStatuses = journal.candidateStates.map(function (item) {
+          const status = Object.create(null); status.status = item.status; return status;
+        });
+        journal.outcome = messageOutcome_(retainedStatuses);
+        journal.status = journal.outcome === 'archive' ? 'processing' : journal.outcome === 'unchanged' ? 'ignored' : 'review';
+        journal.failureStage = journal.outcome === 'archive' ? 'mail' : '';
+        journal.updatedAt = new Date().toISOString(); saveMessageState_(state.journalSheet, journal);
+        if (journal.outcome === 'archive') return finalizeImportedMessage_(state, journal);
+        return {messageId: message.id, status: journal.status, rows: journal.rowNumbers.slice()};
+      }
       journal.outcome = 'empty'; journal.status = 'nonoffer'; journal.failureStage = '';
       journal.updatedAt = new Date().toISOString(); saveMessageState_(state.journalSheet, journal);
       return {messageId: message.id, status: 'nonoffer', rows: []};
@@ -69,39 +97,55 @@ function processCouponMessage_(state, message) {
     // non-offer checkpoint. Preserve durable reachability without hot retries.
     if (!candidates.length) {
       journal.outcome = 'empty'; journal.status = 'awaiting_extraction'; journal.failureStage = '';
+      journal.nextRetryAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       journal.updatedAt = new Date().toISOString(); saveMessageState_(state.journalSheet, journal);
       return {messageId: message.id, status: 'awaiting_extraction', rows: []};
     }
     const rows = [];
-    const statuses = [];
-    candidates.forEach(function (candidate, index) {
+    candidates.forEach(function (candidate) {
       // A surviving candidate cannot erase a discarded model proposal or an
       // incomplete source. The complete outcome is the archive authority.
       const persistedCandidate = Object.assign({}, candidate, {review: candidate.review || !extraction.archiveAllowed});
-      const key = candidateDedupeKey_(message, candidate, index);
+      const key = candidateDedupeKey_(message, candidate);
       const known = journal.candidateKeys.indexOf(key);
       let rowNumber;
       if (known >= 0) {
-        rowNumber = journal.rowNumbers[known];
-        if (!rowNumber) fail_('STATE');
+        rowNumber = resolveCandidateRow_(state.couponSheet, message.id, key, journal.rowNumbers[known]);
+        journal.rowNumbers[known] = rowNumber;
       } else {
         const row = couponRow_(message, persistedCandidate);
         // Journal acknowledgement may have failed after the row write. Only a
         // fresh source-backed message and exact projected identity can recover it.
         const prior = findCouponRowByCandidateIdentity_(state.couponSheet, message, candidate);
-        rowNumber = prior || appendCouponRow_(state.couponSheet, row);
+        if (prior) {
+          const priorKey = candidateKeyFromNote_(state.couponSheet.getRange(prior, 14).getNote());
+          if (priorKey && priorKey !== key) fail_('STATE');
+          persistCandidateKey_(state.couponSheet, prior, key);
+          rowNumber = prior;
+        } else rowNumber = appendCouponRow_(state.couponSheet, row, key);
         journal.dedupeKeys.push(key);
         journal.candidateKeys.push(key);
         journal.rowNumbers.push(rowNumber);
       }
-      const status = Object.create(null); status.status = persistedCandidate.review ? 'review' : 'confirmed';
-      statuses.push(status);
+      const storedStatus = String(state.couponSheet.getRange(rowNumber, 18, 1, 1).getValues()[0][0]);
+      if (storedStatus !== EN.statuses.confirmed) persistedCandidate.review = true;
+      if (persistedCandidate.review && storedStatus !== EN.statuses.review) setReviewStatus_(state.couponSheet, rowNumber, EN.statuses.review, EN.actions.confirm);
       rows.push(rowNumber);
-      if (!journal.candidateStates.some(function (item) { return item.key === key; })) {
+      const persistedState = journal.candidateStates.filter(function (item) { return item.key === key; });
+      if (!persistedState.length) {
         journal.candidateStates.push({key: key, rowNumber: rowNumber, status: persistedCandidate.review ? 'review' : 'confirmed', imageEvidence: candidate.imageEvidence || {}});
+      } else if (persistedState.length === 1) {
+        persistedState[0].rowNumber = rowNumber;
+        persistedState[0].status = persistedCandidate.review ? 'review' : 'confirmed';
+        persistedState[0].imageEvidence = candidate.imageEvidence || {};
+      } else {
+        fail_('STATE');
       }
     });
-    journal.outcome = messageOutcome_(statuses);
+    const persistedStatuses = journal.candidateStates.map(function (item) {
+      const status = Object.create(null); status.status = item.status; return status;
+    });
+    journal.outcome = messageOutcome_(persistedStatuses);
     journal.status = journal.outcome === 'archive' ? 'processing' : 'review';
     journal.failureStage = journal.outcome === 'archive' ? 'mail' : '';
     journal.updatedAt = new Date().toISOString();
@@ -109,6 +153,14 @@ function processCouponMessage_(state, message) {
     if (journal.outcome === 'archive') return finalizeImportedMessage_(state, journal);
     return {messageId: message.id, status: journal.status, rows: rows};
   } catch (e) {
+    // A failed multi-candidate write cannot prove that the retained subset was
+    // exhaustive. Preserve every retained candidate for explicit review.
+    journal.candidateStates.forEach(function (candidate) {
+      candidate.status = 'review';
+      if (candidate.rowNumber > 1) {
+        try { setReviewStatus_(state.couponSheet, candidate.rowNumber, EN.statuses.review, EN.actions.confirm); } catch (ignored) {}
+      }
+    });
     journal.status = 'failed'; journal.retryCount++; journal.failureStage = journal.failureStage || 'write';
     journal.lastError = errorCode_(e); journal.updatedAt = new Date().toISOString();
     saveMessageState_(state.journalSheet, journal);
@@ -117,19 +169,58 @@ function processCouponMessage_(state, message) {
 }
 
 function awaitingMessageExtraction_(journal) {
-  return journal.status === 'awaiting_extraction' ||
+  const retryAt = Date.parse(journal.nextRetryAt || '');
+  return (journal.status === 'awaiting_extraction' &&
+    (!journal.nextRetryAt || Number.isFinite(retryAt) && retryAt <= Date.now())) ||
     journal.status === 'failed' && journal.outcome === 'empty' && !journal.failureStage && !journal.lastError;
 }
 
-function candidateDedupeKey_(message, candidate, index) {
+function candidateDedupeKey_(message, candidate) {
   // Candidate order is model-controlled. Exact candidate identity is not.
   return digest_(message.id + '|' + exactCandidateIdentityKey_(candidate));
 }
 
 function findCouponRowByDedupeKey_(sheet, key) {
-  // Technical keys live in the private journal, never in user-visible Notes.
-  // Retained only for compatibility; callers must resolve through journal state.
-  return 0;
+  if (typeof key !== 'string' || !/^[a-f0-9]{64}$/.test(key)) fail_('STATE');
+  const rowCount = sheet.getLastRow() - 1;
+  const noteValues = rowCount > 0 && sheet.getRange(2, 14, rowCount, 1);
+  const notes = noteValues && typeof noteValues.getNotes === 'function' ? noteValues.getNotes() : null;
+  const noteMatches = [];
+  for (let index = 0; index < rowCount; index++) {
+    const note = notes ? notes[index][0] : sheet.getRange(index + 2, 14).getNote();
+    if (candidateKeyFromNote_(note) === key) noteMatches.push(index + 2);
+  }
+  if (noteMatches.length > 1) fail_('STATE');
+  if (noteMatches.length === 1) return noteMatches[0];
+  // Legacy deployed rows placed the key in visible Notes. New identities use
+  // private Range Notes.
+  const rows = sheet.getDataRange().getDisplayValues();
+  const legacyMatches = [];
+  for (let index = 1; index < rows.length; index++) if (rows[index][16] === key) legacyMatches.push(index + 1);
+  if (legacyMatches.length > 1) fail_('STATE');
+  return legacyMatches.length ? legacyMatches[0] : 0;
+}
+
+function candidateKeyNote_(key) { return 'mycoupons-candidate:' + key; }
+
+function candidateKeyFromNote_(note) {
+  const match = /^mycoupons-candidate:([a-f0-9]{64})$/.exec(String(note || ''));
+  return match ? match[1] : '';
+}
+
+function persistCandidateKey_(sheet, rowNumber, key) {
+  const range = sheet.getRange(rowNumber, 14);
+  if (!range || typeof range.setNote !== 'function' || typeof range.getNote !== 'function') fail_('WRITE');
+  range.setNote(candidateKeyNote_(key));
+  if (range.getNote() !== candidateKeyNote_(key)) fail_('WRITE');
+}
+
+function resolveCandidateRow_(sheet, messageId, key, persistedRowNumber) {
+  const located = findCouponRowByDedupeKey_(sheet, key);
+  if (!located || !Number.isInteger(persistedRowNumber) || persistedRowNumber < 2) fail_('STATE');
+  const row = sheet.getRange(located, 1, 1, MC.headers.length).getValues()[0];
+  if (sourceId_(row[13]) !== messageId) fail_('STATE');
+  return located;
 }
 
 function findCouponRowByCandidateIdentity_(sheet, message, candidate) {
@@ -144,15 +235,15 @@ function findCouponRowByCandidateIdentity_(sheet, message, candidate) {
 }
 
 function candidateRowIdentity_(message, candidate) {
-  return JSON.stringify([message.link].concat(MC.fields.map(function (field) { return String(candidate[field] || ''); })));
+  return JSON.stringify([message.link, exactCandidateIdentityKey_(candidate)]);
 }
 
 function candidateRowIdentityFromRow_(row) {
   const columns = {merchant: 1, website: 2, code: 3, discountType: 4, discountValue: 5, minimumSpend: 6,
     validOn: 7, exclusions: 8, expiry: 9, usageLimits: 10, currency: 20, notes: 16};
-  return JSON.stringify([String(row[13] || '')].concat(MC.fields.map(function (field) {
-    return reviewSourceValue_(row[columns[field]] || '');
-  })));
+  const candidate = {};
+  MC.fields.forEach(function (field) { candidate[field] = reviewSourceValue_(row[columns[field]] || ''); });
+  return JSON.stringify([String(row[13] || ''), exactCandidateIdentityKey_(candidate)]);
 }
 
 function couponRow_(message, candidate) {
@@ -171,13 +262,14 @@ function couponRow_(message, candidate) {
   return row;
 }
 
-function appendCouponRow_(sheet, row) {
+function appendCouponRow_(sheet, row, key) {
   if (!Array.isArray(row) || row.length !== MC.headers.length) fail_('WRITE');
   const rowNumber = Math.max(2, sheet.getLastRow() + 1);
   sheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
   const stored = sheet.getRange(rowNumber, 1, 1, row.length).getValues()[0];
   if (stored.length !== row.length || String(stored[13]) !== String(row[13]) ||
       String(stored[16]) !== String(row[16]) || String(stored[20]) !== String(row[20])) fail_('WRITE');
+  persistCandidateKey_(sheet, rowNumber, key);
   return rowNumber;
 }
 
@@ -186,6 +278,17 @@ function extractCouponOutcomeForState_(state, message) {
   const hooks = Object.assign({}, state && state.extractionHooks || {});
   if (state && state._deadlineMs) hooks.deadlineMs = state._deadlineMs;
   return extractCouponOutcome_(message, hooks);
+}
+
+function reconcileCandidateRows_(sheet, journal) {
+  if (!candidateStates_(journal.candidateStates, journal.candidateKeys, journal.rowNumbers)) fail_('STATE');
+  journal.candidateStates.forEach(function (candidate) {
+    const index = journal.candidateKeys.indexOf(candidate.key);
+    if (index < 0) fail_('STATE');
+    const rowNumber = resolveCandidateRow_(sheet, journal.messageId, candidate.key, journal.rowNumbers[index]);
+    candidate.rowNumber = rowNumber;
+    journal.rowNumbers[index] = rowNumber;
+  });
 }
 
 function finalizeImportedMessage_(state, journal) {
