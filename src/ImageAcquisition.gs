@@ -1,6 +1,3 @@
-const MC_IMAGE_MAX_COUNT = 12;
-const MC_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
-const MC_IMAGE_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 const MC_IMAGE_MIME_TYPES = Object.freeze(['image/gif', 'image/jpeg', 'image/png', 'image/webp']);
 
 function acquireMessageImages_(raw, html, deadlineMs) {
@@ -19,10 +16,11 @@ function acquireMessageImages_(raw, html, deadlineMs) {
   let total = 0;
   let inspected = 0;
   let incomplete = false;
-  if (slots.length > MC_IMAGE_MAX_COUNT) incomplete = true;
+  if (slots.length > MC.maxImages) incomplete = true;
   slots.forEach(function (attrs, index) {
     if (deadlineMs && Date.now() >= deadlineMs) { incomplete = true; return; }
-    if (inspected >= MC_IMAGE_MAX_COUNT) return;
+    if (total >= MC.maxTotalImageBytes) { incomplete = true; return; }
+    if (inspected >= MC.maxImages) return;
     inspected++;
     const src = typeof attrs.src === 'string' ? attrs.src.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '') : '';
     let resource = null;
@@ -33,18 +31,17 @@ function acquireMessageImages_(raw, html, deadlineMs) {
     const record = materializeImage_(raw.id, index, resource, total);
     if (!record) { incomplete = true; return; }
     total += record.bytes.length;
-    if (total > MC_IMAGE_MAX_TOTAL_BYTES) { incomplete = true; return; }
     records.push(record);
   });
   resources.forEach(function (resource, index) {
     if (used.indexOf(resource) >= 0) return;
     if (deadlineMs && Date.now() >= deadlineMs) { incomplete = true; return; }
-    if (inspected >= MC_IMAGE_MAX_COUNT) { incomplete = true; return; }
+    if (total >= MC.maxTotalImageBytes) { incomplete = true; return; }
+    if (inspected >= MC.maxImages) { incomplete = true; return; }
     inspected++;
     const record = materializeImage_(raw.id, slots.length + index, resource, total);
     if (!record) { incomplete = true; return; }
     total += record.bytes.length;
-    if (total > MC_IMAGE_MAX_TOTAL_BYTES) { incomplete = true; return; }
     records.push(record);
   });
   return {images: records, incomplete: incomplete};
@@ -58,7 +55,7 @@ function fetchRemoteImage_(url) {
     const contentType = String(headers['Content-Type'] || headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
     if (MC_IMAGE_MIME_TYPES.indexOf(contentType) < 0) return null;
     const bytes = response.getContent();
-    if (!Array.isArray(bytes) || !bytes.length || bytes.length > MC_IMAGE_MAX_BYTES) return null;
+    if (!Array.isArray(bytes) || !bytes.length || bytes.length > MC.maxImageBytes) return null;
     return {mimeType: contentType, data: bytes, declaredSize: bytes.length};
   } catch (e) { return null; }
 }
@@ -81,10 +78,10 @@ function collectImageParts_(part, parentCid, resources) {
 
 function materializeImage_(messageId, slot, resource, total) {
   if (resource.attachmentId && (!Number.isSafeInteger(resource.declaredSize) || resource.declaredSize <= 0 ||
-    resource.declaredSize > MC_IMAGE_MAX_BYTES || total + resource.declaredSize > MC_IMAGE_MAX_TOTAL_BYTES)) return null;
+    resource.declaredSize > MC.maxImageBytes || total + resource.declaredSize > MC.maxTotalImageBytes)) return null;
   if (resource.declaredSize != null && (!Number.isSafeInteger(resource.declaredSize) ||
-    resource.declaredSize <= 0 || resource.declaredSize > MC_IMAGE_MAX_BYTES || total + resource.declaredSize > MC_IMAGE_MAX_TOTAL_BYTES)) return null;
-  const maxBytes = Math.min(MC_IMAGE_MAX_BYTES, MC_IMAGE_MAX_TOTAL_BYTES - total);
+    resource.declaredSize <= 0 || resource.declaredSize > MC.maxImageBytes || total + resource.declaredSize > MC.maxTotalImageBytes)) return null;
+  const maxBytes = Math.min(MC.maxImageBytes, MC.maxTotalImageBytes - total);
   let bytes = [];
   try {
     const empty = resource.data == null || resource.data === '' || Array.isArray(resource.data) && resource.data.length === 0;
@@ -95,7 +92,7 @@ function materializeImage_(messageId, slot, resource, total) {
       if (bytes.length !== resource.declaredSize) return null;
     } else bytes = decodeBytePayload_(resource.data, resource.declaredSize, null, maxBytes);
   } catch (e) { return null; }
-  if (!Array.isArray(bytes) || !bytes.length || bytes.length > MC_IMAGE_MAX_BYTES || total + bytes.length > MC_IMAGE_MAX_TOTAL_BYTES) return null;
+  if (!Array.isArray(bytes) || !bytes.length || bytes.length > MC.maxImageBytes || total + bytes.length > MC.maxTotalImageBytes) return null;
   if (!imageSignature_(resource.mimeType, bytes)) return null;
   const dimensions = imageDimensions_(resource.mimeType, bytes);
   if (dimensions && (dimensions.width <= 2 || dimensions.height <= 2)) return null;

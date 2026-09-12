@@ -117,9 +117,12 @@ test('Gemini image byte budgets use exact unpadded base64url lengths', () => {
   }
   const exact = encode(max);
   assert.equal(ctx.callGeminiModel_({text: 'x', images: Array.from({length: 3}, () => ({mimeType: 'image/png', data: exact}))}, {fetch}).text, 'result');
+  const oneByte = encode(1);
+  assert.equal(ctx.callGeminiModel_({text: 'x', images: Array.from({length: 6}, () => ({mimeType: 'image/png', data: oneByte}))}, {fetch}).text, 'result');
   for (const images of [
     [{mimeType: 'image/png', data: encode(max + 1)}],
-    Array.from({length: 3}, () => ({mimeType: 'image/png', data: exact})).concat({mimeType: 'image/png', data: encode(1)})
+    Array.from({length: 3}, () => ({mimeType: 'image/png', data: exact})).concat({mimeType: 'image/png', data: oneByte}),
+    Array.from({length: 7}, () => ({mimeType: 'image/png', data: oneByte}))
   ]) {
     let calls = 0;
     assert.throws(() => ctx.callGeminiModel_({text: 'x', images}, {fetch: () => { calls++; return {status: 200, body: ok}; }}), /GEMINI_REQUEST/);
