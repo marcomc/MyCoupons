@@ -119,6 +119,13 @@ the oldest verified version is then persisted as the deployment identity.
 Definitive HTTP rejections restore a retryable state; only ambiguous
 outcomes remain pending recovery.
 
+After a validated deployment update response, the exact-ID readback allows at
+most five retries over a 30-second cumulative sleep budget only when it is the
+exact previously verified owner-only deployment that the update replaced. This
+sleep budget does not include the individually bounded API request durations.
+Any different ID, version, description, access shape, malformed response, or
+HTTP failure remains fail-closed; the loop never repeats the update request.
+
 For bootstrap, the command creates or adopts only the Vertex-project secret
 `mycoupons-bootstrap` bearing this installation label, rejects public or foreign
 access at both secret and project level, grants the verified owner secret

@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Reconcile a briefly stale exact-ID Apps Script deployment readback after a
+  validated update response with a bounded 30-second retry budget, without
+  repeating mutations or accepting any changed deployment identity, target
+  configuration, owner-only access shape, malformed response, or HTTP failure.
+
 - Recover usable MIME text with inconsistent declared byte sizes without trimming
   or rewriting the source, and omit unsupported file attachments from body
   extraction without fetching documents. Preserve incomplete coverage through
