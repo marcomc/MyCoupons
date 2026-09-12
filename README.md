@@ -173,6 +173,11 @@ The example configuration contains product defaults only.
 - Detect explicitly introduced coupon codes from independent subject, plain-text,
   and rendered-HTML spans, and retain source text as notes. Sender is provenance
   metadata and cannot support an asserted merchant or offer field.
+  Explicit `coupon code`, promo/discount-code, and `codice sconto` forms remain
+  deterministic. Ambiguous bare Italian `codice` and English `use the code`
+  forms are left to evidence-gated AI rather than a proximity heuristic; this
+  avoids treating authentication tokens as coupons without excluding mixed
+  account-and-offer messages.
   Deterministic candidates currently require review. Tokens end at whitespace;
   one matching pair of outer ASCII quotes or angle brackets may wrap a token.
   Internal punctuation is never silently removed. Introducers require whitespace

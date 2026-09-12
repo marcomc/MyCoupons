@@ -49,6 +49,26 @@ test('subject is independent factual evidence while sender remains metadata only
   assert.equal(ctx.normalizeCandidate_(senderOnly, {subject: 'Coupon code SAVE20', sender: 'Brand', incomplete: false}).merchant, '');
 });
 
+test('generic code introductions stay with grounded AI while explicit forms remain deterministic', () => {
+  const {ctx, properties} = harness(); properties.GEMINI_API_KEY = 'test-key';
+  const verification = {subject: 'Account: codice di verifica monouso', text: 'Notifica codice di verifica. Inserisci il codice di verifica entro 20 minuti. DEMO123. Nota: il codice scadrà 20 minuti dalla consegna.', incomplete: false};
+  assert.deepEqual(Array.from(ctx.deterministicCandidates_(verification)), []);
+  const empty = {fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})})};
+  const verificationOutcome = ctx.extractCouponOutcome_(verification, empty);
+  assert.equal(verificationOutcome.verifiedNonOffer, true);
+  assert.deepEqual(Array.from(ctx.deterministicCandidates_({text: 'Use the code LOGIN77 to verify your account.', incomplete: false})), []);
+  assert.deepEqual(Array.from(ctx.deterministicCandidates_({text: 'Coupon code SAVE20 Promo code PLUS20 Discount code LESS20 Codice sconto ÈTÉ+20', incomplete: false}), c => c.code),
+    ['SAVE20', 'PLUS20', 'LESS20', 'ÈTÉ+20']);
+  const genericCoupon = {text: 'Brand promo: usa il codice ÈTÉ+20', incomplete: false};
+  assert.deepEqual(Array.from(ctx.deterministicCandidates_(genericCoupon)), []);
+  const ai = aiResponse({code: 'ÈTÉ+20', evidence: {merchant: {quote: 'Brand promo: usa il codice ÈTÉ+20'}, code: {quote: 'Brand promo: usa il codice ÈTÉ+20'}}});
+  ctx.callGeminiModel_ = () => ai;
+  assert.equal(ctx.extractCouponOutcome_(genericCoupon).candidates[0].code, 'ÈTÉ+20');
+  const mixed = {text: verification.text + ' Brand coupon code SAVE20', incomplete: false};
+  assert.deepEqual(Array.from(ctx.extractCouponOutcome_(mixed, empty).candidates, c => c.code), ['SAVE20']);
+  assert.equal(ctx.extractCouponOutcome_({...mixed, incomplete: true}, empty).verifiedNonOffer, false);
+});
+
 test('AI extraction rejects fenced or unknown responses before transport', () => {
   const {ctx} = harness();
   assert.throws(() => ctx.parseAICandidates_({text: "```json{}"}, {text: 'x'}), /AI/);

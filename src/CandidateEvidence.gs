@@ -52,13 +52,15 @@ function deterministicCandidates_(message) {
   return deterministicCandidateOutcome_(message).candidates;
 }
 function deterministicCandidateOutcome_(message) {
-  // Only explicit code syntax is deterministic. Preserve the full bounded terms
-  // and require review: a regex cannot establish the completeness of an offer.
+  // Only unambiguous offer syntax is deterministic. Generic code wording also
+  // occurs in authentication messages, so leave it to the grounded AI extractor.
+  // Preserve the full bounded terms and require review: a regex cannot establish
+  // the completeness of an offer.
   const source = candidateSource_(message);
   const codes = [];
   let complete = true;
   source.spans.forEach(function (text) {
-    const re = /(?:^|[^\p{L}\p{N}\p{M}_])(?:coupon\s+code|promo(?:tional)?\s+code|discount\s+code|use\s+(?:the\s+)?code|codice\s+sconto|codice(?!\s+sconto(?:\s|[:=]|$)))(?:\s*[:=]\s*|\s+(?:is\b\s+)?)(\S+)/giu;
+    const re = /(?:^|[^\p{L}\p{N}\p{M}_])(?:coupon\s+code|promo(?:tional)?\s+code|discount\s+code|codice\s+sconto)(?:\s*[:=]\s*|\s+(?:is\b\s+)?)(\S+)/giu;
     let match;
     while ((match = re.exec(text))) {
       const code = codeLexemes_(match[1])[0];
