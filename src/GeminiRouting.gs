@@ -100,11 +100,10 @@ function validateGeminiRequest_(request) {
     if (!image || typeof image !== 'object' || typeof image.mimeType !== 'string' ||
       !/^image\/(?:jpeg|png|gif|webp)$/i.test(image.mimeType) ||
       typeof image.data !== 'string' || image.data.length > MC.maxImageBytes * 2 ||
-      !/^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2,3})?$/.test(image.data)) {
+      !validBase64Url_(image.data) || image.data.indexOf('=') >= 0) {
       fail_('GEMINI_REQUEST');
     }
-    const padding = image.data.length % 4;
-    const decodedBytes = Math.floor(image.data.length * 3 / 4) - (padding === 2 ? 1 : padding === 3 ? 2 : 0);
+    const decodedBytes = base64UrlByteLength_(image.data);
     if (decodedBytes > MC.maxImageBytes || totalImageBytes + decodedBytes > MC.maxTotalImageBytes) {
       fail_('GEMINI_REQUEST');
     }

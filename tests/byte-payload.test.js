@@ -98,7 +98,7 @@ test('signed inline, attachment and remote images preserve signature, dimensions
       assert.equal(reads, external ? 1 : 0);
       assert.equal(record.dimensions.width, 200); assert.equal(record.dimensions.height, 384);
       assert.deepEqual(Array.from(record.bytes), signed(png));
-      assert.equal(ctx.Utilities.base64EncodeWebSafe(record.bytes), Buffer.from(png).toString('base64url'));
+      assert.equal(ctx.Utilities.base64EncodeWebSafe(record.bytes), Buffer.from(png).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'));
     }
   }
   const {ctx} = harness(); strictUtilities(ctx);
@@ -155,6 +155,31 @@ test('synthetic Advanced Gmail full message reaches canonicalization, evidenced 
   assert.equal(calls, 1);
   assert.equal(outcome.candidates[0].code, 'ÉTÉ+20');
   assert.equal(outcome.archiveAllowed, false); // Unsupported MIME coverage still requires review.
+});
+
+test('padded Apps Script image encoding canonicalizes every remainder before Gemini transport', () => {
+  for (const bytes of [[255], [255, 1], [255, 1, 2]]) {
+    for (const imageBytes of [bytes, signed(bytes)]) {
+      const {ctx, properties} = harness(); properties.GEMINI_API_KEY = 'synthetic-key';
+      const utilityOutput = ctx.Utilities.base64EncodeWebSafe(imageBytes);
+      const expected = Buffer.from(bytes).toString('base64url');
+      assert.equal(utilityOutput, Buffer.from(bytes).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'));
+      let request;
+      const outcome = ctx.extractCouponOutcome_({text: 'Brand coupon code SAVE20', incomplete: false,
+        images: [{mimeType: 'image/png', bytes: imageBytes, sourceId: 'image'}]}, {fetch: (_, options) => {
+          request = JSON.parse(options.payload);
+          return {status: 200, body: JSON.stringify({candidates: [{content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})};
+        }});
+      const data = request.contents[0].parts[1].inlineData.data;
+      assert.equal(data, expected);
+      assert.deepEqual(Array.from(Buffer.from(data, 'base64url')), bytes);
+      assert.equal(outcome.status, 'complete');
+    }
+  }
+  const {ctx, properties} = harness(); properties.GEMINI_API_KEY = 'synthetic-key';
+  ctx.Utilities.base64EncodeWebSafe = () => 'AA=';
+  assert.throws(() => ctx.extractCouponOutcome_({text: 'offer', incomplete: false,
+    images: [{mimeType: 'image/png', bytes: [0], sourceId: 'image'}]}), e => ctx.errorCode_(e) === 'AI');
 });
 
 test('image byte budgets reject oversized arrays and base64 before decode or byte copying', () => {

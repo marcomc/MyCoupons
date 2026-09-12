@@ -14,7 +14,7 @@ function harness({sourceOrder, vendorLast = false} = {}) {
       computeDigest: (_, s) => [...crypto.createHash('sha256').update(s).digest()],
       base64Decode: value => [...Buffer.from(value, 'base64')],
       base64DecodeWebSafe: value => [...Buffer.from(value.replace(/-/g, '+').replace(/_/g, '/'), 'base64')],
-      base64EncodeWebSafe: bytes => Buffer.from(bytes).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+      base64EncodeWebSafe: bytes => Buffer.from(bytes).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
       newBlob: bytes => ({getDataAsString: charset => Buffer.from(bytes).toString(
         String(charset || 'utf8').toLowerCase() === 'iso-8859-1' ? 'latin1' : 'utf8')}),
       formatDate: (d, zone, format) => {

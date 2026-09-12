@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Canonicalize padded Apps Script base64url image output before Gemini request
+  validation, preserving signed and unsigned source bytes. Count every decoded
+  unpadded remainder exactly before enforcing image and aggregate limits, and
+  classify invalid Gemini requests without an opaque internal error.
+
 - Accept Advanced Gmail byte-array payloads alongside REST base64url for MIME
   text, inline images, and attachments. Validate every byte and declared size,
   preserve Unicode and transport content, and interpret signed image bytes
