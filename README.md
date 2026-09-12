@@ -62,6 +62,10 @@ The example configuration contains product defaults only.
 - Process at most 50 messages per run, streaming one canonical
   message through row persistence before fetching the next. Final journal
   states are skipped before fetching, and Gmail is never mutated by this reader.
+  A lock-scoped journal snapshot indexes message states and row locations;
+  per-message persistence checks only the target cells and updates the snapshot
+  after exact readback. Ambiguous writes invalidate the session until the next
+  run reloads durable state. Notification deltas come from that durable state.
 - Canonical message payloads preserve the message ID, thread ID, received time,
   sender, subject, plain text, raw HTML, and canonical Gmail link. MIME
   alternatives remain independent; unsupported content marks the payload

@@ -10,7 +10,7 @@ function sheet(rows, failWrites = 0) {
     getDataRange: () => ({getValues: () => values.map(row => row.slice()),
       getDisplayValues: () => values.map(row => row.map(value => String(value ?? '')))}),
     getRange: (r, c, rc, cc) => ({
-      getValues: () => values.slice(r - 1, r - 1 + rc).map(row => row.slice(c - 1, c - 1 + cc)),
+      getValues: () => Array.from({length: rc}, (_, i) => Array.from({length: cc}, (_, j) => values[r - 1 + i]?.[c - 1 + j] ?? '')),
       getDisplayValues: () => values.slice(r - 1, r - 1 + rc).map(row => row.slice(c - 1, c - 1 + cc).map(value => String(value ?? ''))),
       setValues: next => {
         if (failWrites > 0) { failWrites--; throw new Error('temporary write failure'); }

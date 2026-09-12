@@ -79,6 +79,12 @@ function readCouponMessages_(state, onMessage, accumulator) {
 }
 
 function scanCouponMessages_(state, onMessage, accumulator) {
+  return withMessageJournal_(state.journalSheet, function () {
+    return scanCouponMessagesInSession_(state, onMessage, accumulator);
+  });
+}
+
+function scanCouponMessagesInSession_(state, onMessage, accumulator) {
   if (typeof onMessage !== 'function') fail_('STATE');
   const result = accumulator || {messages: [], errors: [], truncated: false};
   let scan = loadMailboxScanState_(state.recoveryStart, state.config && mailboxInstallationId_(state.config));
@@ -156,7 +162,7 @@ function scanCouponMessages_(state, onMessage, accumulator) {
 }
 
 function mailboxInstallationId_(config) {
-  return digest_(JSON.stringify([config.ownerEmail, config.spreadsheetId, config.sheetName, config.initialDate, config.timeZone]));
+  return digest_(JSON.stringify([config.ownerEmail.toLowerCase(), config.spreadsheetId, config.sheetName, config.initialDate, config.timeZone]));
 }
 
 function mailboxListPage_(scan, deadlineMs) {

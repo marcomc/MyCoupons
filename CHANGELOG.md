@@ -31,6 +31,8 @@
   rejection through an otherwise identical tokenless REST read without moving
   a scan window. An owned, lock-safe continuation drains backlog in bounded
   execution slots, with installation-scoped lifecycle and image deadlines.
+  Indexed journal sessions avoid per-message full-sheet rereads and retain
+  fail-closed write verification and recovery after ambiguous writes.
 - Retain code-less messages as awaiting extraction, without false failure
   notifications, hot retries or archive authority; automatic AI consumption
   remains a separate increment.

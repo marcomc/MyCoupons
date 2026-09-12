@@ -10,7 +10,7 @@ function sheet(headers) {
     getDataRange: () => ({getValues: () => rows.map(r => r.slice()),
       getDisplayValues: () => rows.map(r => r.map(v => String(v ?? '')))}),
     getRange: (r, c, nr, nc) => ({
-      getValues: () => Array.from({length: nr}, (_, i) => (rows[r - 1 + i] || []).slice(c - 1, c - 1 + nc)),
+      getValues: () => Array.from({length: nr}, (_, i) => Array.from({length: nc}, (_, j) => rows[r - 1 + i]?.[c - 1 + j] ?? '')),
       getDisplayValues: () => Array.from({length: nr}, (_, i) => (rows[r - 1 + i] || []).slice(c - 1, c - 1 + nc).map(v => String(v ?? ''))),
       setValues: values => values.forEach((row, i) => {
         rows[r - 1 + i] ||= [];
@@ -305,4 +305,128 @@ test('installation replacement cancels only the old continuation and rollback pr
     assert.equal(f.triggers.length, 0); assert.equal(f.deleted.length, 1);
     assert.equal(JSON.parse(f.properties.MYCOUPONS_CONFIG).spreadsheetId, fail ? f.config.spreadsheetId : 'replacement-sheet');
   }
+});
+
+test('mixed-case owner identity works across creation resume case-only reconfiguration and removal', () => {
+  const f = fixture(150);
+  f.config.ownerEmail = 'Owner@Example.COM';
+  f.properties.MYCOUPONS_CONFIG = JSON.stringify(f.config);
+  assert.equal(f.ctx.runScheduledImport().errors.length, 0);
+  let record = JSON.parse(f.properties.MYCOUPONS_MAILBOX_CONTINUATION);
+  assert.equal(record.ownerEmail, 'owner@example.com');
+  const uid = record.triggerId;
+  f.ctx.installReviewEditTrigger_ = () => ({created: false});
+  f.ctx.installDailyImportTrigger = () => ({created: false});
+  const ensure = f.ctx.ensureSheetState_;
+  f.ctx.ensureSheetState_ = input => {
+    f.properties.MYCOUPONS_CONFIG = JSON.stringify(input);
+    return {...f.state, label: {id: 'label'}};
+  };
+  const lower = {...f.config, ownerEmail: 'owner@example.com'}; delete lower.labelId;
+  f.ctx.installMyCoupons(lower);
+  assert.equal(f.deleted.length, 0); assert.equal(f.triggers[0].getUniqueId(), uid);
+  f.ctx.ensureSheetState_ = ensure;
+  // Comparisons also tolerate an already-persisted mixed-case owner spelling.
+  record.ownerEmail = 'OWNER@example.com'; f.properties.MYCOUPONS_MAILBOX_CONTINUATION = JSON.stringify(record);
+  assert.equal(f.continuation().errors.length, 0); assert.equal(f.fetched.length, 100);
+  f.ctx.removeDailyImportTrigger(); assert.equal(f.triggers.length, 0);
+  const completed = fixture(1); completed.config.ownerEmail = 'OWNER@EXAMPLE.COM';
+  completed.properties.MYCOUPONS_CONFIG = JSON.stringify(completed.config);
+  assert.equal(completed.ctx.runScheduledImport().errors.length, 0); assert.equal(completed.triggers.length, 0);
+});
+
+test('scheduled batches use three full journal reads regardless of message slots and existing journal size', () => {
+  const f = fixture(100);
+  for (let i = 0; i < 2000; i++) {
+    const entry = f.ctx.newMessageState_((100000 + i).toString(16)); entry.status = 'ignored';
+    f.state.journalSheet.rows.push([entry.messageId, JSON.stringify(entry)]);
+  }
+  let fullReads = 0; const original = f.state.journalSheet.getDataRange;
+  f.state.journalSheet.getDataRange = () => {
+    const range = original(); return {...range, getValues: () => { fullReads++; return range.getValues(); }};
+  };
+  assert.equal(f.ctx.runScheduledImport().errors.length, 0);
+  assert.equal(f.fetched.length, 50); assert.equal(fullReads, 3);
+  assert.equal(f.continuation().errors.length, 0);
+  assert.equal(f.fetched.length, 100); assert.equal(fullReads, 6);
+});
+
+test('journal sessions isolate caller mutations, nest by exact sheet and reload after exit', () => {
+  const {ctx} = harness(); const first = sheet(['Message ID', 'State JSON']); const second = sheet(['Message ID', 'State JSON']);
+  ctx.saveMessageState_(first, ctx.newMessageState_('a'));
+  ctx.withMessageJournal_(first, () => {
+    const entry = ctx.getMessageState_(first, 'a'); entry.status = 'ignored';
+    assert.equal(ctx.getMessageState_(first, 'a').status, 'pending');
+    ctx.withMessageJournal_(second, () => ctx.saveMessageState_(second, ctx.newMessageState_('b')));
+    ctx.saveMessageState_(first, entry); entry.status = 'failed';
+    assert.equal(ctx.getMessageState_(first, 'a').status, 'ignored');
+  });
+  const modified = JSON.parse(first.rows[1][1]); modified.status = 'review'; first.rows[1][1] = JSON.stringify(modified);
+  assert.equal(ctx.getMessageState_(first, 'a').status, 'review');
+  assert.equal(ctx.getMessageState_(second, 'b').status, 'pending');
+});
+
+test('indexed writes reject reordered rows, changed JSON, new duplicates and occupied append targets', () => {
+  for (const kind of ['reorder', 'json', 'duplicate', 'append']) {
+    const {ctx} = harness(); const journal = sheet(['Message ID', 'State JSON']);
+    ctx.saveMessageState_(journal, ctx.newMessageState_('a')); ctx.saveMessageState_(journal, ctx.newMessageState_('b'));
+    ctx.withMessageJournal_(journal, () => {
+      const entry = ctx.getMessageState_(journal, 'a'); entry.status = 'ignored';
+      if (kind === 'reorder') [journal.rows[1], journal.rows[2]] = [journal.rows[2], journal.rows[1]];
+      if (kind === 'json') journal.rows[1][1] = JSON.stringify({...entry, status: 'review'});
+      if (kind === 'duplicate') journal.rows.push(journal.rows[1].slice());
+      if (kind === 'append') {
+        const range = journal.getRange;
+        journal.getRange = (...args) => args[0] === 4 ? {...range(...args), getValues: () => [['foreign', 'unseen']]} : range(...args);
+      }
+      const before = JSON.stringify(journal.rows);
+      assert.throws(() => ctx.saveMessageState_(journal, kind === 'append' ? ctx.newMessageState_('c') : entry), /STATE/);
+      assert.equal(JSON.stringify(journal.rows), before);
+      assert.throws(() => ctx.getMessageState_(journal, 'a'), /STATE/);
+      assert.throws(() => ctx.readMessageJournal_(journal), /STATE/);
+    });
+  }
+});
+
+test('ambiguous final journal writes preserve durable outcomes and recover without duplicate rows', () => {
+  for (const mode of ['set-then-throw', 'readback-mismatch', 'not-written']) {
+    const f = fixture(10); f.messages.splice(0, 9);
+    const getRange = f.state.journalSheet.getRange; let failed = false;
+    f.state.journalSheet.getRange = (...args) => {
+      const range = getRange(...args); let corruptReadback = false;
+      return {...range, setValues: values => {
+        const final = args[1] === 1 && values[0][1] && JSON.parse(values[0][1]).status === 'review';
+        if (final && !failed) {
+          failed = true;
+          if (mode !== 'not-written') range.setValues(values);
+          if (mode === 'readback-mismatch') { corruptReadback = true; return; }
+          throw new Error('ambiguous transport');
+        }
+        range.setValues(values);
+      }, getValues: () => corruptReadback ? [['a', 'unexpected readback']] : range.getValues()};
+    };
+    const result = f.ctx.runScheduledImport();
+    assert.equal(f.state.couponSheet.rows.length, 2, mode);
+    assert.equal(result.review, mode === 'not-written' ? 0 : 1, mode);
+    assert.equal(f.ctx.getMessageState_(f.state.journalSheet, 'a').status, mode === 'not-written' ? 'processing' : 'review', mode);
+    assert.equal(f.triggers.length, 1, mode);
+    const retried = f.continuation();
+    assert.equal(retried.review, mode === 'not-written' ? 1 : 0, mode);
+    assert.equal(f.state.couponSheet.rows.length, 2, mode);
+    assert.equal(f.ctx.getMessageState_(f.state.journalSheet, 'a').status, 'review', mode);
+    assert.equal(f.triggers.length, 0, mode);
+  }
+});
+
+test('durable summary recovers confirmed counts and failed-review links without callback outcomes', () => {
+  const f = fixture();
+  const confirmed = f.ctx.newMessageState_('a'); confirmed.status = 'confirmed'; confirmed.rowNumbers = [2, 3];
+  const review = f.ctx.newMessageState_('b'); review.status = 'review'; review.rowNumbers = [4];
+  f.ctx.saveMessageState_(f.state.journalSheet, confirmed); f.ctx.saveMessageState_(f.state.journalSheet, review);
+  const before = {a: {...confirmed, rowNumbers: [2]}, b: {...review, status: 'failed'}};
+  const summary = f.ctx.scheduledSummary_(f.state, before, {messages: [], errors: [], imported: 0});
+  assert.equal(summary.imported, 1); assert.equal(JSON.stringify(summary.importedIds), '["a"]');
+  assert.equal(summary.review, 1); assert.ok(summary.links.some(link => link.endsWith('range=A4')));
+  const unchanged = f.ctx.scheduledSummary_(f.state, f.ctx.readMessageJournal_(f.state.journalSheet), {messages: [], errors: []});
+  assert.equal(unchanged.imported, 0); assert.equal(unchanged.review, 0);
 });

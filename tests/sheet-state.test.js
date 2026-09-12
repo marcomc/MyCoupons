@@ -13,8 +13,7 @@ function sheetMock(name, rows = []) {
     getDataRange: () => ({getValues: () => values.map(row => row.slice()),
       getDisplayValues: () => values.map(row => row.map(value => String(value ?? '')))}),
     getRange: (row, column, rowCount, columnCount) => ({
-      getValues: () => values.slice(row - 1, row - 1 + rowCount)
-        .map(item => item.slice(column - 1, column - 1 + columnCount)),
+      getValues: () => Array.from({length: rowCount}, (_, r) => Array.from({length: columnCount}, (_, c) => values[row - 1 + r]?.[column - 1 + c] ?? '')),
       getDisplayValues: () => values.slice(row - 1, row - 1 + rowCount)
         .map(item => item.slice(column - 1, column - 1 + columnCount)
           .map(value => String(value ?? ''))),

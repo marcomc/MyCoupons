@@ -16,7 +16,7 @@ function mailboxContinuation_(config) {
     try { record = JSON.parse(raw); } catch (e) { fail_('STATE'); }
     if (!recordWithExactKeys_(record, ['version', 'ownerEmail', 'installationId', 'triggerId', 'budgetStartMs', 'runs']) ||
         record.version !== 1 || typeof record.installationId !== 'string' || !/^[a-f0-9]{64}$/.test(record.installationId) ||
-        typeof record.ownerEmail !== 'string' || record.ownerEmail !== String(Session.getEffectiveUser().getEmail()).toLowerCase() ||
+        typeof record.ownerEmail !== 'string' || record.ownerEmail.toLowerCase() !== String(Session.getEffectiveUser().getEmail()).toLowerCase() ||
         typeof record.triggerId !== 'string' || !/^[A-Za-z0-9_-]{0,200}$/.test(record.triggerId) ||
         !Number.isSafeInteger(record.budgetStartMs) || record.budgetStartMs < 0 ||
         !Number.isSafeInteger(record.runs) || record.runs < 0 || record.runs > MC_CONTINUATION_MAX_RUNS) fail_('STATE');
@@ -46,7 +46,7 @@ function beginMailboxContinuation_(config, event) {
   const owned = mailboxContinuation_(config);
   if (event && (!owned.trigger || !owned.record || typeof event.triggerUid !== 'string' ||
       event.triggerUid !== owned.record.triggerId)) fail_('RESOURCE');
-  let record = owned.record || {version: 1, ownerEmail: config.ownerEmail, installationId: mailboxInstallationId_(config), triggerId: '',
+  let record = owned.record || {version: 1, ownerEmail: config.ownerEmail.toLowerCase(), installationId: mailboxInstallationId_(config), triggerId: '',
     budgetStartMs: Date.now(), runs: 0};
   if (Date.now() >= record.budgetStartMs + 86400000) {
     record.budgetStartMs = Date.now(); record.runs = 0;
@@ -188,17 +188,18 @@ function scheduledSummary_(state, before, result) {
   const after = readMessageJournal_(state.journalSheet);
   const links = [];
   let review = 0;
-  (result.messages || []).forEach(function (message) {
+  Object.keys(after).forEach(function (messageId) {
+    const message = after[messageId];
     if (message.status !== 'review') return;
-    const prior = before[message.messageId];
+    const prior = before[messageId];
     const priorRows = prior && prior.rowNumbers || [];
     const recovered = prior && prior.status === 'failed';
-    const newRows = message.rows.filter(function (row) { return recovered || priorRows.indexOf(row) < 0; });
+    const newRows = message.rowNumbers.filter(function (row) { return recovered || priorRows.indexOf(row) < 0; });
     if (!newRows.length) return;
     review += newRows.length;
     newRows.forEach(function (row) { links.push(reviewLink_(state, row)); });
-    const source = gmailLink_(message.messageId);
-    if (sourceId_(source) !== message.messageId) fail_('STATE');
+    const source = gmailLink_(messageId);
+    if (sourceId_(source) !== messageId) fail_('STATE');
     links.push(source);
   });
   const errors = (result.errors || []).map(function (error) { return {messageId: String(error.messageId || ''), code: String(error.code || 'INTERNAL')}; });
@@ -216,9 +217,16 @@ function scheduledSummary_(state, before, result) {
   errors.forEach(function (error) {
     if (!uniqueErrors.some(function (item) { return item.messageId === error.messageId && item.code === error.code; })) uniqueErrors.push(error);
   });
-  const importedIds = (result.messages || []).filter(function (message) { return message.status === 'confirmed'; })
-    .map(function (message) { return String(message.messageId); }).sort();
-  return {imported: Number(result.imported) || 0, importedIds: importedIds, review: review, errors: uniqueErrors, links: links, omittedLinks: false};
+  let imported = 0;
+  const importedIds = Object.keys(after).filter(function (id) {
+    if (after[id].status !== 'confirmed') return false;
+    const prior = before[id];
+    const priorRows = prior && prior.status === 'confirmed' ? prior.rowNumbers : [];
+    const newRows = after[id].rowNumbers.filter(function (row) { return priorRows.indexOf(row) < 0; });
+    imported += newRows.length;
+    return newRows.length > 0;
+  }).sort();
+  return {imported: imported, importedIds: importedIds, review: review, errors: uniqueErrors, links: links, omittedLinks: false};
 }
 
 function reviewLink_(state, row) {

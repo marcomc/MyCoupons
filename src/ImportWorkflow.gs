@@ -1,6 +1,13 @@
 /* Deterministic, read-only import orchestration. Gmail mutations are deliberately absent. */
 function runImportWorkflow_(input) {
-  const state = input || ensureSheetState_();
+  return withLock_(function () {
+    const state = input || ensureSheetState_();
+    if (!state.couponSheet || !state.journalSheet) fail_('STATE');
+    return withMessageJournal_(state.journalSheet, function () { return runImportWorkflowInSession_(state); });
+  }, input && input._deadlineMs);
+}
+
+function runImportWorkflowInSession_(state) {
   if (!state.couponSheet || !state.journalSheet) fail_('STATE');
   if (!Array.isArray(state.messages)) {
     // The scanner invokes this callback for one durable pending ID at a time.

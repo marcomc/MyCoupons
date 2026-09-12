@@ -10,7 +10,7 @@ function sheetMock(rows = [['Message ID', 'State JSON']]) {
     getDataRange: () => ({getValues: () => values.map(row => row.slice()),
       getDisplayValues: () => values.map(row => row.map(value => String(value ?? '')))}),
     getRange: (row, column, rowCount, columnCount) => ({
-      getValues: () => values.slice(row - 1, row - 1 + rowCount).map(item => item.slice(column - 1, column - 1 + columnCount)),
+      getValues: () => Array.from({length: rowCount}, (_, r) => Array.from({length: columnCount}, (_, c) => values[row - 1 + r]?.[column - 1 + c] ?? '')),
       getDisplayValues: () => values.slice(row - 1, row - 1 + rowCount).map(item => item.slice(column - 1, column - 1 + columnCount).map(value => String(value ?? ''))),
       setValues: next => { for (let r = 0; r < rowCount; r++) { while (values.length < row + r) values.push([]); while (values[row - 1 + r].length < column + columnCount - 1) values[row - 1 + r].push(''); for (let c = 0; c < columnCount; c++) values[row - 1 + r][column - 1 + c] = next[r][c]; } }
     }), _values: values

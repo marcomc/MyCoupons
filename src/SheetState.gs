@@ -11,6 +11,7 @@ const MC_LEGACY_MESSAGE_STATE_KEYS = Object.freeze([
   'candidateKeys', 'rowNumbers', 'lastAttemptAt', 'nextRetryAt', 'lastError',
   'failureStage', 'outcome', 'labelApplied', 'archived', 'updatedAt'
 ]);
+var MC_JOURNAL_SESSION = null;
 
 function ensureSheetState_(input, deadlineMs) {
   const c = validateConfig_(input || config_());
@@ -303,9 +304,16 @@ function nonNegativeIntegerArray_(value) {
 }
 
 function readMessageJournal_(sheet) {
+  const session = activeMessageJournal_(sheet);
+  return JSON.parse(JSON.stringify((session || loadMessageJournal_(sheet)).states));
+}
+
+function loadMessageJournal_(sheet) {
   assertHeaderRow_(sheet, MC.journalHeaders, true);
   const rows = sheet.getDataRange().getValues();
   const states = Object.create(null);
+  const rowById = Object.create(null);
+  const rawById = Object.create(null);
   for (let index = 1; index < rows.length; index++) {
     const row = rows[index];
     const messageId = row[0];
@@ -315,47 +323,79 @@ function readMessageJournal_(sheet) {
     try { state = JSON.parse(row[1]); } catch (e) { fail_('STATE'); }
     if (!validMessageState_(state) || state.messageId !== messageId || states[messageId]) fail_('STATE');
     states[messageId] = state;
+    rowById[messageId] = index + 1;
+    rawById[messageId] = row[1];
   }
-  return states;
+  return {sheet: sheet, states: states, rowById: rowById, rawById: rawById, lastRow: rows.length, valid: true};
+}
+
+function activeMessageJournal_(sheet) {
+  if (!MC_JOURNAL_SESSION || MC_JOURNAL_SESSION.sheet !== sheet) return null;
+  if (!MC_JOURNAL_SESSION.valid) fail_('STATE');
+  return MC_JOURNAL_SESSION;
+}
+
+function withMessageJournal_(sheet, operation) {
+  return withLock_(function () {
+    if (activeMessageJournal_(sheet)) return operation();
+    const previous = MC_JOURNAL_SESSION;
+    MC_JOURNAL_SESSION = loadMessageJournal_(sheet);
+    try { return operation(); } finally { MC_JOURNAL_SESSION = previous; }
+  });
 }
 
 function getMessageState_(sheet, messageId) {
   if (typeof messageId !== 'string' || !messageId) fail_('STATE');
-  return readMessageJournal_(sheet)[messageId] || null;
+  const session = activeMessageJournal_(sheet);
+  const state = (session || loadMessageJournal_(sheet)).states[messageId];
+  return state ? JSON.parse(JSON.stringify(state)) : null;
 }
 
 function saveMessageState_(sheet, state) {
   if (!validMessageState_(state)) fail_('STATE');
-  return withLock_(function () { return saveMessageStateUnlocked_(sheet, state); });
+  return withMessageJournal_(sheet, function () { return saveMessageStateUnlocked_(sheet, state); });
 }
 
 function saveMessageStateUnlocked_(sheet, state) {
-  readMessageJournal_(sheet);
-  const row = findJournalRow_(sheet, state.messageId);
-  const values = [[state.messageId, JSON.stringify(state)]];
-  if (row) sheet.getRange(row, 1, 1, 2).setValues(values);
-  else sheet.getRange(Math.max(2, sheet.getLastRow() + 1), 1, 1, 2).setValues(values);
-  const persisted = getMessageState_(sheet, state.messageId);
-  if (!persisted) fail_('STATE');
-  return persisted;
+  const session = activeMessageJournal_(sheet);
+  if (!session || !validMessageState_(state)) fail_('STATE');
+  try {
+    const id = state.messageId;
+    const existing = session.rowById[id];
+    const row = existing || Math.max(2, session.lastRow + 1);
+    if (sheet.getLastRow() !== session.lastRow) fail_('STATE');
+    const range = sheet.getRange(row, 1, 1, 2);
+    const current = journalCells_(range);
+    if (existing) {
+      if (current[0] !== id || current[1] !== session.rawById[id]) fail_('STATE');
+    } else if (current[0] !== '' || current[1] !== '') fail_('STATE');
+    const serialized = JSON.stringify(state);
+    range.setValues([[id, serialized]]);
+    const stored = journalCells_(range);
+    if (stored[0] !== id || stored[1] !== serialized) fail_('STATE');
+    // Never expose speculative state. A failed/ambiguous write invalidates the
+    // session; the next invocation reloads actual durable rows before retrying.
+    session.states[id] = JSON.parse(serialized);
+    session.rawById[id] = serialized; session.rowById[id] = row;
+    session.lastRow = Math.max(session.lastRow, row);
+    return JSON.parse(serialized);
+  } catch (e) {
+    session.valid = false;
+    throw e;
+  }
 }
 
-function findJournalRow_(sheet, messageId) {
-  const rows = sheet.getDataRange().getValues();
-  let found = 0;
-  for (let index = 1; index < rows.length; index++) {
-    if (rows[index][0] === messageId) {
-      if (found) fail_('STATE');
-      found = index + 1;
-    }
-  }
-  return found;
+function journalCells_(range) {
+  const values = range.getValues();
+  if (!Array.isArray(values) || values.length !== 1 || !Array.isArray(values[0]) || values[0].length !== 2 ||
+      typeof values[0][0] !== 'string' || typeof values[0][1] !== 'string') fail_('STATE');
+  return values[0];
 }
 
 function updateMessageState_(sheet, messageId, patch) {
   if (!plainObjectWithKeys_(patch, MC_MESSAGE_STATE_KEYS) ||
     ownValue_(patch, 'version') !== undefined || ownValue_(patch, 'messageId') !== undefined) fail_('STATE');
-  return withLock_(function () {
+  return withMessageJournal_(sheet, function () {
     const current = getMessageState_(sheet, messageId) || newMessageState_(messageId);
     const next = Object.assign({}, current, patch);
     return saveMessageStateUnlocked_(sheet, next);
