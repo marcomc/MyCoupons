@@ -31,6 +31,14 @@ function installMyCoupons(input) {
     if (previous) {
       try { previousConfig = validateConfig_(JSON.parse(previous)); } catch (e) { fail_('CONFIG'); }
     }
+    // Reconfiguration cannot carry an old mailbox continuation into a new
+    // resource. Preflight before changing configuration; a failed installation
+    // can safely resume through its existing daily trigger.
+    const continuation = mailboxContinuation_(previousConfig);
+    if (continuation.record && mailboxInstallationId_(config) !== continuation.record.installationId) {
+      stopMailboxContinuation_(continuation);
+      props_().deleteProperty(MC_CONTINUATION_KEY);
+    }
     if (config.spreadsheetId) {
       assertPrivateSpreadsheet_(openSpreadsheetById_(config.spreadsheetId), config);
     } else if (!config.spreadsheetId) {

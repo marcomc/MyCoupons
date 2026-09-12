@@ -1,11 +1,31 @@
 /* Deterministic, read-only import orchestration. Gmail mutations are deliberately absent. */
 function runImportWorkflow_(input) {
-  const state = input || ensureSheetState_();
-  if (!state.couponSheet || !state.journalSheet || !Array.isArray(state.messages)) {
-    const read = readCouponMessages_(state);
-    state.messages = read.messages;
-    state.errors = read.errors;
-    state.truncated = read.truncated;
+  return withLock_(function () {
+    const state = input || ensureSheetState_();
+    if (!state.couponSheet || !state.journalSheet) fail_('STATE');
+    return withMessageJournal_(state.journalSheet, function () { return runImportWorkflowInSession_(state); });
+  }, input && input._deadlineMs);
+}
+
+function runImportWorkflowInSession_(state) {
+  if (!state.couponSheet || !state.journalSheet) fail_('STATE');
+  if (!Array.isArray(state.messages)) {
+    // The scanner invokes this callback for one durable pending ID at a time.
+    // Consequently image acquisition cannot defer every sheet write until the
+    // complete mailbox page has been fetched.
+    const streamed = {imported: 0, review: 0, errors: [], messages: [], truncated: false};
+    try {
+      readCouponMessages_(state, function (message) {
+        return processCouponMessage_(state, message);
+      }, streamed);
+    } catch (e) {
+      streamed.errors.push({messageId: '', code: errorCode_(e)});
+    }
+    streamed.messages.forEach(function (outcome) {
+      if (outcome.status === 'confirmed') streamed.imported += outcome.rows.length;
+      if (outcome.status === 'review') streamed.review += outcome.rows.length;
+    });
+    return streamed;
   }
   const result = {imported: 0, review: 0, errors: state.errors || [], messages: [], truncated: !!state.truncated};
   state.messages.forEach(function (message) {
@@ -66,7 +86,9 @@ function processCouponMessage_(state, message) {
     });
     journal.outcome = messageOutcome_(statuses);
     journal.status = journal.outcome === 'archive' ? 'confirmed' : 'review';
-    if (journal.outcome === 'empty') journal.status = 'failed';
+    // No deterministic code is not proof of a non-offer. Retain the source ID
+    // for the later AI pass without retrying it or granting archive authority.
+    if (journal.outcome === 'empty') journal.status = 'awaiting_extraction';
     journal.failureStage = ''; journal.updatedAt = new Date().toISOString();
     saveMessageState_(state.journalSheet, journal);
     return {messageId: message.id, status: journal.status, rows: rows};
@@ -76,6 +98,11 @@ function processCouponMessage_(state, message) {
     saveMessageState_(state.journalSheet, journal);
     return {messageId: message.id, status: 'failed', rows: journal.rowNumbers.slice(), error: journal.lastError};
   }
+}
+
+function awaitingMessageExtraction_(journal) {
+  return journal.status === 'awaiting_extraction' ||
+    journal.status === 'failed' && journal.outcome === 'empty' && !journal.failureStage && !journal.lastError;
 }
 
 function candidateDedupeKey_(message, candidate, index) {

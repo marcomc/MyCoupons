@@ -25,6 +25,21 @@
 
 ### Added
 
+- Add a frozen, resumable Gmail mailbox scanner that discovers all default-search
+  mail independently of labels and read state, persists pending IDs before
+  bounded streaming reads, retries failed IDs durably, and validates token
+  rejection through an otherwise identical tokenless REST read without moving
+  a scan window. An owned, lock-safe continuation drains backlog in bounded
+  execution slots, with installation-scoped lifecycle and image deadlines.
+  Indexed journal sessions avoid per-message full-sheet rereads and retain
+  fail-closed write verification and recovery after ambiguous writes.
+  Future recovery dates wait without querying Gmail or advancing the cursor.
+  Paused continuations retain a wake for rolling budget resets, and verified
+  daily lifecycle failures reach the owner without authorizing unknown events.
+- Retain code-less messages as awaiting extraction, without false failure
+  notifications, hot retries or archive authority; automatic AI consumption
+  remains a separate increment.
+
 - Add an extraction outcome contract that distinguishes complete and incomplete
   coverage without letting an empty candidate list authorize archiving.
 

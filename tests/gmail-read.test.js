@@ -10,144 +10,99 @@ function sheetMock(rows = [['Message ID', 'State JSON']]) {
     getDataRange: () => ({getValues: () => values.map(row => row.slice()),
       getDisplayValues: () => values.map(row => row.map(value => String(value ?? '')))}),
     getRange: (row, column, rowCount, columnCount) => ({
-      getValues: () => values.slice(row - 1, row - 1 + rowCount)
-        .map(item => item.slice(column - 1, column - 1 + columnCount)),
-      getDisplayValues: () => values.slice(row - 1, row - 1 + rowCount)
-        .map(item => item.slice(column - 1, column - 1 + columnCount)
-          .map(value => String(value ?? ''))),
-      setValues: next => {
-        for (let r = 0; r < rowCount; r++) {
-          while (values.length < row + r) values.push([]);
-          while (values[row - 1 + r].length < column + columnCount - 1) values[row - 1 + r].push('');
-          for (let c = 0; c < columnCount; c++) values[row - 1 + r][column - 1 + c] = next[r][c];
-        }
-      }
-    }),
-    _values: values
+      getValues: () => Array.from({length: rowCount}, (_, r) => Array.from({length: columnCount}, (_, c) => values[row - 1 + r]?.[column - 1 + c] ?? '')),
+      getDisplayValues: () => values.slice(row - 1, row - 1 + rowCount).map(item => item.slice(column - 1, column - 1 + columnCount).map(value => String(value ?? ''))),
+      setValues: next => { for (let r = 0; r < rowCount; r++) { while (values.length < row + r) values.push([]); while (values[row - 1 + r].length < column + columnCount - 1) values[row - 1 + r].push(''); for (let c = 0; c < columnCount; c++) values[row - 1 + r][column - 1 + c] = next[r][c]; } }
+    }), _values: values
   };
 }
 
-function body(value) {
-  const bytes = Buffer.from(value, 'utf8');
-  return {data: bytes.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''), size: bytes.length};
-}
-
-function alternativeMessage(id = 'abc123') {
-  return {
-    id,
-    threadId: 'thread-' + id,
-    internalDate: String(Date.parse('2026-05-22T10:15:00Z')),
-    payload: {
-      mimeType: 'multipart/alternative',
-      headers: [{name: 'From', value: 'offers@example.com'}, {name: 'Subject', value: 'Save 20%'}],
-      parts: [
-        {mimeType: 'text/plain; charset=UTF-8', body: body('Plain coupon code SAVE20')},
-        {mimeType: 'text/html; charset=UTF-8', body: body('<p>HTML coupon code <strong>SAVE20</strong></p>')}
-      ]
-    }
-  };
-}
-
+function body(value) { const bytes = Buffer.from(value, 'utf8'); return {data: bytes.toString('base64url'), size: bytes.length}; }
+function message(id, receivedAtMs) { return {id, threadId: 'thread-' + id, internalDate: String(receivedAtMs), payload: {mimeType: 'text/plain', headers: [{name: 'From', value: 'offers@example.com'}, {name: 'Subject', value: 'Offer ' + id}], body: body('coupon code SAVE20')}}; }
 function installGmail(ctx, list, get) {
   const calls = {list: [], get: []};
-  ctx.Gmail.Users.Messages = {
-    list: (userId, options) => { calls.list.push({userId, options}); return list(options); },
-    get: (userId, id, options) => { calls.get.push({userId, id, options}); return get(id, options); }
-  };
+  ctx.UrlFetchApp = {fetch: (url, request) => {
+    assert.equal(request.followRedirects, false); assert.equal(request.muteHttpExceptions, true);
+    assert.equal(request.headers.Authorization, 'Bearer oauth-token');
+    const parsed = new URL(url); const options = Object.fromEntries(parsed.searchParams);
+    options.maxResults = Number(options.maxResults);
+    calls.list.push({userId: 'me', options});
+    try { const page = list(options); return {getResponseCode: () => 200, getContentText: () => JSON.stringify(page)}; }
+    catch (error) {
+      if (!error.code) throw error;
+      return {getResponseCode: () => error.code, getContentText: () => JSON.stringify({error: {code: error.code, message: error.message}})};
+    }
+  }};
+  ctx.Gmail.Users.Messages = {get: (userId, id, options) => { calls.get.push({userId, id, options}); return get(id, options); }};
   return calls;
 }
+function state(journal, startMs, deadlineMs) { return {journalSheet: journal, recoveryStart: startMs, _deadlineMs: deadlineMs}; }
 
-test('reads bounded Gmail pages and preserves independent canonical MIME representations', () => {
-  const {ctx} = harness();
-  const journal = sheetMock();
-  const label = {id: 'label-1', name: 'Shopping/Coupons'};
-  const calls = installGmail(ctx, options => {
-    assert.equal(JSON.stringify(options.labelIds), JSON.stringify([label.id]));
-    assert.equal(options.maxResults, 50);
-    assert.equal(options.q, 'after:2026/05/21');
-    assert.equal(options.pageToken, undefined);
-    return {messages: [{id: 'abc123'}, {id: 'deadbeef'}]};
-  }, id => id === 'abc123' ? alternativeMessage(id) : {
-    id,
-    threadId: 'thread-' + id,
-    internalDate: String(Date.parse('2026-05-23T10:15:00Z')),
-    payload: {mimeType: 'text/plain', headers: [], body: body('Another offer')}
-  });
-  const result = ctx.readGmailMessages_(label, Date.parse('2026-05-21T22:00:00Z'), journal);
-  assert.equal(result.errors.length, 0);
-  assert.equal(result.truncated, false);
-  assert.equal(result.messages.length, 2);
-  assert.deepEqual(JSON.parse(JSON.stringify(result.messages[0])), {
-    id: 'abc123', threadId: 'thread-abc123', receivedAt: '2026-05-22T10:15:00.000Z',
-    receivedAtMs: Date.parse('2026-05-22T10:15:00Z'), sender: 'offers@example.com', subject: 'Save 20%',
-    text: 'Plain coupon code SAVE20', html: '<p>HTML coupon code <strong>SAVE20</strong></p>',
-    link: 'https://mail.google.com/mail/u/0/#all/abc123', incomplete: false, images: []
-  });
-  assert.equal(result.messages[1].text, 'Another offer');
-  assert.equal(result.messages[1].html, '');
-  assert.equal(calls.get.length, 2);
+test('discovers all default-search mail in a frozen window without label or unread filters', () => {
+  const {ctx} = harness(); const journal = sheetMock();
+  const start = Date.parse('2026-05-21T22:00:00Z'); const end = Date.parse('2026-05-23T22:00:00Z');
+  ctx.saveMailboxScanState_(ctx.mailboxScanState_(start, end));
+  const calls = installGmail(ctx, options => { assert.equal(options.labelIds, undefined); assert.equal(options.q, 'after:1779400799 before:1779573601'); return {messages: [{id: 'abc123'}, {id: 'deadbeef'}, {id: 'face'}]}; }, id => message(id, id === 'abc123' ? start - 1 : id === 'deadbeef' ? start + 1 : end + 1));
+  const received = [];
+  const result = ctx.scanCouponMessages_(state(journal, start), item => { received.push(item.id); return {messageId: item.id, status: 'review', rows: []}; });
+  assert.deepEqual(received, ['deadbeef']); assert.equal(result.errors.length, 0); assert.equal(calls.get.length, 3);
+  assert.equal(ctx.getMessageState_(journal, 'abc123').outcome, 'outside-window'); assert.equal(ctx.getMessageState_(journal, 'face').status, 'deferred');
 });
 
-test('skips confirmed and ignored journal states without fetching or mutating Gmail', () => {
-  const {ctx} = harness();
-  const journal = sheetMock();
-  for (const [id, status] of [['abc123', 'confirmed'], ['deadbeef', 'ignored']]) {
-    const state = ctx.newMessageState_(id); state.status = status; ctx.saveMessageState_(journal, state);
-  }
-  const calls = installGmail(ctx, () => ({messages: [{id: 'abc123'}, {id: 'deadbeef'}]}), () => {
-    assert.fail('final messages must not be fetched');
-  });
-  const result = ctx.readGmailMessages_({id: 'label-1', name: 'Coupons'}, Date.parse('2026-05-21T22:00:00Z'), journal);
-  assert.deepEqual(JSON.parse(JSON.stringify(result)), {messages: [], errors: [], truncated: false});
-  assert.equal(calls.get.length, 0);
+test('persists listed IDs before fetching and retains failed reads through journal retry', () => {
+  const {ctx, properties} = harness(); const journal = sheetMock();
+  const start = Date.parse('2026-05-21T22:00:00Z'); const end = Date.parse('2026-05-23T22:00:00Z');
+  ctx.saveMailboxScanState_(ctx.mailboxScanState_(start, end));
+  installGmail(ctx, () => ({messages: [{id: 'abc123'}, {id: 'deadbeef'}]}), id => { assert.ok(JSON.parse(properties.MYCOUPONS_MAILBOX_SCAN_STATE).pendingIds.includes(id)); if (id === 'abc123') throw new Error('temporary'); return message(id, start + 1); });
+  const result = ctx.scanCouponMessages_(state(journal, start), item => ({messageId: item.id, status: 'review', rows: []}));
+  assert.deepEqual(JSON.parse(JSON.stringify(result.errors)), [{messageId: 'abc123', code: 'MAIL', retryable: true}]);
+  assert.equal(ctx.getMessageState_(journal, 'abc123').status, 'failed'); assert.equal(ctx.getMessageState_(journal, 'deadbeef').status, 'pending');
 });
 
-test('returns retryable errors for message fetch and malformed MIME data', () => {
-  const {ctx} = harness();
-  const journal = sheetMock();
-  const calls = installGmail(ctx, () => ({messages: [{id: 'abc123'}, {id: 'deadbeef'}, {id: 'face'}]}), id => {
-    if (id === 'abc123') throw new Error('temporary API failure');
-    if (id === 'deadbeef') return {
-      id, threadId: 'thread-' + id, internalDate: String(Date.parse('2026-05-22T10:00:00Z')),
-      payload: {mimeType: 'text/plain', body: {data: 'not base64'}}
-    };
-    return {
-      id, threadId: 'thread-' + id, internalDate: String(Date.parse('2026-05-22T10:00:00Z')),
-      payload: {mimeType: 'application/pdf', body: {size: 12}}
-    };
-  });
-  const result = ctx.readGmailMessages_({id: 'label-1', name: 'Coupons'}, Date.parse('2026-05-21T22:00:00Z'), journal);
-  assert.deepEqual(JSON.parse(JSON.stringify(result.errors)), [
-    {messageId: 'abc123', code: 'MAIL', retryable: true},
-    {messageId: 'deadbeef', code: 'MAIL', retryable: true}
-  ]);
-  assert.equal(result.messages.length, 1);
-  assert.equal(result.messages[0].incomplete, true);
-  assert.equal(result.messages[0].text, '');
-  assert.equal(calls.get.length, 3);
+test('restarts a rejected token only after the identical tokenless query succeeds', () => {
+  const {ctx} = harness(); const journal = sheetMock();
+  const start = Date.parse('2026-05-21T22:00:00Z'); const end = Date.parse('2026-05-23T22:00:00Z');
+  const scan = ctx.mailboxScanState_(start, end); scan.pageToken = 'stale'; ctx.saveMailboxScanState_(scan);
+  let listed = 0;
+  const calls = installGmail(ctx, options => { listed++; if (listed === 1) { assert.equal(options.pageToken, 'stale'); const error = new Error('Invalid page token'); error.code = 400; throw error; } assert.equal(options.pageToken, undefined); return {messages: [{id: 'abc123'}]}; }, id => message(id, start + 1));
+  const result = ctx.scanCouponMessages_(state(journal, start), item => ({messageId: item.id, status: 'review', rows: []}));
+  assert.equal(result.messages.length, 1); assert.equal(calls.list.length, 2);
+  const fresh = ctx.mailboxScanState_(start, end); fresh.pageToken = 'stale'; ctx.saveMailboxScanState_(fresh);
+  installGmail(ctx, () => { throw new Error('permission denied'); }, () => assert.fail('must not fetch'));
+  assert.throws(() => ctx.scanCouponMessages_(state(journal, start), () => {}), /MAIL/);
 });
 
-test('enforces the page bound and detects malformed page tokens', () => {
-  const {ctx} = harness();
-  const journal = sheetMock();
-  let pages = 0;
-  const calls = installGmail(ctx, options => {
-    pages++;
-    return {messages: [], nextPageToken: 'page-' + pages};
-  }, () => assert.fail('empty pages must not fetch messages'));
-  const result = ctx.readGmailMessages_({id: 'label-1', name: 'Coupons'}, Date.parse('2026-05-21T22:00:00Z'), journal);
-  assert.equal(result.truncated, true);
-  assert.equal(calls.list.length, 20);
-
-  installGmail(ctx, () => ({messages: [], nextPageToken: 'same'}), () => assert.fail('must not fetch'));
-  assert.throws(() => ctx.readGmailMessages_({id: 'label-1', name: 'Coupons'}, Date.parse('2026-05-21T22:00:00Z'), journal), /MAIL/);
+test('deadline leaves the frozen cursor and pending message reachable without a fetch', () => {
+  const {ctx, properties} = harness(); const journal = sheetMock();
+  const start = Date.parse('2026-05-21T22:00:00Z'); const end = Date.parse('2026-05-23T22:00:00Z');
+  const scan = ctx.mailboxScanState_(start, end); scan.pendingIds = ['abc123']; ctx.saveMailboxScanState_(scan);
+  const calls = installGmail(ctx, () => assert.fail('must not list'), () => assert.fail('must not fetch'));
+  const result = ctx.scanCouponMessages_(state(journal, start, Date.now() - 1), () => assert.fail('must not process'));
+  assert.equal(result.truncated, true); assert.equal(calls.get.length, 0); assert.deepEqual(JSON.parse(properties.MYCOUPONS_MAILBOX_SCAN_STATE).pendingIds, ['abc123']);
 });
 
-test('fails closed for malformed message listings and API page failures', () => {
-  const {ctx} = harness();
-  const journal = sheetMock();
-  installGmail(ctx, () => ({messages: [{id: 'not-a-gmail-id'}]}), () => assert.fail('invalid summary must not fetch'));
-  assert.throws(() => ctx.readGmailMessages_({id: 'label-1', name: 'Coupons'}, Date.parse('2026-05-21T22:00:00Z'), journal), /MAIL/);
-  installGmail(ctx, () => { throw new Error('list failed'); }, () => assert.fail('list failure must not fetch'));
-  assert.throws(() => ctx.readGmailMessages_({id: 'label-1', name: 'Coupons'}, Date.parse('2026-05-21T22:00:00Z'), journal), /MAIL/);
+test('a completed window advances from its durable end, never from coupon recovery again', () => {
+  const {ctx} = harness(); const journal = sheetMock();
+  const start = Date.parse('2026-05-21T22:00:00Z'); const end = Date.parse('2026-05-23T22:00:00Z');
+  const scan = ctx.mailboxScanState_(start, end); scan.complete = true; ctx.saveMailboxScanState_(scan);
+  const resumed = ctx.loadMailboxScanState_(start);
+  assert.equal(resumed.startMs, end);
+  assert.equal(resumed.complete, false);
+  installGmail(ctx, () => ({messages: []}), () => assert.fail('must not fetch'));
+  ctx.scanCouponMessages_(state(journal, start), () => {});
+});
+
+test('rejects a mismatched fetched identity and rotates durable retries', () => {
+  const {ctx} = harness(); const journal = sheetMock();
+  const start = Date.parse('2026-05-21T22:00:00Z'); const end = Date.parse('2026-05-23T22:00:00Z');
+  ctx.saveMailboxScanState_(ctx.mailboxScanState_(start, end));
+  installGmail(ctx, () => ({messages: [{id: 'abc123'}]}), () => message('deadbeef', start + 1));
+  const mismatch = ctx.scanCouponMessages_(state(journal, start), () => assert.fail('must not dispatch'));
+  assert.deepEqual(JSON.parse(JSON.stringify(mismatch.errors)), [{messageId: 'abc123', code: 'MAIL', retryable: true}]);
+  ['aa', 'bb', 'cc', 'dd'].forEach(id => { const failed = ctx.newMessageState_(id); failed.status = 'failed'; failed.failureStage = 'read|' + start + '|' + end; ctx.saveMessageState_(journal, failed); });
+  const fetched = [];
+  installGmail(ctx, () => ({messages: []}), id => { fetched.push(id); throw new Error('retry'); });
+  ctx.scanCouponMessages_(state(journal, start), () => {});
+  ctx.scanCouponMessages_(state(journal, start), () => {});
+  assert.ok(fetched.includes('dd'));
 });
