@@ -1094,19 +1094,29 @@ def _gcloud_reports_project_not_found(stderr: bytes, project_id: str) -> bool:
     ) is not None
 
 
-def _gcloud_reports_bootstrap_secret_not_found(stderr: bytes, project_id: str, project_number: str, secret_name: str) -> bool:
+def _gcloud_reports_bootstrap_secret_not_found(
+    stderr: bytes, project_id: str, project_number: str, secret_name: str, owner: str
+) -> bool:
+    """Recognize only owner-pinned gcloud's exact absent-secret diagnostics."""
     try:
         message = stderr.decode("utf-8")
     except UnicodeDecodeError:
         return False
+    resource = rf"projects/(?:{re.escape(project_id)}|{re.escape(project_number)})/secrets/{re.escape(secret_name)}"
+    account_context = (
+        rf"(?:\n| )This command is authenticated as {re.escape(owner)} which is the active account "
+        r"specified by the \[core/account\] property\."
+    )
     return re.fullmatch(
-        rf"ERROR: \(gcloud\.secrets\.describe\) NOT_FOUND: (?:Secret )?\[?projects/(?:{re.escape(project_id)}|{re.escape(project_number)})/secrets/{re.escape(secret_name)}\]? not found\.?\s*",
+        rf"ERROR: \(gcloud\.secrets\.describe\) NOT_FOUND: Secret \[{resource}\] not found(?:\.{account_context}|\.?)\n?",
         message,
-        flags=re.IGNORECASE,
     ) is not None
 
 
-def _run_command_output(command: Sequence[str], *, operation: str, absent_project: str | None = None, absent_secret: tuple[str, str, str] | None = None) -> bytes:
+def _run_command_output(
+    command: Sequence[str], *, operation: str, absent_project: str | None = None,
+    absent_secret: tuple[str, str, str, str] | None = None,
+) -> bytes:
     """Run one fixed-argument command with bounded output and no diagnostics."""
     process: subprocess.Popen[bytes] | None = None
     selector: selectors.BaseSelector | None = None
@@ -1173,7 +1183,7 @@ def _run_command_output(command: Sequence[str], *, operation: str, absent_projec
 
 def _run_json(
     command: Sequence[str], *, operation: str = "read-only authentication preflight", absent_project: str | None = None,
-    absent_secret: tuple[str, str, str] | None = None,
+    absent_secret: tuple[str, str, str, str] | None = None,
 ) -> Any:
     output = _run_command_output(command, operation=operation, absent_project=absent_project, absent_secret=absent_secret)
     try:
@@ -2091,7 +2101,7 @@ def _secret_describe(gcloud: str, project_id: str, project_number: str, owner: s
     return _run_json(
         (gcloud, "secrets", "describe", BOOTSTRAP_SECRET_NAME, f"--project={project_id}", "--format=json", "--quiet", f"--account={owner}"),
         operation="bootstrap secret inspection",
-        absent_secret=(project_id, project_number, BOOTSTRAP_SECRET_NAME),
+        absent_secret=(project_id, project_number, BOOTSTRAP_SECRET_NAME, owner),
     )
 
 
@@ -2186,7 +2196,9 @@ def _project_ancestor_secret_policies(gcloud: str, project_id: str, project_numb
         if not isinstance(resource_type, str) or not isinstance(resource_id, str) or (resource_type, resource_id) in seen:
             raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
         seen.add((resource_type, resource_id))
-        if resource_type == "project" and resource_id == project_number:
+        if resource_type == "project" and resource_id in {project_id, project_number}:
+            if project_seen:
+                raise ProvisionerError("Cloud resource hierarchy inspection returned invalid data")
             project_seen = True
             command = (gcloud, "projects", "get-iam-policy", project_id, "--format=json", "--quiet")
         elif resource_type == "folder" and PROJECT_NUMBER_RE.fullmatch(resource_id):

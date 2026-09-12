@@ -1022,6 +1022,22 @@ class ProvisionerCommandTests(unittest.TestCase):
         ):
             self.assertFalse(core._gcloud_reports_project_not_found(response, project_id))
 
+    def test_command_runner_classifies_only_the_owner_pinned_missing_secret_diagnostic(self) -> None:
+        diagnostic = (
+            "ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret "
+            "[projects/654321/secrets/mycoupons-bootstrap] not found. This command is authenticated as "
+            "owner@example.com which is the active account specified by the [core/account] property.\n"
+        )
+        command = (sys.executable, "-c", f"import sys; sys.stderr.write({diagnostic!r}); raise SystemExit(1)")
+        absent_secret = ("vertex-project", "654321", "mycoupons-bootstrap", "owner@example.com")
+        with self.assertRaises(core.BootstrapSecretNotFound):
+            core._run_json(command, operation="bootstrap secret inspection", absent_secret=absent_secret)
+
+        foreign_owner = diagnostic.replace("owner@example.com", "other@example.com")
+        foreign_command = (sys.executable, "-c", f"import sys; sys.stderr.write({foreign_owner!r}); raise SystemExit(1)")
+        with self.assertRaisesRegex(core.ProvisionerError, "bootstrap secret inspection was rejected"):
+            core._run_json(foreign_command, operation="bootstrap secret inspection", absent_secret=absent_secret)
+
     def test_cli_rejects_secret_like_config_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -2411,15 +2427,109 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
         self.assertIn(("/safe/gcloud", "resource-manager", "folders", "get-iam-policy", "123456", "--format=json", "--quiet"), commands)
         self.assertIn(("/safe/gcloud", "organizations", "get-iam-policy", "654321", "--format=json", "--quiet"), commands)
 
-    def test_missing_secret_classifier_accepts_canonical_project_number(self) -> None:
+    def test_project_hierarchy_accepts_one_project_alias_and_rejects_ambiguous_identities(self) -> None:
+        expected_project_id = "vertex-project"
+        expected_project_number = "654321"
+
+        for project_identity in (expected_project_id, expected_project_number):
+            with self.subTest(project_identity=project_identity), mock.patch(
+                "provisioner.core._cloud_json",
+                side_effect=[[{"id": project_identity, "type": "project"}], {"bindings": []}],
+            ) as read_policy:
+                policies = core._project_ancestor_secret_policies(
+                    "/safe/gcloud", expected_project_id, expected_project_number, "owner@example.com"
+                )
+            self.assertEqual(policies, [{"bindings": []}])
+            self.assertEqual(
+                read_policy.call_args_list[1].args[0],
+                ("/safe/gcloud", "projects", "get-iam-policy", expected_project_id, "--format=json", "--quiet"),
+            )
+            self.assertEqual(read_policy.call_args_list[1].kwargs["account"], "owner@example.com")
+
+        for ancestors in (
+            [{"id": expected_project_id, "type": "project"}, {"id": expected_project_number, "type": "project"}],
+            [{"id": "foreign-project", "type": "project"}],
+            [{"id": expected_project_id, "type": "project"}, {"id": expected_project_id, "type": "project"}],
+        ):
+            with self.subTest(ancestors=ancestors), mock.patch(
+                "provisioner.core._cloud_json", return_value=ancestors
+            ), mock.patch("provisioner.core._cloud_success") as mutate:
+                with self.assertRaisesRegex(core.ProvisionerError, "hierarchy inspection returned invalid data"):
+                    core._project_ancestor_secret_policies(
+                        "/safe/gcloud", expected_project_id, expected_project_number, "owner@example.com"
+                    )
+            mutate.assert_not_called()
+
+    def test_missing_secret_classifier_accepts_only_exact_owner_pinned_diagnostics(self) -> None:
+        absent_secret = ("vertex-project", "654321", "mycoupons-bootstrap", "owner@example.com")
         self.assertTrue(
             core._gcloud_reports_bootstrap_secret_not_found(
                 b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found\n",
-                "vertex-project",
-                "654321",
-                "mycoupons-bootstrap",
+                *absent_secret,
             )
         )
+        self.assertTrue(
+            core._gcloud_reports_bootstrap_secret_not_found(
+                b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/vertex-project/secrets/mycoupons-bootstrap] not found.\n"
+                b"This command is authenticated as owner@example.com which is the active account specified by the [core/account] property.\n",
+                *absent_secret,
+            )
+        )
+        self.assertTrue(
+            core._gcloud_reports_bootstrap_secret_not_found(
+                b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found. "
+                b"This command is authenticated as owner@example.com which is the active account specified by the [core/account] property.\n",
+                *absent_secret,
+            )
+        )
+        for response in (
+            b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found.\n"
+            b"This command is authenticated as other@example.com which is the active account specified by the [core/account] property.",
+            b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/other-secret] not found.",
+            b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/other-project/secrets/mycoupons-bootstrap] not found.",
+            b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found.\n"
+            b"This command is authenticated as owner@example.com which is the active account specified by the [core/project] property.",
+            b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found.  "
+            b"This command is authenticated as owner@example.com which is the active account specified by the [core/account] property.",
+            b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found.\t"
+            b"This command is authenticated as owner@example.com which is the active account specified by the [core/account] property.",
+            b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found.\n"
+            b"This command is authenticated as owner@example.com which is the active account specified by the [core/account] property.\n"
+            b"ERROR: (gcloud.secrets.describe) PERMISSION_DENIED",
+        ):
+            self.assertFalse(core._gcloud_reports_bootstrap_secret_not_found(response, *absent_secret))
+
+    def test_missing_secret_creates_only_after_the_absence_is_classified(self) -> None:
+        config = valid_cloud_config()
+        expected_secret = {
+            "name": "projects/vertex-project/secrets/mycoupons-bootstrap",
+            "labels": {core.BOOTSTRAP_SECRET_LABEL: "installation-demo"},
+        }
+        with mock.patch(
+            "provisioner.core._secret_describe",
+            side_effect=[core.BootstrapSecretNotFound("bootstrap secret was not found"), expected_secret],
+        ), mock.patch("provisioner.core._cloud_success") as create:
+            core._assert_bootstrap_secret_owned("/safe/gcloud", config, "owner@example.com", "654321", create=True)
+        create.assert_called_once_with(
+            (
+                "/safe/gcloud",
+                "secrets",
+                "create",
+                "mycoupons-bootstrap",
+                "--project=vertex-project",
+                "--labels=mycoupons-installation=installation-demo",
+                "--quiet",
+            ),
+            account="owner@example.com",
+            operation="bootstrap secret creation",
+        )
+
+        with mock.patch("provisioner.core._secret_describe", side_effect=core.ProvisionerError("inspection was rejected")), mock.patch(
+            "provisioner.core._cloud_success"
+        ) as create:
+            with self.assertRaisesRegex(core.ProvisionerError, "inspection was rejected"):
+                core._assert_bootstrap_secret_owned("/safe/gcloud", config, "owner@example.com", "654321", create=True)
+        create.assert_not_called()
 
     def test_secret_inputs_inside_the_checkout_are_rejected_before_reading(self) -> None:
         config = valid_cloud_config()
