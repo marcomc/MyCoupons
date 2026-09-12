@@ -319,3 +319,34 @@ test('recovered MIME messages still acquire image attachments and preserve HTML 
     }
   }
 });
+
+test('omitted document bodies and containers reject malformed metadata and inline bytes without fetching', () => {
+  const {ctx} = harness();
+  ctx.Gmail.Users.Messages = {Attachments: {get: () => assert.fail('no document fetch')}};
+  const malformed = [
+    {body: []}, {body: null}, {body: {size: '7164', attachmentId: 'file'}},
+    {body: {size: -1, attachmentId: 'file'}}, {body: {size: Infinity, attachmentId: 'file'}},
+    {body: {size: 0.5, attachmentId: 'file'}}, {body: {size: 7164, attachmentId: 123}},
+    {body: {size: 7164}}, {body: {data: false}}, {body: {data: [256]}},
+    {body: {data: 'bad!'}}, {body: {data: [65], size: 2}},
+    {mimeType: 'multipart/mixed', parts: {}},
+    {mimeType: 'multipart/mixed', parts: [null]},
+    {mimeType: 'multipart/mixed', body: {data: [65], size: 1}, parts: []}
+  ];
+  for (const patch of malformed) {
+    const part = {mimeType: 'text/plain', filename: 'document.txt', body: {size: 1, attachmentId: 'file'}, ...patch};
+    const payload = {mimeType: 'multipart/mixed', parts: [{mimeType: 'text/plain', body: body('Actual body')}, part]};
+    assert.throws(() => ctx.parseMimePayload_(payload), /MAIL/);
+  }
+  // Validate recursively without treating nested document text as body content.
+  for (const form of mimeFixture.forms) {
+    const part = {mimeType: 'multipart/mixed', filename: 'document.mime', body: {size: 0}, parts: [
+      {mimeType: 'text/plain', body: mimeFixture.body('Unrelated coupon code FILE99', form)},
+      {mimeType: 'text/csv', body: {attachmentId: 'file', size: 10}}]};
+    const result = ctx.parseMimePayload_({mimeType: 'multipart/mixed', parts: [
+      {mimeType: 'text/plain', body: body('Actual body')}, part]});
+    assert.equal(result.text, 'Actual body'); assert.equal(result.incomplete, true);
+    part.parts[0].body.data = [256];
+    assert.throws(() => ctx.parseMimePayload_(part), /MAIL/);
+  }
+});
