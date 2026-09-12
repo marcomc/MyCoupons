@@ -59,7 +59,7 @@ function fetchRemoteImage_(url) {
     if (MC_IMAGE_MIME_TYPES.indexOf(contentType) < 0) return null;
     const bytes = response.getContent();
     if (!Array.isArray(bytes) || !bytes.length || bytes.length > MC_IMAGE_MAX_BYTES) return null;
-    return {mimeType: contentType, data: Utilities.base64EncodeWebSafe(bytes)};
+    return {mimeType: contentType, data: validatedBytes_(bytes), declaredSize: bytes.length};
   } catch (e) { return null; }
 }
 
@@ -70,9 +70,9 @@ function collectImageParts_(part, parentCid, resources) {
   const disposition = mimeHeader_(headers, 'content-disposition');
   const cidHeader = imageIdentity_(mimeHeader_(headers, 'content-id').trim());
   const filename = String(part.filename || '').trim();
-  if (MC_IMAGE_MIME_TYPES.indexOf(mimeType) >= 0 && ((part.body || {}).data || (part.body || {}).attachmentId)) {
+  if (MC_IMAGE_MIME_TYPES.indexOf(mimeType) >= 0 && part.body) {
     resources.push({mimeType: mimeType, cid: cidHeader, filename: filename,
-      data: (part.body || {}).data || '', attachmentId: (part.body || {}).attachmentId || '',
+      data: (part.body || {}).data, attachmentId: (part.body || {}).attachmentId || '',
       declaredSize: (part.body || {}).size,
       disposition: disposition});
   }
@@ -82,20 +82,17 @@ function collectImageParts_(part, parentCid, resources) {
 function materializeImage_(messageId, slot, resource, total) {
   if (resource.attachmentId && (!Number.isSafeInteger(resource.declaredSize) || resource.declaredSize <= 0 ||
     resource.declaredSize > MC_IMAGE_MAX_BYTES || total + resource.declaredSize > MC_IMAGE_MAX_TOTAL_BYTES)) return null;
-  if (Number.isSafeInteger(resource.declaredSize) &&
-    (resource.declaredSize <= 0 || resource.declaredSize > MC_IMAGE_MAX_BYTES || total + resource.declaredSize > MC_IMAGE_MAX_TOTAL_BYTES)) return null;
+  if (resource.declaredSize != null && (!Number.isSafeInteger(resource.declaredSize) ||
+    resource.declaredSize <= 0 || resource.declaredSize > MC_IMAGE_MAX_BYTES || total + resource.declaredSize > MC_IMAGE_MAX_TOTAL_BYTES)) return null;
   let bytes = [];
   try {
-    if (resource.data) {
-      if (!validBase64Url_(resource.data)) return null;
-      bytes = Utilities.base64DecodeWebSafe(resource.data);
-    }
-    else if (resource.attachmentId) {
+    const empty = resource.data == null || resource.data === '' || Array.isArray(resource.data) && resource.data.length === 0;
+    if (empty && resource.attachmentId) {
       const attachment = Gmail.Users.Messages.Attachments.get('me', messageId, resource.attachmentId);
-      if (!attachment || typeof attachment.data !== 'string') return null;
-      if (!validBase64Url_(attachment.data)) return null;
-      bytes = Utilities.base64DecodeWebSafe(attachment.data);
-    }
+      if (!attachment || typeof attachment !== 'object') return null;
+      bytes = decodeBytePayload_(attachment.data, attachment.size);
+      if (bytes.length !== resource.declaredSize) return null;
+    } else bytes = decodeBytePayload_(resource.data, resource.declaredSize);
   } catch (e) { return null; }
   if (!Array.isArray(bytes) || !bytes.length || bytes.length > MC_IMAGE_MAX_BYTES || total + bytes.length > MC_IMAGE_MAX_TOTAL_BYTES) return null;
   if (!imageSignature_(resource.mimeType, bytes)) return null;
@@ -105,24 +102,21 @@ function materializeImage_(messageId, slot, resource, total) {
     bytes: bytes, blob: Utilities.newBlob(bytes, resource.mimeType, 'image'), dimensions: dimensions || null};
 }
 
-function validBase64Url_(value) {
-  return typeof value === 'string' && /^[A-Za-z0-9_-]*={0,2}$/.test(value) && value.length % 4 !== 1 &&
-    (value.indexOf('=') < 0 || value.indexOf('=') >= value.length - 2);
-}
-
 function imageIdentity_(value) {
   if (/^<[^<>]+>$/.test(value)) return value.slice(1, -1);
   return /[<>]/.test(value) ? '' : value;
 }
 
 function imageSignature_(mimeType, bytes) {
+  try { bytes = validatedBytes_(bytes, true); } catch (e) { return false; }
   if (mimeType === 'image/png') return bytes.length >= 8 && bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71 && bytes[4] === 13 && bytes[5] === 10 && bytes[6] === 26 && bytes[7] === 10;
   if (mimeType === 'image/gif') return bytes.length >= 6 && bytes[0] === 71 && bytes[1] === 73 && bytes[2] === 70 && bytes[3] === 56 && (bytes[4] === 55 || bytes[4] === 57) && bytes[5] === 97;
   if (mimeType === 'image/jpeg') return bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
-  return bytes.length >= 12 && bytes[0] === 82 && bytes[1] === 73 && bytes[2] === 70 && bytes[3] === 70 && bytes[8] === 87 && bytes[9] === 69 && bytes[10] === 66 && bytes[11] === 80;
+  return mimeType === 'image/webp' && bytes.length >= 12 && bytes[0] === 82 && bytes[1] === 73 && bytes[2] === 70 && bytes[3] === 70 && bytes[8] === 87 && bytes[9] === 69 && bytes[10] === 66 && bytes[11] === 80;
 }
 
 function imageDimensions_(mimeType, bytes) {
+  try { bytes = validatedBytes_(bytes, true); } catch (e) { return null; }
   if (mimeType === 'image/png' && bytes.length >= 24 && bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71)
     return {width: u32_(bytes, 16), height: u32_(bytes, 20)};
   if (mimeType === 'image/gif' && bytes.length >= 10 && bytes[0] === 71 && bytes[1] === 73 && bytes[2] === 70)

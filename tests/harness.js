@@ -36,7 +36,7 @@ function harness({sourceOrder, vendorLast = false} = {}) {
     Gmail: {Users: {getProfile: () => ({emailAddress: owner})}}
   };
   vm.createContext(ctx);
-  let names = sourceOrder || ['locales/en', 'Config', 'GeminiRouting', 'Digest', 'TextSafety', 'NumericEvidence', 'HtmlEvidence', 'ImageAcquisition',
+  let names = sourceOrder || ['locales/en', 'Config', 'GeminiRouting', 'Digest', 'TextSafety', 'NumericEvidence', 'HtmlEvidence', 'BytePayload', 'ImageAcquisition',
     'CandidateEvidence', 'AIExtraction', 'GmailIdentity', 'SheetSafety', 'SheetState', 'BatchIntent', 'GmailRead', 'ImportWorkflow', 'ReviewActions', 'Scheduler', 'Installer'];
   if (!sourceOrder) {
     if (vendorLast) names.push('vendor/Html');
