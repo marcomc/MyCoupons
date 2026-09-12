@@ -88,15 +88,22 @@ function parseAICandidates_(response, message) {
 }
 
 function candidateMergeKey_(candidate) {
-  return JSON.stringify([normalized_(candidate.merchant), normalized_(candidate.website), String(candidate.code || ''),
+  return JSON.stringify([normalized_(candidate.merchant), candidateWebsiteIdentity_(candidate.website), String(candidate.code || ''),
     normalized_(candidate.discountType), normalized_(candidate.discountValue), normalized_(candidate.minimumSpend),
     normalized_(candidate.expiry)]);
 }
 
 function exactCandidateIdentityKey_(candidate) {
   return JSON.stringify(MC.fields.map(function (field) {
+    if (field === 'website') return candidateWebsiteIdentity_(candidate[field]);
     return field === 'code' ? String(candidate[field] || '') : normalized_(candidate[field]);
   }));
+}
+
+function candidateWebsiteIdentity_(value) {
+  // Only the HTTPS scheme and authority are case-insensitive. Path, query and
+  // fragment spelling (including percent escapes) remain part of the identity.
+  return String(value || '').replace(/^https:\/\/[^/?#]+/i, function (authority) { return authority.toLowerCase(); });
 }
 
 function mergeCouponCandidates_(left, right) {
@@ -117,8 +124,23 @@ function sameCouponOffer_(left, right) {
       !candidate.discountValue && !candidate.minimumSpend && !candidate.validOn && !candidate.exclusions &&
       !candidate.expiry && !candidate.usageLimits && !candidate.currency;
   };
-  if (left.code || right.code) return !!left.code && left.code === right.code && (sparse(left) || sparse(right));
-  return exactCandidateIdentityKey_(left) === exactCandidateIdentityKey_(right);
+  if (exactCandidateIdentityKey_(left) === exactCandidateIdentityKey_(right)) return true;
+  return !!left.code && left.code === right.code && (sparse(left) || sparse(right));
+}
+
+function uniqueAICandidates_(candidates) {
+  const result = [];
+  candidates.forEach(function (candidate) {
+    const key = exactCandidateIdentityKey_(candidate);
+    const index = result.findIndex(function (prior) { return exactCandidateIdentityKey_(prior) === key; });
+    if (index < 0) result.push(candidate);
+    else {
+      const merged = mergeCouponCandidates_(result[index], candidate);
+      merged.review = result[index].review || candidate.review;
+      result[index] = merged;
+    }
+  });
+  return result;
 }
 
 function extractCouponOutcome_(message, hooks) {
@@ -130,7 +152,9 @@ function extractCouponOutcome_(message, hooks) {
     return {mimeType: image.mimeType, data: Utilities.base64EncodeWebSafe(image.bytes)};
   });
   const aiOutcome = parseAICandidateOutcome_(callGeminiModel_({text: prompt.text, images: images}, hooks), message);
-  const ai = aiOutcome.candidates;
+  // Consolidate exact model duplicates before sparse deterministic enrichment
+  // adds copied source notes that could make an identical proposal look new.
+  const ai = uniqueAICandidates_(aiOutcome.candidates);
   const deterministic = deterministicCandidates_(message).map(function (candidate) {
     return {merchant: '', website: '', code: candidate.code, discountType: '', discountValue: '', minimumSpend: '',
       validOn: '', exclusions: '', expiry: '', usageLimits: '', currency: '', notes: candidate.notes,

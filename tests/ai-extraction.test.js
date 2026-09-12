@@ -119,6 +119,64 @@ test('code-less offers with different grounded conditions stay separate', () => 
   assert.deepEqual(Array.from(result, item => item.validOn), ['Monday', 'Tuesday']);
 });
 
+test('URL identity preserves path, query, fragment and percent-escape spelling through extraction and row recovery', () => {
+  const {ctx, properties} = harness(); properties.GEMINI_API_KEY = 'test-key';
+  const urls = ['https://shop.example.com/Promo', 'https://shop.example.com/promo',
+    'https://shop.example.com/?Offer=A', 'https://shop.example.com/?offer=a',
+    'https://shop.example.com/#Offer', 'https://shop.example.com/#offer',
+    'https://shop.example.com/%2F', 'https://shop.example.com/%2f'];
+  const candidates = urls.map(website => JSON.parse(aiResponse({code: '', website,
+    evidence: {merchant: {quote: 'Brand'}, website: {quote: website}}}).text).candidates[0]);
+  const message = {id: 'abc123', link: ctx.gmailLink_('abc123'), text: 'Brand ' + urls.join(' '), incomplete: false};
+  const outcome = ctx.extractCouponOutcome_(message, {fetch: () => ({status: 200,
+    body: JSON.stringify({candidates: [{content: {parts: [{text: JSON.stringify({candidates})}]}}]})})});
+  assert.deepEqual(Array.from(outcome.candidates, c => c.website), urls);
+  assert.equal(new Set(outcome.candidates.map(c => ctx.candidateDedupeKey_(message, c))).size, urls.length);
+  const state = ctx.newMessageState_('abc123'); state.candidateStates = [];
+  ctx.createBatchIntent_(state, outcome); assert.equal(ctx.validMessageState_(state), true);
+  const identities = outcome.candidates.map(c => ctx.candidateRowIdentityFromRow_(ctx.couponRow_(message, c)));
+  assert.equal(new Set(identities).size, urls.length);
+  const upperHost = {...outcome.candidates[0], website: 'HTTPS://SHOP.EXAMPLE.COM/Promo'};
+  assert.equal(ctx.exactCandidateIdentityKey_(upperHost), ctx.exactCandidateIdentityKey_(outcome.candidates[0]));
+  assert.notEqual(ctx.candidateMergeKey_(outcome.candidates[0]), ctx.candidateMergeKey_(outcome.candidates[1]));
+});
+
+test('exact coded AI duplicates collapse before sparse source-note enrichment without dropping review requirements', () => {
+  for (const explicitCode of [true, false]) for (const needsReview of [true, false]) {
+    const {ctx, properties} = harness(); properties.GEMINI_API_KEY = 'test-key';
+    const proposal = JSON.parse(aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}).text).candidates[0];
+    const message = {id: 'abc123', text: explicitCode ? 'Brand coupon code SAVE20' : 'Brand SAVE20', incomplete: false};
+    const outcome = ctx.extractCouponOutcome_(message, {fetch: () => ({status: 200,
+      body: JSON.stringify({candidates: [{content: {parts: [{text: JSON.stringify({candidates: [{...proposal, review: needsReview}, proposal]})}]}}]})})});
+    assert.equal(outcome.candidates.length, 1);
+    assert.equal(outcome.candidates[0].code, 'SAVE20');
+    assert.equal(outcome.archiveAllowed, !needsReview);
+    const state = ctx.newMessageState_('abc123'); state.candidateStates = [];
+    ctx.createBatchIntent_(state, outcome); assert.equal(ctx.validMessageState_(state), true);
+  }
+});
+
+test('same-code described offers stay distinct in every other factual field', () => {
+  const {ctx} = harness();
+  const base = JSON.parse(aiResponse({code: 'SAVE20'}).text).candidates[0]; delete base.evidence;
+  for (const field of ['merchant', 'website', 'discountType', 'discountValue', 'minimumSpend', 'validOn',
+    'exclusions', 'expiry', 'usageLimits', 'currency', 'notes']) {
+    assert.equal(ctx.sameCouponOffer_(base, {...base, [field]: 'Different factual value'}), false, field);
+  }
+});
+
+test('sparse deterministic codes enrich distinct same-code AI offers without collapsing their conditions', () => {
+  const {ctx, properties} = harness(); properties.GEMINI_API_KEY = 'test-key';
+  const make = validOn => JSON.parse(aiResponse({code: 'SAVE20', validOn,
+    evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}, validOn: {quote: validOn}}}).text).candidates[0];
+  const outcome = ctx.extractCouponOutcome_({id: 'abc123', text: 'Brand coupon code SAVE20 Monday Tuesday', incomplete: false}, {
+    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{content: {parts: [{text: JSON.stringify({candidates: [make('Monday'), make('Tuesday'), make('Monday')]})}]}}]})})
+  });
+  assert.deepEqual(Array.from(outcome.candidates, c => c.validOn), ['Monday', 'Tuesday']);
+  const state = ctx.newMessageState_('abc123'); state.candidateStates = [];
+  ctx.createBatchIntent_(state, outcome); assert.equal(ctx.validMessageState_(state), true);
+});
+
 test('end-to-end extraction propagates transport failure and drops blank proposals', () => {
   const {ctx, properties} = harness(); properties.GEMINI_API_KEY = 'test-key';
   assert.throws(() => ctx.extractCouponCandidates_({text: 'offer', incomplete: false}, {fetch: () => ({status: 503, body: ''})}), /Gemini request failed/);

@@ -303,3 +303,27 @@ test('Retry with AI migrates deployed Notes keys and normalizes Date expiry on m
   assert.equal(f.mutations.length, 0);
   f.action(2, 'Confirm'); assert.equal(f.saved().status, 'confirmed'); assert.equal(f.mutations.length, 2);
 });
+
+test('real extraction persists duplicated coded proposals once and distinct URL offers separately', () => {
+  for (const mode of ['duplicate-code', 'case-sensitive-url']) {
+    const f = fixture();
+    const urls = ['https://shop.example.com/Promo?A=1#X', 'https://shop.example.com/promo?a=1#x'];
+    const text = mode === 'duplicate-code' ? 'Brand coupon code Save+20 Members only' : 'Brand Members only ' + urls.join(' ');
+    f.raw.payload.body = {data: Buffer.from(text).toString('base64url'), size: Buffer.byteLength(text)};
+    f.boot(); delete f.state.extractCouponOutcome;
+    const proposals = mode === 'duplicate-code' ? [candidate(), candidate()] : urls.map(website => candidate('', {website}));
+    proposals.forEach(proposal => {
+      delete proposal.imageEvidence; proposal.review = false;
+      proposal.evidence = Object.fromEntries(Object.entries(proposal).filter(([key, value]) =>
+        typeof value === 'string' && value && key !== 'confidence').map(([key, value]) => [key, {quote: value}]));
+    });
+    f.ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: proposals})});
+    assert.equal(f.run().messages[0].status, 'confirmed');
+    const expected = mode === 'duplicate-code' ? 1 : 2;
+    assert.equal(f.coupon.rows.length, expected + 1);
+    assert.equal(f.saved().batchIntent.candidates.length, expected);
+    assert.equal(f.saved().candidateKeys.length, expected);
+    assert.equal(f.mutations.length, 2);
+    f.run(); assert.equal(f.coupon.rows.length, expected + 1); assert.equal(f.mutations.length, 2);
+  }
+});

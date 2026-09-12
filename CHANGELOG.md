@@ -22,6 +22,10 @@
   on full-batch persistence. Keep interrupted legacy batches fail-closed and
   preserve completed legacy review, including Notes keys and typed expiry dates.
 
+- Preserve case-sensitive URL paths, queries, and fragments in candidate
+  identities. Collapse exact repeated AI offers before sparse-code enrichment
+  while retaining distinct conditions for offers sharing a coupon code.
+
 - Treat the email subject as an independent evidence span, preserve exact
   case/Unicode/punctuation coupon identities, prevent sender metadata from
   grounding offer facts, consolidate sparse deterministic codes with their
