@@ -86,6 +86,9 @@ test('invalid image MIME, base64, and aggregate size are rejected before fetch',
   for (const images of [
     [{mimeType: 'text/plain', data: 'AAAA'}],
     [{mimeType: 'image/png', data: 'not base64'}],
+    [{mimeType: 'image/png', data: 'AA=='}],
+    [{mimeType: 'image/png', data: 'A=AA'}],
+    [{mimeType: 'image/png', data: 'AB'}],
     [{mimeType: 'image/png', data: 'A'.repeat(4 * 1024 * 1024)}]
   ]) {
     const {ctx} = setup(); let fetches = 0;
@@ -100,6 +103,28 @@ test('invalid image MIME, base64, and aggregate size are rejected before fetch',
     fetch: () => { fetches += 1; return {status: 200, body: ok}; }
   }), /GEMINI_REQUEST/);
   assert.equal(fetches, 0);
+});
+
+test('Gemini image byte budgets use exact unpadded base64url lengths', () => {
+  const {ctx} = setup();
+  const encode = length => Buffer.alloc(length).toString('base64url');
+  const max = 2 * 1024 * 1024;
+  const fetch = () => ({status: 200, body: ok});
+  for (const [length, expected] of [[1, 1], [2, 2], [3, 3]]) {
+    const data = encode(length);
+    assert.equal(ctx.base64UrlByteLength_(data), expected);
+    assert.equal(ctx.callGeminiModel_({text: 'x', images: [{mimeType: 'image/png', data}]}, {fetch}).text, 'result');
+  }
+  const exact = encode(max);
+  assert.equal(ctx.callGeminiModel_({text: 'x', images: Array.from({length: 3}, () => ({mimeType: 'image/png', data: exact}))}, {fetch}).text, 'result');
+  for (const images of [
+    [{mimeType: 'image/png', data: encode(max + 1)}],
+    Array.from({length: 3}, () => ({mimeType: 'image/png', data: exact})).concat({mimeType: 'image/png', data: encode(1)})
+  ]) {
+    let calls = 0;
+    assert.throws(() => ctx.callGeminiModel_({text: 'x', images}, {fetch: () => { calls++; return {status: 200, body: ok}; }}), /GEMINI_REQUEST/);
+    assert.equal(calls, 0);
+  }
 });
 
 test('malformed response, missing key, and invalid request fail closed', () => {

@@ -24,6 +24,17 @@ function validBase64Url_(value) {
   return remainder === 2 ? last % 16 === 0 : remainder === 3 ? last % 4 === 0 : true;
 }
 
+function base64UrlByteLength_(value) {
+  const unpadded = value.replace(/=+$/, '');
+  const remainder = unpadded.length % 4;
+  return Math.floor(unpadded.length / 4) * 3 + (remainder === 2 ? 1 : remainder === 3 ? 2 : 0);
+}
+
+function canonicalBase64Url_(value) {
+  if (!validBase64Url_(value)) fail_('AI');
+  return value.replace(/=+$/, '');
+}
+
 function decodeBytePayload_(value, size, record, maxBytes) {
   const data = value == null ? '' : value;
   if (record) {
@@ -38,8 +49,7 @@ function decodeBytePayload_(value, size, record, maxBytes) {
   // Bound image allocations before decoding strings or copying byte arrays.
   if (maxBytes != null) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) fail_('MAIL');
-    const padding = typeof data === 'string' ? (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0) : 0;
-    const byteLength = typeof data === 'string' ? Math.floor((data.length - padding) * 3 / 4) :
+    const byteLength = typeof data === 'string' && validBase64Url_(data) ? base64UrlByteLength_(data) :
       Array.isArray(data) ? data.length : 0;
     if (byteLength > maxBytes) fail_('MAIL');
   }

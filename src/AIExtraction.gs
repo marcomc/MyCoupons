@@ -153,7 +153,7 @@ function extractCouponOutcome_(message, hooks) {
   const prompt = candidatePrompt_(message);
   const images = source.images.map(function (image) {
     if (!image || typeof image.mimeType !== 'string' || !Array.isArray(image.bytes)) fail_('AI');
-    return {mimeType: image.mimeType, data: Utilities.base64EncodeWebSafe(image.bytes)};
+    return {mimeType: image.mimeType, data: canonicalBase64Url_(Utilities.base64EncodeWebSafe(image.bytes))};
   });
   const aiOutcome = parseAICandidateOutcome_(callGeminiModel_({text: prompt.text, images: images}, hooks), message);
   // Consolidate exact model duplicates before sparse deterministic enrichment

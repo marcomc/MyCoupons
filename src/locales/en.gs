@@ -16,6 +16,7 @@ const EN = Object.freeze({
     INITIAL_DATE: 'An empty sheet requires an explicit initial date before scanning.',
     DATE: 'A real coupon row has an invalid email date. Correct it before recovering history.',
     AI: 'AI is unavailable or returned an invalid response.', AI_HTTP: 'The AI request failed.',
+    GEMINI_REQUEST: 'The AI request is invalid.',
     AI_KEY: 'Configure the Gemini API key in Script Properties.',
     WRITE: 'Sheet verification failed. The email has not been archived.',
     REVIEW: 'Check merchant and coupon code, discount, or voucher link before confirming.',

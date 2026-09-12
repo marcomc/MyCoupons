@@ -96,6 +96,9 @@ The example configuration contains product defaults only.
   [Gmail body contract](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages.attachments);
   blobs and encoding use the
   [Apps Script Byte-array utilities](https://developers.google.com/apps-script/reference/utilities/utilities).
+  Image transport canonicalizes Utilities' padded base64url output to the
+  unpadded form required at the Gemini request boundary, preserves exact bytes,
+  and counts decoded bytes before enforcing per-image and aggregate limits.
   This repair has synthetic regression coverage; deployed import acceptance
   requires a separate live run. Bounded
   image acquisition preserves DOM-order slots, maps only matching inline CIDs,
