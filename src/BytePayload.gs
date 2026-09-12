@@ -36,6 +36,14 @@ function canonicalBase64Url_(value) {
 }
 
 function decodeBytePayload_(value, size, record, maxBytes) {
+  const bytes = validatedBytePayloadContents_(value, size, record, maxBytes);
+  if (size != null && size !== bytes.length) fail_('MAIL');
+  return bytes;
+}
+
+// Validate transport, elements and size type without asserting size equality.
+// Only MIME text recovery consumes this directly and must retain incompleteness.
+function validatedBytePayloadContents_(value, size, record, maxBytes) {
   const data = value == null ? '' : value;
   if (record) {
     record.stage = 'data-validation';
@@ -80,6 +88,5 @@ function decodeBytePayload_(value, size, record, maxBytes) {
   if (maxBytes != null && Array.isArray(bytes) && bytes.length > maxBytes) fail_('MAIL');
   bytes = validatedBytes_(bytes);
   if (record) record.stage = 'size-match';
-  if (size != null && size !== bytes.length) fail_('MAIL');
   return bytes;
 }

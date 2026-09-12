@@ -492,3 +492,106 @@ test('real extraction persists duplicated coded proposals once and distinct URL 
     f.run(); assert.equal(f.coupon.rows.length, expected + 1); assert.equal(f.mutations.length, 2);
   }
 });
+
+const mimeFixture = require('./mime-fixtures');
+function recoveredMimeFixture(mode, form, source = mimeFixture.text) {
+  const f = fixture();
+  f.raw.payload = {...mimeFixture.payload(mode, form, source), headers: f.raw.payload.headers};
+  f.boot(); delete f.state.extractCouponOutcome;
+  f.ctx.callGeminiModel_ = () => modelResponse([candidate('Save+20', {review: false, notes: ''})]);
+  f.ctx.Gmail.Users.Messages.Attachments = {get: () => assert.fail('no document reads')};
+  return f;
+}
+
+test('recovered MIME requires review through real extraction, AI retry and replay but permits explicit evidenced Confirm', () => {
+  for (const mode of ['mismatch', 'files']) {
+    for (const form of mimeFixture.forms) {
+      const f = recoveredMimeFixture(mode, form);
+      assert.equal(f.message.incomplete, true);
+      assert.equal(f.run().messages[0].status, 'review');
+      assert.equal(f.saved().batchIntent.archiveAllowed, false);
+      assert.equal(f.coupon.rows[1][3], 'Save+20');
+      f.action(2, 'Retry with AI');
+      assert.equal(f.coupon.rows[1][17], 'Needs review');
+      assert.equal(f.saved().status, 'review'); assert.equal(f.mutations.length, 0);
+      // A restarted execution replays its durable reviewed batch without
+      // re-extraction or upgrading the row's disposition.
+      const intent = JSON.stringify(f.saved().batchIntent);
+      const interrupted = f.saved(); interrupted.status = 'processing'; interrupted.failureStage = 'write';
+      f.ctx.saveMessageState_(f.journal, interrupted);
+      f.boot(); f.state.extractCouponOutcome = () => assert.fail('no extraction on replay');
+      assert.equal(f.run().messages[0].status, 'review');
+      assert.equal(JSON.stringify(f.saved().batchIntent), intent);
+      assert.equal(f.coupon.rows[1][17], 'Needs review'); assert.equal(f.mutations.length, 0);
+      // Explicit review preserves the agreed product flow after full evidence
+      // and immutable candidate-batch validation.
+      f.action(2, 'Confirm');
+      assert.equal(f.saved().status, 'confirmed'); assert.equal(f.mutations.length, 2);
+      assert.deepEqual(f.mutations.map(value => JSON.parse(JSON.stringify(value))),
+        [{addLabelIds: ['coupon-label']}, {removeLabelIds: ['INBOX']}]);
+    }
+  }
+});
+
+test('recovered MIME with zero AI and deterministic candidates remains reachable and never becomes a non-offer', () => {
+  for (const mode of ['mismatch', 'files']) {
+    for (const form of mimeFixture.forms) {
+      const f = recoveredMimeFixture(mode, form, 'Ordinary message\r\n');
+      f.ctx.callGeminiModel_ = () => modelResponse([]);
+      assert.equal(f.run().messages[0].status, 'awaiting_extraction');
+      assert.equal(f.saved().status, 'awaiting_extraction');
+      assert.equal(f.coupon.rows.length, 1); assert.equal(f.mutations.length, 0);
+      const saved = f.saved(); saved.nextRetryAt = new Date(Date.now() - 1).toISOString();
+      f.ctx.saveMessageState_(f.journal, saved);
+      f.boot(); delete f.state.extractCouponOutcome; f.ctx.callGeminiModel_ = () => modelResponse([]);
+      assert.equal(f.ctx.awaitingMessageExtraction_(f.saved()), true);
+      assert.equal(f.run().messages[0].status, 'awaiting_extraction');
+      assert.equal(f.mutations.length, 0);
+    }
+  }
+});
+
+test('recovered MIME Confirm rejects unevidenced fields and Ignore leaves Gmail untouched', () => {
+  for (const mode of ['mismatch', 'files']) {
+    const f = recoveredMimeFixture(mode, 'rest'); f.run();
+    f.coupon.rows[1][3] = 'UNSUPPORTED99';
+    f.action(2, 'Confirm');
+    assert.equal(f.saved().status, 'review'); assert.equal(f.mutations.length, 0);
+    f.coupon.rows[1][3] = 'Save+20';
+    f.action(2, 'Ignore'); assert.equal(f.saved().status, 'ignored'); assert.equal(f.mutations.length, 0);
+  }
+});
+
+test('recovered MIME partial batches cannot finalize missing candidates or a mixed Confirm and Ignore', () => {
+  for (const mode of ['mismatch', 'files']) {
+    for (const form of ['rest', 'signed']) {
+      for (const action of ['Confirm', 'Ignore', 'Retry with AI']) {
+        const f = recoveredMimeFixture(mode, form, mimeFixture.text + 'Brand coupon code SAVE+30\r\n');
+        f.ctx.callGeminiModel_ = () => modelResponse(['Save+20', 'SAVE+30'].map(code => candidate(code, {review: false, notes: ''})));
+        const getRange = f.coupon.getRange; let fail = true;
+        f.coupon.getRange = (...args) => {
+          const range = getRange(...args);
+          return {...range, setValues: values => {
+            if (args[0] === 3 && args[1] === 1 && fail) throw Error('synthetic second-row failure');
+            range.setValues(values);
+          }};
+        };
+        assert.equal(f.run().messages[0].status, 'failed');
+        assert.equal(f.saved().batchIntent.archiveAllowed, false);
+        assert.equal(f.saved().batchIntent.candidates.length, 2);
+        assert.equal(f.ctx.completeCandidateBatch_(f.saved()), false);
+        f.boot(); f.ctx.extractCouponOutcome_ = () => assert.fail('no incomplete-batch extraction');
+        f.action(2, action); assert.equal(f.mutations.length, 0);
+        assert.throws(() => f.ctx.finalizeImportedMessage_(f.state, f.saved()), /STATE/);
+        fail = false; f.boot(); f.state.extractCouponOutcome = () => assert.fail('no replay extraction');
+        assert.equal(f.run().messages[0].status, 'review');
+        assert.equal(f.coupon.rows.length, 3); assert.equal(f.mutations.length, 0);
+        f.action(3, 'Confirm');
+        assert.equal(f.mutations.length, action === 'Confirm' ? 2 : 0);
+        if (action === 'Retry with AI') {
+          f.action(2, 'Confirm'); assert.equal(f.mutations.length, 2);
+        }
+      }
+    }
+  }
+});

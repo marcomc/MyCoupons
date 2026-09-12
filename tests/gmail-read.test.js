@@ -155,6 +155,7 @@ test('MIME trace identifies each production validation and runtime failure witho
     ['part-validation', raw => { raw.payload.parts[0] = null; }],
     ['part-validation', raw => { raw.payload.parts[0].mimeType = 123; }],
     ['headers-validation', raw => { raw.payload.parts[0].headers = {}; }],
+    ['attachment-classification', raw => { raw.payload.parts[0].filename = 1; }],
     ['headers-validation', raw => { raw.payload.parts[0].headers = [{name: 'Secret header', value: 1}]; }],
     ['multipart-validation', raw => { raw.payload.parts[0] = {mimeType: 'multipart/mixed', body: body('SECRET')}; }],
     ['body-validation', raw => { raw.payload.parts[0].body = null; }],
@@ -164,7 +165,6 @@ test('MIME trace identifies each production validation and runtime failure witho
     ['base64-decode', (_, ctx) => { ctx.Utilities.base64DecodeWebSafe = () => { throw Error('SECRET provider detail'); }; }],
     ['bytes-validation', (_, ctx) => { ctx.Utilities.base64DecodeWebSafe = () => ({length: 6, 0: 83}); }],
     ['bytes-validation', (_, ctx) => { ctx.Utilities.base64DecodeWebSafe = () => null; }],
-    ['size-match', raw => { raw.payload.parts[0].body.size = 7; }],
     ['charset-validation', raw => { raw.payload.parts[0].headers = [{name: 'Content-Type', value: 'text/plain; charset="SECRET!"'}]; }],
     ['blob-create', (_, ctx) => { ctx.Utilities.newBlob = () => { throw Error('SECRET blob detail'); }; }],
     ['string-decode', (_, ctx) => { ctx.Utilities.newBlob = () => ({getDataAsString: () => { throw Error('SECRET charset detail'); }}); }],
@@ -241,5 +241,81 @@ test('MIME trace observes byte representation, size equality and charset classes
     fresh.parseMimePayload_({...payload, headers: [{name: 'Content-Type', value: 'text/plain; charset=' + charset}]}, next);
     assert.equal(next.parts[0].charsetClass, classification);
     assert.doesNotMatch(JSON.stringify(next), /SECRET/);
+  }
+});
+
+const mimeFixture = require('./mime-fixtures');
+
+test('MIME recovery preserves original text and HTML with explicit size mismatch coverage', () => {
+  for (const form of mimeFixture.forms) {
+    const {ctx} = harness();
+    const payload = mimeFixture.payload('mismatch', form);
+    const original = JSON.stringify(payload);
+    const trace = {parts: [], omitted: 0};
+    const result = ctx.parseMimePayload_(payload, trace);
+    assert.equal(result.text, mimeFixture.text);
+    assert.equal(result.html, '<p>' + mimeFixture.text + '</p>\r\n');
+    assert.equal(result.incomplete, true);
+    assert.equal(trace.parts[1].sizeMatches, false);
+    assert.equal(trace.parts[2].sizeMatches, false);
+    assert.equal(JSON.stringify(payload), original);
+    for (const size of [0, 1, payload.parts[0].body.size + 10]) {
+      const part = {...payload.parts[0], body: {...payload.parts[0].body, size}};
+      assert.equal(ctx.parseMimePayload_(part).text, mimeFixture.text);
+      assert.equal(ctx.parseMimePayload_(part).incomplete, true);
+      assert.throws(() => ctx.decodeBytePayload_(part.body.data, size), /MAIL/);
+    }
+    for (const mutate of [p => { p.body.data = [256]; }, p => { p.body.data = 'bad!'; },
+      p => { p.body.data = false; }, p => { p.body.data = []; },
+      p => { delete p.body.data; }, p => { p.body.size = '10'; }, p => { p.body.size = -1; }]) {
+      const part = JSON.parse(JSON.stringify(payload.parts[0])); mutate(part);
+      assert.throws(() => ctx.parseMimePayload_(part), /MAIL/);
+    }
+  }
+});
+
+test('unsupported file attachments never enter body evidence or trigger document reads', () => {
+  for (const form of mimeFixture.forms) {
+    for (const identity of ['filename', 'disposition', 'inline-filename']) {
+      const {ctx} = harness();
+      const source = mimeFixture.text + ' '.repeat(415 - Buffer.byteLength(mimeFixture.text)) + '\r\n';
+      assert.equal(Buffer.byteLength(source), 417);
+      const payload = mimeFixture.payload('files', form, source);
+      const file = payload.parts[1];
+      if (identity === 'disposition') { delete file.filename; file.headers = [{name: 'Content-Disposition', value: 'ATTACHMENT; filename="document.txt"'}]; }
+      if (identity === 'inline-filename') file.headers = [{name: 'Content-Disposition', value: 'inline'}];
+      for (const inlineData of [false, true]) {
+        if (inlineData) file.body = mimeFixture.body('Unrelated coupon code FILE99', form);
+        const raw = {id: 'abc123', internalDate: '0', payload};
+        ctx.Gmail.Users.Messages = {Attachments: {get: () => assert.fail('no document fetch')}, modify: () => assert.fail('no Gmail mutation')};
+        const original = JSON.stringify(raw);
+        const result = ctx.canonicalGmailMessage_(raw);
+        assert.equal(result.text, source); assert.equal(result.html, ''); assert.equal(result.incomplete, true);
+        assert.equal(JSON.stringify(raw), original);
+        assert.doesNotMatch(JSON.stringify(ctx.candidateSource_(result).spans), /FILE99/);
+      }
+    }
+  }
+});
+
+test('recovered MIME messages still acquire image attachments and preserve HTML coverage boundaries', () => {
+  for (const mode of ['mismatch', 'files']) {
+    for (const form of mimeFixture.forms) {
+      const {ctx} = harness();
+      const payload = mimeFixture.payload(mode, form);
+      payload.parts.push({mimeType: 'image/png', filename: 'offer.png', body: {size: mimeFixture.png.length, attachmentId: 'image-file'}});
+      payload.parts.push({mimeType: 'text/html', body: mimeFixture.body('<p>first</p><p>second</p><div hidden>HIDDEN99</div><svg>FOREIGN99</svg>', form)});
+      const reads = [];
+      ctx.Gmail.Users.Messages = {Attachments: {get: (_, id, attachment) => {
+        reads.push(attachment); return mimeFixture.body(mimeFixture.png, form);
+      }}};
+      const result = ctx.canonicalGmailMessage_({id: 'abc123', internalDate: '0', payload});
+      assert.deepEqual(reads, ['image-file']); assert.equal(result.images.length, 1);
+      assert.equal(result.images[0].dimensions.width, 200); assert.equal(result.incomplete, true);
+      const source = ctx.candidateSource_(result);
+      assert.equal(source.incomplete, true);
+      assert.ok(source.spans.includes('first')); assert.ok(source.spans.includes('second'));
+      assert.doesNotMatch(JSON.stringify(source.spans), /HIDDEN99|FOREIGN99/);
+    }
   }
 });

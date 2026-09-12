@@ -89,8 +89,17 @@ The example configuration contains product defaults only.
   incomplete and malformed message data produces a retryable error. Text and
   image payloads accept REST base64url strings and Advanced-service byte arrays
   through one validated boundary. Signed and unsigned octets preserve exact
-  content; invalid elements, malformed encoding, and declared-size mismatches
-  fail closed. Empty multipart byte arrays remain valid containers. Utilities
+  content; invalid elements, malformed encoding, invalid size types, and missing
+  positive-size body data remain errors. A nonempty text body with valid bytes
+  but an inconsistent declared size retains its entire decoded text, including
+  trailing CRLF, with incomplete coverage. Image and multipart-container size
+  validation stays strict. Named files and attachment-disposition parts are
+  excluded from body text/HTML; unsupported documents retain incomplete coverage
+  and are never fetched or parsed. Supported image attachments remain independently
+  acquired. Incomplete sources require review through initial extraction, AI retry,
+  and batch replay, including empty results. Explicit Confirm remains available
+  after validating all factual fields and the complete persisted candidate batch.
+  Empty multipart byte arrays remain valid containers. Utilities
   receive signed bytes, while image signatures and dimensions use unsigned
   octets. The REST representation and byte counts follow the
   [Gmail body contract](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages.attachments);
