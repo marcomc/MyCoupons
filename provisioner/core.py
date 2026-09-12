@@ -1104,7 +1104,7 @@ def _gcloud_reports_bootstrap_secret_not_found(
         return False
     resource = rf"projects/(?:{re.escape(project_id)}|{re.escape(project_number)})/secrets/{re.escape(secret_name)}"
     account_context = (
-        rf"\nThis command is authenticated as {re.escape(owner)} which is the active account "
+        rf"(?:\n| )This command is authenticated as {re.escape(owner)} which is the active account "
         r"specified by the \[core/account\] property\."
     )
     return re.fullmatch(

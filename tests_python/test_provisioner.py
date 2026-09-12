@@ -1025,9 +1025,8 @@ class ProvisionerCommandTests(unittest.TestCase):
     def test_command_runner_classifies_only_the_owner_pinned_missing_secret_diagnostic(self) -> None:
         diagnostic = (
             "ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret "
-            "[projects/654321/secrets/mycoupons-bootstrap] not found.\n"
-            "This command is authenticated as owner@example.com which is the active account "
-            "specified by the [core/account] property."
+            "[projects/654321/secrets/mycoupons-bootstrap] not found. This command is authenticated as "
+            "owner@example.com which is the active account specified by the [core/account] property.\n"
         )
         command = (sys.executable, "-c", f"import sys; sys.stderr.write({diagnostic!r}); raise SystemExit(1)")
         absent_secret = ("vertex-project", "654321", "mycoupons-bootstrap", "owner@example.com")
@@ -2476,6 +2475,13 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
                 *absent_secret,
             )
         )
+        self.assertTrue(
+            core._gcloud_reports_bootstrap_secret_not_found(
+                b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found. "
+                b"This command is authenticated as owner@example.com which is the active account specified by the [core/account] property.\n",
+                *absent_secret,
+            )
+        )
         for response in (
             b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found.\n"
             b"This command is authenticated as other@example.com which is the active account specified by the [core/account] property.",
@@ -2483,6 +2489,10 @@ class ProvisionerAppsScriptDeploymentTests(unittest.TestCase):
             b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/other-project/secrets/mycoupons-bootstrap] not found.",
             b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found.\n"
             b"This command is authenticated as owner@example.com which is the active account specified by the [core/project] property.",
+            b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found.  "
+            b"This command is authenticated as owner@example.com which is the active account specified by the [core/account] property.",
+            b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found.\t"
+            b"This command is authenticated as owner@example.com which is the active account specified by the [core/account] property.",
             b"ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret [projects/654321/secrets/mycoupons-bootstrap] not found.\n"
             b"This command is authenticated as owner@example.com which is the active account specified by the [core/account] property.\n"
             b"ERROR: (gcloud.secrets.describe) PERMISSION_DENIED",
