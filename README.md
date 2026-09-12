@@ -271,11 +271,16 @@ intent is saved first; unknown/orphan triggers fail closed rather than being
 adopted or duplicated. Completion removes the continuation even when individual
 read failures remain for a later daily retry.
 
-Daily and continuation runs share fifteen execution slots per rolling 24 hours
-(60 minutes of four-minute execution budgets). Exhaustion removes the
-continuation without discarding progress; a daily run after the budget resets
-resumes it. This is a conservative workload cap, not a guarantee against shared
-Apps Script quotas or arbitrary mailbox arrival rates.
+Daily and continuation runs share fifteen scan slots per rolling 24 hours
+(60 minutes of four-minute scan budgets). At exhaustion, the owned continuation
+remains as a wake for the rolling reset, independently of the daily schedule.
+Paused continuation events validate owner and exact UID but skip spreadsheet,
+journal and message access without reserving another slot. These lightweight
+polls still incur trigger overhead: the cap does not guarantee protection against
+shared Apps Script quotas or arbitrary mailbox arrival rates.
+After owner and private-spreadsheet validation, daily lifecycle failures are
+notified once and retained if delivery fails; unknown continuation events do
+not gain notification authority.
 
 `removeDailyImportTrigger()` preflights both owned clock triggers before deleting
 either and refuses to choose between duplicates. When the daily trigger's stored

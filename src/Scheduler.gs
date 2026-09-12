@@ -42,22 +42,33 @@ function stopMailboxContinuation_(owned) {
   }
 }
 
-function beginMailboxContinuation_(config, event) {
+function mailboxContinuationForEvent_(config, event) {
   const owned = mailboxContinuation_(config);
   if (event && (!owned.trigger || !owned.record || typeof event.triggerUid !== 'string' ||
       event.triggerUid !== owned.record.triggerId)) fail_('RESOURCE');
+  return owned;
+}
+
+function mailboxBudgetPaused_(record) {
+  return !!record && record.runs >= MC_CONTINUATION_MAX_RUNS && Date.now() < record.budgetStartMs + 86400000;
+}
+
+// Only called by the locked scheduler with the result of the exact preflight.
+function beginMailboxContinuation_(config, owned) {
   let record = owned.record || {version: 1, ownerEmail: config.ownerEmail.toLowerCase(), installationId: mailboxInstallationId_(config), triggerId: '',
     budgetStartMs: Date.now(), runs: 0};
   if (Date.now() >= record.budgetStartMs + 86400000) {
     record.budgetStartMs = Date.now(); record.runs = 0;
   }
-  if (record.runs >= MC_CONTINUATION_MAX_RUNS) { stopMailboxContinuation_(owned); return false; }
-  record.runs++;
+  const admitted = record.runs < MC_CONTINUATION_MAX_RUNS;
+  if (admitted) record.runs++;
+  // Retain a wake across the rolling reset even if the next daily run is early.
+  if (!admitted && owned.trigger) return false;
   // Reserve the execution even if it terminates abruptly, and persist creation
   // intent before the provider mutation. Unknown orphan triggers are never adopted.
   if (!owned.trigger) record.triggerId = '';
   props_().setProperty(MC_CONTINUATION_KEY, JSON.stringify(record));
-  if (owned.trigger) return true;
+  if (owned.trigger) return admitted;
   let trigger;
   try {
     trigger = ScriptApp.newTrigger(MC_CONTINUATION_HANDLER).timeBased().everyMinutes(5).create();
@@ -66,7 +77,7 @@ function beginMailboxContinuation_(config, event) {
         !/^[A-Za-z0-9_-]{1,200}$/.test(String(trigger.getUniqueId()))) fail_('RESOURCE');
     record.triggerId = String(trigger.getUniqueId());
     props_().setProperty(MC_CONTINUATION_KEY, JSON.stringify(record));
-    return true;
+    return admitted;
   } catch (e) {
     if (trigger) { try { ScriptApp.deleteTrigger(trigger); } catch (ignored) {} }
     throw e;
@@ -149,17 +160,22 @@ function runScheduledImport() {
 function runMailboxScheduledImport_(event) {
   let summary;
   let authorized = false;
+  let paused = false;
   const deadlineMs = Date.now() + MC.maxRuntimeMs - 15000;
   try {
     summary = withLock_(function () {
       const config = config_();
       assertOwner_(config);
       if (mailboxDeadlineReached_(deadlineMs)) fail_('BUSY');
+      const empty = {imported: 0, importedIds: [], review: 0, errors: [], links: [], omittedLinks: false};
+      // Known paused events need no spreadsheet, journal, discovery or mutation.
+      // Unknown events never gain notification authority from owner identity alone.
+      let owned = event ? mailboxContinuationForEvent_(config, event) : null;
+      if (owned && mailboxBudgetPaused_(owned.record)) return empty;
       assertPrivateSpreadsheet_(openSpreadsheetById_(config.spreadsheetId), config);
-      if (!beginMailboxContinuation_(config, event)) {
-        return {imported: 0, importedIds: [], review: 0, errors: [], links: [], omittedLinks: false};
-      }
       authorized = true;
+      if (!owned) owned = mailboxContinuationForEvent_(config, event);
+      if (!beginMailboxContinuation_(config, owned)) { paused = true; return empty; }
       const state = ensureSheetState_(config, deadlineMs);
       state._deadlineMs = deadlineMs;
       const before = readMessageJournal_(state.journalSheet);
@@ -175,7 +191,7 @@ function runMailboxScheduledImport_(event) {
         else {
           const scan = JSON.parse(props_().getProperty(MC_MAILBOX_SCAN_STATE_KEY));
           if (!validMailboxScanState_(scan) || scan.installationId !== mailboxInstallationId_(config)) fail_('STATE');
-          if (scan.complete || continuation.record.runs >= MC_CONTINUATION_MAX_RUNS) stopMailboxContinuation_(continuation);
+          if (scan.complete) stopMailboxContinuation_(continuation);
         }
       } catch (e) { outcome.errors.push({messageId: '', code: errorCode_(e)}); }
       return outcome;
@@ -183,7 +199,7 @@ function runMailboxScheduledImport_(event) {
   } catch (e) {
     summary = {imported: 0, importedIds: [], review: 0, errors: [{messageId: '', code: errorCode_(e)}], links: [], omittedLinks: false};
   }
-  if (!authorized) return summary;
+  if (!authorized || paused) return summary;
   try { withLock_(function () { notifyScheduledImport_(summary); }, deadlineMs); } catch (e) {
     if (e && e.code === 'BUSY') persistPendingNotification_(summary);
   }

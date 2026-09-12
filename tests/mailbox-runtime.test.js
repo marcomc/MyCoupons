@@ -94,19 +94,99 @@ test('693 messages drain through one owned continuation, then later arrivals use
   assert.equal(f.fetched.length, 773); assert.equal(new Set(f.fetched).size, 773);
 });
 
-test('continuation slot budget survives failures and a later daily run resumes the same window', () => {
+test('continuation slot budget retains a wake and resumes the same window at the rolling reset', () => {
   const f = fixture(1);
   f.ctx.UrlFetchApp.fetch = () => response(503, {error: {code: 503, message: 'unavailable'}});
   f.ctx.runScheduledImport();
   const original = f.properties.MYCOUPONS_MAILBOX_SCAN_STATE;
+  const uid = f.triggers[0].getUniqueId(); const started = f.now();
   for (let i = 1; i < 15; i++) f.continuation();
-  assert.equal(f.triggers.length, 0);
+  assert.equal(f.triggers.length, 1); assert.equal(f.triggers[0].getUniqueId(), uid);
   assert.equal(JSON.parse(f.properties.MYCOUPONS_MAILBOX_CONTINUATION).runs, 15);
   assert.equal(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE, original);
-  f.ctx.runScheduledImport(); assert.equal(f.triggers.length, 0);
-  f.advance(86400000); f.ctx.runScheduledImport();
+  f.advance(23 * 3600000); f.ctx.runScheduledImport(); assert.equal(f.triggers.length, 1);
+  const open = f.ctx.openSpreadsheetById_; const ensure = f.ctx.ensureSheetState_;
+  f.ctx.openSpreadsheetById_ = () => { assert.fail('paused event must not open spreadsheet'); };
+  f.ctx.ensureSheetState_ = () => { assert.fail('paused event must not load sheet state'); };
+  const pausedProperties = JSON.stringify(f.properties); const sent = f.sent.length;
+  for (let i = 0; i < 12; i++) { assert.equal(f.continuation().errors.length, 0); f.advance(300000); }
+  assert.equal(JSON.stringify(f.properties), pausedProperties); assert.equal(f.sent.length, sent);
+  assert.equal(f.now(), started + 86400000);
+  assert.equal(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE, original);
+  assert.equal(JSON.parse(f.properties.MYCOUPONS_MAILBOX_CONTINUATION).runs, 15);
+  f.ctx.openSpreadsheetById_ = open; f.ctx.ensureSheetState_ = ensure;
+  f.continuation();
   assert.equal(f.triggers.length, 1); assert.equal(JSON.parse(f.properties.MYCOUPONS_MAILBOX_CONTINUATION).runs, 1);
   assert.equal(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE, original);
+});
+
+test('an early daily run recreates one missing continuation at the cap without reserving another scan', () => {
+  const f = fixture(1000); f.ctx.runScheduledImport();
+  for (let i = 1; i < 15; i++) f.continuation();
+  const prior = f.properties.MYCOUPONS_MAILBOX_SCAN_STATE; const count = f.fetched.length;
+  f.triggers.length = 0; f.advance(23 * 3600000);
+  assert.equal(f.ctx.runScheduledImport().errors.length, 0); assert.equal(f.triggers.length, 1);
+  assert.equal(JSON.parse(f.properties.MYCOUPONS_MAILBOX_CONTINUATION).runs, 15);
+  assert.equal(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE, prior); assert.equal(f.fetched.length, count);
+  f.advance(3600000); assert.equal(f.continuation().errors.length, 0);
+  assert.equal(f.fetched.length, count + 50);
+});
+
+test('verified daily lifecycle failures notify once and failed delivery remains pending', () => {
+  for (const mode of ['orphan', 'duplicate', 'create', 'mail']) {
+    const f = fixture();
+    if (mode === 'orphan' || mode === 'duplicate') f.triggers.push(f.trigger('runMailboxContinuation', 'orphan'));
+    if (mode === 'duplicate') f.triggers.push(f.trigger('runMailboxContinuation', 'duplicate'));
+    if (mode === 'create' || mode === 'mail') f.ctx.ScriptApp.newTrigger = () => { throw new Error('creation failed'); };
+    if (mode === 'mail') f.ctx.MailApp.sendEmail = () => { throw new Error('delivery failed'); };
+    assert.equal(f.ctx.runScheduledImport().errors.length, 1, mode);
+    assert.equal(f.fetched.length, 0, mode); assert.equal(f.deleted.length, 0, mode);
+    if (mode === 'mail') assert.equal(JSON.parse(f.properties.MYCOUPONS_PENDING_NOTIFICATION).errors.length, 1);
+    else {
+      assert.equal(f.sent.length, 1, mode); assert.equal(f.sent[0][0], f.config.ownerEmail, mode);
+      f.ctx.runScheduledImport(); assert.equal(f.sent.length, 1, mode);
+    }
+  }
+});
+
+test('budget no-ops preserve delivered fingerprints and pending failures without treating them as resolved', () => {
+  for (const delivery of ['sent', 'pending']) {
+    const f = fixture(); const send = f.ctx.MailApp.sendEmail; let attempts = 0;
+    f.ctx.UrlFetchApp.fetch = () => response(503, {error: {code: 503, message: 'unavailable'}});
+    f.ctx.MailApp.sendEmail = (...args) => {
+      attempts++;
+      if (delivery === 'pending') throw new Error('delivery failed');
+      send(...args);
+    };
+    f.ctx.runScheduledImport();
+    for (let i = 1; i < 15; i++) f.continuation();
+    const before = JSON.stringify(f.properties); const priorAttempts = attempts;
+    f.advance(23 * 3600000); assert.equal(f.ctx.runScheduledImport().errors.length, 0);
+    assert.equal(f.continuation().errors.length, 0);
+    assert.equal(JSON.stringify(f.properties), before, delivery); assert.equal(attempts, priorAttempts, delivery);
+    f.ctx.MailApp.sendEmail = send; f.advance(3600000); f.continuation();
+    assert.equal(f.sent.length, 1, delivery);
+    assert.equal(f.properties.MYCOUPONS_PENDING_NOTIFICATION, undefined, delivery);
+  }
+});
+
+test('unverified events or owner configuration privacy and lock failures cannot notify or change state', () => {
+  for (const mode of ['event', 'orphan-event', 'owner', 'profile', 'private', 'config', 'lock']) {
+    const f = fixture();
+    if (mode === 'orphan-event') f.triggers.push(f.trigger('runMailboxContinuation', 'orphan'));
+    if (mode === 'owner') f.ctx.Session.getEffectiveUser = () => ({getEmail: () => 'foreign@example.com'});
+    if (mode === 'profile') f.ctx.Gmail.Users.getProfile = () => ({emailAddress: 'foreign@example.com'});
+    if (mode === 'private') f.ctx.assertPrivateSpreadsheet_ = () => { f.ctx.fail_('SHARING'); };
+    if (mode === 'config') f.properties.MYCOUPONS_CONFIG = '{}';
+    if (mode === 'lock') f.ctx.LockService.getScriptLock = () => ({tryLock: () => false});
+    const prior = JSON.stringify(f.properties);
+    const result = mode.endsWith('event') ? f.ctx.runMailboxContinuation({triggerUid: 'orphan'}) : f.ctx.runScheduledImport();
+    assert.equal(result.errors.length, 1, mode); assert.equal(f.sent.length, 0, mode);
+    assert.equal(JSON.stringify(f.properties), prior, mode); assert.equal(f.deleted.length, 0, mode);
+  }
+  const valid = fixture(100); valid.ctx.runScheduledImport(); const sent = valid.sent.length;
+  valid.ctx.ensureSheetState_ = () => { valid.ctx.fail_('STATE'); };
+  assert.equal(valid.continuation().errors.length, 1); assert.equal(valid.sent.length, sent + 1);
 });
 
 test('completed discovery removes continuation despite read failures, while a deadline retains pending IDs', () => {
