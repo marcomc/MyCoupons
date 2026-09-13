@@ -369,4 +369,34 @@ for (const purpose of ['verify your account discount is applied at checkout', 'v
 for (const purpose of ['verify your account', 'access your account', 'verificare la tua identità']) {
   authenticationMessages.push({text: 'Acme: Use code 123456 to ' + purpose + ' and continue to checkout.'});
 }
+for (const qualifier of ['email confirmation', 'e-mail confirmation', 'MFA']) {
+  for (const noun of ['code', 'passcode', 'PIN']) {
+    const label = qualifier + ' ' + noun;
+    authenticationMessages.push(
+      {text: 'Acme: Your ' + label + ' is 123456'},
+      {text: 'Acme: aBcDeF is your ' + label + '.'},
+      {subject: 'Your ' + label, text: '123456'},
+      {html: '<h1>Your ' + label + '</h1><p>123456 expires in 10 minutes.</p>'},
+      {text: 'Use your ' + label + ':\n123456'},
+      {text: 'Your ' + label + ' is 123456. Brand coupon code SAVE20'},
+      {text: 'Your ' + label + ' is "123 456".'},
+      {text: 'This is not a ' + label + ': SAVE20; your ' + label + ' is 123456'},
+      {text: 'Example: Your ' + label + ' is 123456.\nYour ' + label + ' is aBcDeF'}
+    );
+    ordinaryMessages.push(
+      {text: 'Your ' + label + ' is confidential. Brand coupon code SAVE20'},
+      {text: 'Example: Your ' + label + ' is 123456. Brand coupon code SAVE20'},
+      {subject: 'Sign in to Acme', text: 'This is not a ' + label + ': SAVE20. Brand coupon code SAVE20'},
+      {text: 'Learn how to use your ' + label + '. Brand coupon code SAVE20'},
+      {text: 'Your ' + label + ' is https://example.com/help. Brand coupon code SAVE20'},
+      {text: 'Your ' + label + ' is help@example.com. Brand coupon code SAVE20'}
+    );
+  }
+}
+ordinaryMessages.push(
+  {text: 'Your order confirmation code is 123456. Brand coupon code SAVE20'},
+  {text: 'Your booking confirmation code is 123456. Brand coupon code SAVE20'},
+  {text: 'Enable MFA for your account. Brand coupon code SAVE20'},
+  {text: 'Email confirmation is required. Brand coupon code SAVE20'}
+);
 module.exports = {authenticationMessages, ordinaryMessages};

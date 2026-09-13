@@ -159,6 +159,24 @@ test('grouped authentication recognition is bounded and cannot normalize coupon 
   for (let index = 0; index < text.length; index += 4) ctx.authenticationGroupedLiteral_(measured, index);
 });
 
+for (const label of ['email confirmation code', 'MFA code']) {
+  test('R11 explicit authentication label at actual extraction consumer: ' + label, () => {
+    const {ctx} = harness();
+    const text = 'Acme: Your ' + label + ' is 123456';
+    let calls = 0;
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      return aiResponse({merchant: 'Acme', code: '123456',
+        evidence: {merchant: {quote: 'Acme'}, code: {quote: text}}});
+    };
+    const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+    assert.equal(outcome.excludedReason, 'authentication_code_message');
+    assert.equal(calls, 0);
+    assert.equal(outcome.archiveAllowed, false);
+    assert.deepEqual(Array.from(outcome.candidates), []);
+  });
+}
+
 test('authentication issuance excludes the entire message before model and both candidate producers', () => {
   const {ctx} = harness();
   const {authenticationMessages, ordinaryMessages} = require('./authentication-fixtures');

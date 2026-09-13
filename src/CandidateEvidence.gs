@@ -163,7 +163,7 @@ function authenticationLiteral_(token) {
     !/^(?:OTP|CODE|PASSCODE|PIN|XXX+|CODE_HERE)[.!?,;:]*$/iu.test(token);
 }
 function authenticationLabelPattern_() {
-  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp)\\s+(?:code|passcode|pin)|' +
+  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp|e-?mail\\s+confirmation|mfa)\\s+(?:code|passcode|pin)|' +
     'passcode|otp|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso|reimpostazione(?:\\s+password)?))';
 }
 function authenticationLabelQualifier_() {
