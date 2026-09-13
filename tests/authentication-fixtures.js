@@ -940,6 +940,33 @@ for (const verb of ['Check', 'Determine', 'Find out', 'Ask']) for (const conjunc
 }
 for (const issuer of ['If Bank', 'Whether Services']) authenticationMessages.push({text: issuer + ': Your verification code is 123456'});
 for (const value of ['IF+77', 'WHETHER77']) authenticationMessages.push({text: 'Your verification code is ' + value});
+for (const question of ['Can I share my', 'Could we share our', 'Should he use his', 'Can she use her',
+  'Would they share their', 'Can it use its', 'Is my', 'Was their', 'Has our', 'Were your', 'Did he use his',
+  'Does she use her', 'Do they use their', 'Have we received our', 'Had I received my',
+  'May I share my', 'Might we use our', 'Will I use my', 'Am I using my', 'Shall we use our']) {
+  for (const issuer of ['', 'Acme: ', 'Acme Inc.: ', 'Welcome. ', 'Brand offer; ']) {
+    const phrase = issuer + question + ' verification code 123456';
+    ordinaryMessages.push({text: phrase + '? Brand coupon code SAVE20'});
+    for (const separator of ['? ', '; ', '\n']) authenticationMessages.push({text: phrase + separator + 'Your verification code is 654321'});
+  }
+}
+for (const [open, close] of [['"', '"'], ['“', '”'], ["'", "'"], ['‘', '’']]) {
+  for (const issuer of ['', 'Acme: ', 'Acme Inc.: ']) {
+    const question = issuer + open + 'Can I share my verification code 123456';
+    ordinaryMessages.push(
+      {text: question + '?' + close + '. Brand coupon code SAVE20'},
+      {text: question + '; your verification code is 654321' + close + '. Brand coupon code SAVE20'},
+      {text: question.replace('code 123456', 'code: 123456') + '; your verification code is 654321' + close + '. Brand coupon code SAVE20'}
+    );
+    authenticationMessages.push({text: question + '?' + close + '. Your verification code is 654321'});
+    authenticationMessages.push({text: question.replace('code 123456', 'code: 123456') + close + '. Your verification code is 654321'});
+  }
+}
+for (const issuer of ['Can I Bank', 'Could We Services', 'My Bank', 'Our Services']) {
+  authenticationMessages.push({text: issuer + ': Your verification code is 123456'});
+}
+authenticationMessages.push({text: 'I can use code 123456 to sign in'}, {text: 'Your verification code: CAN+I77'});
+for (const modal of ['may', 'might', 'will', 'shall']) authenticationMessages.push({text: 'I ' + modal + ' use code 123456 to sign in'});
 // R24 revises only the known copular all-letter fixture class. Keep its original
 // sources, but assert semantic routing separately from pre-model exclusion.
 // This fixture partition does not call the production admission implementation.

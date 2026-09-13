@@ -307,8 +307,7 @@ function authenticationDiscussionClause_(text) {
   if (/\b(?:asked|said|reported|recalled|remembered)\s*[:,]?\s*(?:"[^"\n]*|“[^”\n]*|'[^'\n]*|‘[^’\n]*)$/iu.test(text)) return true;
   const instructionClause = text.slice(Math.max(text.lastIndexOf(','), text.lastIndexOf(';')) + 1);
   if (/(?:^|:\s*)\s*(?:if|unless|se)(?:\s*$|\s+(?:your|the|il|la)\b)/iu.test(instructionClause)) return true;
-  if (/(?:^|:\s*)\s*(?:was|were|is|are|did|does|do|can|could|would|should|has|have|had)\s+(?:you|your|the)\b/iu.test(instructionClause) ||
-      /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?$/iu.test(instructionClause) ||
+  if (/\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?$/iu.test(instructionClause) ||
       /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(?:you|your|the|il|la|tuo)\b/iu.test(instructionClause)) return true;
   if (/\b(?:(?:do\s+not|don[’']t|never|non)\s+(?:enter|type|use|inserisci|digita|usa)|(?:never|not)\s+ask\s+(?:you\s+)?to\s+(?:enter|type|use)|(?:learn|explain)\s+how\s+to\s+(?:enter|type|use))\b/iu.test(instructionClause)) return true;
   // A reference to another example is not an example of this issuance. Keep
@@ -330,7 +329,13 @@ function authenticationReportedClause_(text) {
   // Retain a connected report through politeness and a bounded dotted issuer.
   // A closing quote or independent sentence ends its authority over later values.
   const indirect = /\b(?:if|whether)(?:\s+|$)(["“'‘]?)\s*(?:(?=(?:your|the|a|an|this|that|you|i|we|he|she|it|they|il|la|tuo)\b|\S+\s+(?:is|è)(?=\s))(?:(?![.!?]\s|["”'’])[^\n])*|$)$/iu.exec(text);
-  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*)?(?:(?:i|we|you|he|she|they|it)\s+(?:(?:should|could|would|must|may|might|can|will)\s+)?)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita|(?:have\s+)?assigned)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text) || indirect;
+  const questionHead = '(?:am|was|were|is|are|did|does|do|can|could|would|should|has|have|had|may|might|will|shall)\\s+' +
+    '(?:i|we|you|he|she|it|they|my|our|your|his|her|its|their|the)\\b';
+  // A colon inside a captured quote belongs to the question. Only unquoted
+  // clauses need the issuer-prefix guard (for example, "Can I Bank:").
+  const direct = new RegExp('(?:^|[.!?;]\\s+|:\\s*)\\s*(["“\x27‘])\\s*' + questionHead + '(?:(?![.!?]\\s|["”\x27’])[^\\n])*$', 'iu').exec(text) ||
+    new RegExp('(?:^|[.!?;]\\s+|:\\s*)\\s*()' + questionHead + '(?:(?![.!?]\\s|["”\x27’]|:\\s*\\S)[^\\n])*$', 'iu').exec(text);
+  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*)?(?:(?:i|we|you|he|she|they|it)\s+(?:(?:should|could|would|must|may|might|can|will)\s+)?)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita|(?:have\s+)?assigned)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text) || indirect || direct;
   // A semicolon starts an independent clause unless it remains inside a quote.
   if (!report) return false;
   const separator = Math.max(text.lastIndexOf(';'), report === indirect && /^if\b/iu.test(report[0]) ? text.lastIndexOf(',') : -1);

@@ -71,6 +71,35 @@ for (const [name, message, code, quote] of [
   });
 }
 
+test('R26 direct first-person authentication questions preserve a genuine promotion', () => {
+  const {ctx} = harness(); let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'Can I share my verification code 123456? Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1); assert.equal(outcome.candidates[0].code, 'SAVE20');
+});
+
+for (const question of ['May I share my verification code 123456?',
+  '“Can I share my verification code: 123456; your verification code is 654321”']) {
+  test('R26 complete auxiliary and quoted-colon boundaries: ' + question, () => {
+    const {ctx} = harness(); let calls = 0;
+    ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+    const outcome = ctx.extractCouponOutcome_({text: question + '. Brand coupon code SAVE20', incomplete: false});
+    assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+    assert.equal(calls, 1); assert.equal(outcome.candidates[0].code, 'SAVE20');
+  });
+}
+
+test('R26 direct question context survives a cropped semantic quote', () => {
+  const {ctx} = harness();
+  const quote = 'code is “ABCDEF”';
+  for (const text of ['Can I confirm my code is “ABCDEF”', 'Can I check whether my code is “ABCDEF”']) {
+    const message = {subject: 'Sign in to Acme', text: text + '? Brand coupon code SAVE20', incomplete: false};
+    assert.equal(ctx.authenticationMessage_(ctx.candidateSource_(message), true), false);
+    assert.throws(() => ctx.parseAICandidateOutcome_({text: JSON.stringify({candidates: [], authentication: {quote, image: null}})}, message));
+  }
+});
+
 for (const [name, text, excluded] of [
   ['expiration-qualified-label', 'Your verification code expires in 10 minutes: 123456. Brand coupon code SAVE20', true],
   ['indirect-question', 'Check whether your verification code is 123456. Brand coupon code SAVE20', false]
