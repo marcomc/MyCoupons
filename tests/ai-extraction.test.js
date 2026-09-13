@@ -94,6 +94,51 @@ for (const [name, message, excluded] of [
   });
 }
 
+for (const [name, text, code] of [
+  ['grouped-value', 'Acme: Your verification code is 123 456.', '123'],
+  ['instruction-frame', 'Acme: Use the verification code to sign in:\n123456', '123456'],
+  ['wrapped-tail', 'Acme: Your verification code is 123456 (valid for 10 minutes).', '123456']
+]) {
+  test('R9 authentication admission at actual extraction consumer: ' + name, () => {
+    const {ctx} = harness();
+    let calls = 0;
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      return aiResponse({merchant: 'Acme', code, evidence: {merchant: {quote: 'Acme'}, code: {quote: code}}});
+    };
+    const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+    assert.equal(outcome.excludedReason, 'authentication_code_message');
+    assert.equal(calls, 0);
+    assert.equal(outcome.archiveAllowed, false);
+    assert.equal(outcome.candidates.length, 0);
+  });
+}
+
+test('grouped authentication recognition is bounded and cannot normalize coupon identities', () => {
+  const {ctx} = harness();
+  for (const separator of [' ', '\u00a0', '\u202f']) {
+    const text = 'Brand coupon code 123' + separator + '456';
+    ctx.callGeminiModel_ = () => aiResponse({code: '123456',
+      evidence: {merchant: {quote: 'Brand'}, code: {quote: text}}});
+    const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+    assert.equal(outcome.excludedReason, undefined);
+    assert.equal(outcome.archiveAllowed, false);
+    assert.equal(outcome.candidates.some(candidate => candidate.code === '123456'), false);
+    assert.equal(ctx.codeOccurrences_('123456', text).length, 0);
+    assert.equal(ctx.codeOccurrences_('123' + separator + '456', text).length, 0);
+  }
+  for (const text of ['123 456.ABC', '123 456!tail', '"123 456"tail', '"123 456".tail', '"123 456"!tail', '123 456-789']) {
+    assert.equal(ctx.authenticationGroupedLiteral_(text, 0), null, text);
+  }
+  for (const text of ['123 456.', '123 456!', '"123 456"', '"123 456".', '"123 456"!', '12 3456', '123\u202f456']) {
+    assert.ok(ctx.authenticationGroupedLiteral_(text, 0), text);
+  }
+  const text = '123 '.repeat(8000);
+  const measured = {length: text.length, charAt: index => text.charAt(index),
+    slice: (start, end) => { assert.ok(end - start <= 80); return text.slice(start, end); }};
+  for (let index = 0; index < text.length; index += 4) ctx.authenticationGroupedLiteral_(measured, index);
+});
+
 test('authentication issuance excludes the entire message before model and both candidate producers', () => {
   const {ctx} = harness();
   const {authenticationMessages, ordinaryMessages} = require('./authentication-fixtures');

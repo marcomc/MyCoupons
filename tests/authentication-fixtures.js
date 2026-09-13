@@ -246,4 +246,93 @@ ordinaryMessages.push(
   {text: 'Your login PIN is help123@example.com. Brand coupon code SAVE20'},
   {text: 'Your login PIN is https://help.example/123. Brand coupon code SAVE20'}
 );
+// R9 grouping changes admission only; original coupon/evidence tokens stay exact.
+for (const code of ['123 456', '12 3456', '1 2 3 4 5 6', '123\u00a0456', '123\u202f456', '１２３ ４５６', '"123 456"']) {
+  authenticationMessages.push(
+    {text: 'Acme: Your verification code is ' + code},
+    {text: 'Acme: ' + code + ' is your security PIN.'},
+    {text: 'Acme: Use the verification code to sign in:\n' + code},
+    {html: '<p>Use your one-time passcode to sign in:</p><p>' + code + '</p>'},
+    {text: 'Acme: Your verification code is ' + code + ' (valid for 10 minutes).'}
+  );
+  ordinaryMessages.push(
+    {text: 'Example: Your verification code is ' + code + ' (valid for 10 minutes). Brand coupon code SAVE20'},
+    {text: 'Verification code ' + code + ' is described in documentation. Brand coupon code SAVE20'}
+  );
+}
+for (const [instruction, label] of [
+  ['Use the verification code to sign in:', 'Your verification code is '],
+  ['Enter your security passcode:', 'Your security passcode is '],
+  ['Use your login PIN to sign in:', 'Your login PIN is '],
+  ['Inserisci il codice di verifica per accedere:', 'Il tuo codice di verifica è ']
+]) {
+  authenticationMessages.push(
+    {text: instruction + '\n123456'},
+    {html: '<p>' + instruction + '</p><p>123456</p>'}
+  );
+  for (const tail of ['(valid for 10 minutes)', '[expires in 10 minutes]', '(must not be shared)', '(scadrà fra 10 minuti)', '(non condividerlo)']) {
+    authenticationMessages.push({text: label + '123456 ' + tail});
+  }
+  ordinaryMessages.push(
+    {text: 'Example: ' + instruction + '\n123456\nBrand coupon code SAVE20'},
+    {text: instruction + '\nUnrelated greeting.\nSAVE20.\nBrand coupon code SAVE20'},
+    {html: '<p>' + instruction + '</p><p>Unrelated greeting.</p><p>SAVE20.</p><p>Brand coupon code SAVE20</p>'},
+    {text: instruction, html: '<p>SAVE20.</p><p>Brand coupon code SAVE20</p>'},
+    {text: 'SAVE20.\nBrand coupon code SAVE20', html: '<p>' + instruction + '</p>'},
+    {text: label + '123456 (example). Brand coupon code SAVE20'},
+    {text: label + '123456 (valid for 10 minutes in this example). Brand coupon code SAVE20'},
+    {text: label + '123456. (valid for 10 minutes in this example). Brand coupon code SAVE20'}
+  );
+}
+authenticationMessages.push(
+  {text: 'Your verification code is 123 456.'},
+  {text: 'Your verification code is 123456 expires in 10 minutes. See documentation for help.'}
+);
+ordinaryMessages.push(
+  {text: 'Your verification code is 12', html: '<p>3456</p><p>Brand coupon code SAVE20</p>'},
+  {html: '<p>Your verification code is 12</p><p>3456</p><p>Brand coupon code SAVE20</p>'},
+  {text: 'Use your coupon code at checkout:\nSAVE20.\nBrand coupon code SAVE20'},
+  {text: 'Your verification code is 123 456 orders old. Brand coupon code SAVE20'},
+  {text: 'Your verification code is 123456 (valid for 10 minutes. Brand coupon code SAVE20'},
+  {text: 'Your verification code is 123456 (mechanism described elsewhere). Brand coupon code SAVE20'}
+);
+authenticationMessages.push(
+  {text: 'Acme: Your verification code is "123 456".'},
+  {text: 'Acme: Your verification code is "123 456"!'},
+  {text: "Acme: Your verification code is '123 456'."},
+  {text: 'Acme: Please use your verification code:\n123456'},
+  {html: '<p>Please enter your login PIN:</p><p>123 456</p>'},
+  {text: 'Per favore, inserisci il codice di verifica:\n123456'}
+);
+for (const instruction of [
+  'Do not use your verification code here:',
+  'Never enter your verification code here:',
+  'We never ask you to enter your verification code here:',
+  'Learn how to use your verification code:',
+  'The manual says "Use your verification code":'
+]) {
+  ordinaryMessages.push(
+    {text: instruction + '\nSAVE20.\nBrand coupon code SAVE20'},
+    {html: '<p>' + instruction + '</p><p>SAVE20.</p><p>Brand coupon code SAVE20</p>'}
+  );
+  authenticationMessages.push({text: instruction + '\nYour verification code is 123456'});
+}
+for (const separator of ['; ', ', ', '. ', '\n']) {
+  authenticationMessages.push(
+    {text: 'Acme: Do not use your old code' + separator + 'your verification code is 123456'},
+    {text: 'Acme: Learn how to use your old code' + separator + 'your verification code is 123456'}
+  );
+}
+for (const location of ['here', 'below', 'above', 'now']) {
+  ordinaryMessages.push(
+    {text: 'Use your verification code ' + location + ':\nBrand coupon code SAVE20'},
+    {text: 'Learn how to use your verification code ' + location + ':\nBrand coupon code SAVE20'}
+  );
+  authenticationMessages.push({text: 'Use your verification code ' + location + ':\n123456'});
+}
+ordinaryMessages.push(
+  {text: 'Learn how to use your verification code 123456. Brand coupon code SAVE20'},
+  {text: 'We never ask you to enter your verification code 123456. Brand coupon code SAVE20'}
+);
+authenticationMessages.push({text: 'Your verification code is HERE'});
 module.exports = {authenticationMessages, ordinaryMessages};

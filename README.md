@@ -187,6 +187,10 @@ The example configuration contains product defaults only.
   code issuance in the body, and a verification heading with a leading
   code on a separate line, sentence, or rendered block (including a wrapped
   copula, expiry text, or a supported security advisory after the value).
+  Explicit authentication-use instructions can introduce the next value, and
+  expiry/advisory clauses may have one matched parenthesis or bracket pair.
+  Space-grouped digits are recognized only for admission, within one source
+  span; coupon token identity and factual evidence are never joined or normalized.
   Body heading/example frames stay within their plain-text or HTML representation;
   only explicit subject associations seed both alternatives independently.
   This admission decision can combine those supported message-level signals;
