@@ -180,6 +180,28 @@ for (const [name, message, excluded] of [
   });
 }
 
+for (const [name, text, excluded] of [
+  ['bare-domain', 'Troubleshoot your verification code: help.acme.example/article/12345. Brand coupon code SAVE20', false],
+  ['same-line-instruction', 'Acme: Use the verification code to sign in: 123456', true],
+  ['purpose-label', 'Acme: Your verification code for signing in is 123456', true],
+  ['account-access-label', 'Acme: Your account access code is 123456. Brand coupon code SAVE20', true]
+]) {
+  test('R13 authentication association at actual extraction consumer: ' + name, () => {
+    const {ctx} = harness();
+    let calls = 0;
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      return aiResponse({merchant: excluded ? 'Acme' : 'Brand', code: excluded ? '123456' : 'SAVE20',
+        evidence: {merchant: {quote: excluded ? 'Acme' : 'Brand'}, code: {quote: excluded ? '123456' : 'Brand coupon code SAVE20'}}});
+    };
+    const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+    assert.equal(outcome.excludedReason, excluded ? 'authentication_code_message' : undefined);
+    assert.equal(calls, excluded ? 0 : 1);
+    assert.equal(outcome.archiveAllowed, !excluded);
+    assert.equal(outcome.candidates.length, excluded ? 0 : 1);
+  });
+}
+
 for (const label of ['email confirmation code', 'MFA code']) {
   test('R11 explicit authentication label at actual extraction consumer: ' + label, () => {
     const {ctx} = harness();

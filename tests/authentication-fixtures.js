@@ -429,4 +429,37 @@ for (const [open, close] of [['"', '"'], ["'", "'"], ['“', '”'], ['‘', '�
 }
 ordinaryMessages.push({text: 'You reported: Your verification code is 123456. Brand coupon code SAVE20'});
 authenticationMessages.push({text: 'You reported: Your verification code is 123456. Your MFA code is 654321'});
+for (const locator of ['help.acme.example/article/12345', '//help.acme.example/article/12345',
+  'HELP.acme.example/article/12345', 'help.acme.example/a?x=1', 'https://help.acme.example/a']) {
+  for (const value of [locator, '"' + locator + '"']) {
+    ordinaryMessages.push({text: 'Troubleshoot your verification code: ' + value + '. Brand coupon code SAVE20'});
+  }
+}
+for (const label of ['verification code', 'account access code', 'account access PIN']) {
+  for (const purpose of ['to sign in', 'for signing in', 'to verify your account']) {
+    for (const value of ['123456', 'aBcDeF', '"123 456"']) {
+      authenticationMessages.push(
+        {text: 'Use the ' + label + ' ' + purpose + ': ' + value},
+        {text: 'Use the ' + label + ' ' + purpose + ':' + value},
+        {text: 'Your ' + label + ' ' + purpose + ' is ' + value},
+        {html: '<h1>Your ' + label + ' ' + purpose + '</h1><p>' + value + '</p>'}
+      );
+    }
+    ordinaryMessages.push(
+      {text: 'Use the ' + label + ' ' + purpose + ': Brand coupon code SAVE20'},
+      {text: 'Example: Use the ' + label + ' ' + purpose + ': 123456. Brand coupon code SAVE20'},
+      {text: 'Do not use the ' + label + ' ' + purpose + ': 123456. Brand coupon code SAVE20'},
+      {text: 'Your ' + label + ' ' + purpose + ' is confidential. Brand coupon code SAVE20'},
+      {text: 'This is not a ' + label + ' ' + purpose + ': 123456. Brand coupon code SAVE20'}
+    );
+  }
+  authenticationMessages.push({text: 'Your ' + label + ' is ABC.77!'});
+  ordinaryMessages.push({text: 'Your ' + label + ' for your account discount is SAVE20. Brand coupon code SAVE20'});
+}
+ordinaryMessages.push(
+  {text: 'Your promotional access code is SAVE20. Brand coupon code SAVE20'},
+  {text: 'Your access code is SAVE20. Brand coupon code SAVE20'},
+  {text: 'You reported: "Use the verification code to sign in: 123456". Brand coupon code SAVE20'},
+  {text: 'Use the verification code to sign in:', html: '<p>123456</p><p>Brand coupon code SAVE20</p>'}
+);
 module.exports = {authenticationMessages, ordinaryMessages};

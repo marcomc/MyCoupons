@@ -111,11 +111,17 @@ function authenticationMessage_(source) {
       const tokens = /\S+/gu;
       let match;
       while (!codeHeading && !exampleHeading && (match = tokens.exec(line))) {
-        const grouped = authenticationGroupedLiteral_(line, match.index);
-        const code = grouped ? grouped.code : codeLexemes_(match[0])[0];
+        // Admission-only delimiter recognition; never split factual coupon tokens.
+        let literalIndex = match.index;
+        const colon = match[0].indexOf(':');
+        if (colon >= 0 && colon + 1 < match[0].length && authenticationUseInstruction_(
+          line.slice(Math.max(0, match.index + colon + 1 - 240), match.index + colon + 1), true)) literalIndex += colon + 1;
+        const token = line.slice(literalIndex, match.index + match[0].length);
+        const grouped = authenticationGroupedLiteral_(line, literalIndex);
+        const code = grouped ? grouped.code : codeLexemes_(token)[0];
         if (!authenticationLiteral_(code)) continue;
-        const wrapped = code !== match[0];
-        const start = offset + (grouped ? grouped.start : match.index + (wrapped ? 1 : 0));
+        const wrapped = code !== token;
+        const start = offset + (grouped ? grouped.start : literalIndex + (wrapped ? 1 : 0));
         const end = start + code.length;
         if (grouped) tokens.lastIndex = grouped.next;
         // Fixed context work per literal; never truncate the code identity.
@@ -158,16 +164,17 @@ function authenticationLiteral_(token) {
   const length = Array.from(token).length;
   return length >= 3 && length <= 40 && /[\p{L}\p{N}\p{M}]/u.test(token) &&
     !/^[("'[{<]*(?:example|sample|documentation|tutorial|documentazione|esempio|segnaposto|placeholder)[)"'\]}>.!?,;:]*$/iu.test(token) &&
-    !/^(?:[a-z][a-z\d+.-]*:\/\/|www\.)\S+$/iu.test(token) &&
+    !/^["'([{<]?(?:[a-z][a-z\d+.-]*:\/\/|www\.|\/\/|(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+[\p{L}]{2,}(?::\d+)?[/?#])\S*$/iu.test(token) &&
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token) &&
     !/^(?:OTP|CODE|PASSCODE|PIN|XXX+|CODE_HERE)[.!?,;:]*$/iu.test(token);
 }
 function authenticationLabelPattern_() {
-  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp|e-?mail\\s+confirmation|mfa)\\s+(?:code|passcode|pin)|' +
+  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp|e-?mail\\s+confirmation|mfa|account\\s+access)\\s+(?:code|passcode|pin)|' +
     'passcode|otp|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso|reimpostazione(?:\\s+password)?))';
 }
 function authenticationLabelQualifier_() {
-  return '(?:\\s+(?:is|è|e[’\x27]|monouso|below|shown\\s+below|riportato\\s+sotto|seguente))*';
+  return '(?:\\s+(?:to|for|per)\\s+' + authenticationActionPattern_(true) + ')?' +
+    '(?:\\s+(?:is|è|e[’\x27]|monouso|below|shown\\s+below|riportato\\s+sotto|seguente))*';
 }
 function authenticationHeading_(text) {
   return new RegExp('^(?:[\\p{L}\\p{N} ._-]{1,60}:\\s*)?(?:(?:your|il\\s+tuo|tuo)\\s+)?' +
@@ -218,21 +225,22 @@ function authenticationPurposeTail_(text) {
   if (new RegExp('^\\s*(?:(?:to|for|per)\\s+)?' + authenticationLabelPattern_() + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').test(text)) return false;
   return new RegExp('^\\s*(?:(?:to|for|per)\\s+)?' + authenticationActionPattern_() + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').test(text);
 }
-function authenticationVerificationPattern_() {
+function authenticationVerificationPattern_(beforeValue) {
   const identity = '(?:account|identity|e-?mail(?:\\s+address)?|phone(?:\\s+number)?|password|identità|identita|numero\\s+di\\s+telefono)';
   const possessive = '(?:(?:your|the|la\\s+tua|il\\s+tuo|la|il)\\s+)?';
-  return '(?:verif(?:y|ying)|verifica(?:re)?)\\s+' + possessive + identity + authenticationTargetEnd_();
+  return '(?:verif(?:y|ying)|verifica(?:re)?)\\s+' + possessive + identity + authenticationTargetEnd_(beforeValue);
 }
-function authenticationAccessPattern_() {
-  return 'access(?:ing)?\\s+(?:(?:your|the)\\s+)?(?:account|profile)' + authenticationTargetEnd_();
+function authenticationAccessPattern_(beforeValue) {
+  return 'access(?:ing)?\\s+(?:(?:your|the)\\s+)?(?:account|profile)' + authenticationTargetEnd_(beforeValue);
 }
-function authenticationTargetEnd_() {
+function authenticationTargetEnd_(beforeValue) {
   // A complete authentication target may end or introduce another clause, but
   // cannot be only the first noun in a different object such as account discount.
-  return '(?=\\s*(?:$|[.!?:;,)\\]>"\x27]|(?:using|with|con|usando|and|then|to|for|e|poi|per)\\b))';
+  return '(?=\\s*(?:$|[.!?:;,)\\]>"\x27]|(?:using|with|con|usando|and|then|to|for|e|poi|per' +
+    (beforeValue ? '|is|è|e[’\x27]' : '') + ')(?![\\p{L}\\p{N}\\p{M}_])))';
 }
-function authenticationActionPattern_() {
-  return '(?:' + authenticationVerificationPattern_() + '|' + authenticationAccessPattern_() +
+function authenticationActionPattern_(beforeValue) {
+  return '(?:' + authenticationVerificationPattern_(beforeValue) + '|' + authenticationAccessPattern_(beforeValue) +
     '|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|reimposta(?:re)?|ripristina|acced(?:i|ere)|' + authenticationConfirmationPattern_() + ')';
 }
 function authenticationConfirmationPattern_() {
@@ -272,6 +280,7 @@ function authenticationIssuance_(before, after) {
     before = before.slice(0, -1); after = after.slice(1);
   }
   const sentenceValue = authenticationUseInstruction_(before) && /(?:^|[.!?]\s+)$/u.test(before);
+  const inlineInstruction = authenticationUseInstruction_(before.slice(before.lastIndexOf('\n') + 1), true);
   before = before.slice(Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'),
     before.lastIndexOf('?'), before.lastIndexOf('\n')) + 1);
   const label = authenticationLabelPattern_();
@@ -308,7 +317,7 @@ function authenticationIssuance_(before, after) {
   while ((action = actions.exec(before))) authAction = Boolean(action[1]);
   return {explicit: issuingLabel || Boolean(followingLabel && completeValue),
     generic: genericIssued || Boolean(followingGeneric && completeValue),
-    direct: (introduced || imperative) && purposeAfter || usingCode && authAction || assigned,
+    direct: (introduced || imperative) && purposeAfter || usingCode && authAction || assigned || inlineInstruction && completeValue,
     imperative: imperative, instructionLabel: instructionLabel, sentenceValue: sentenceValue, valueTail: completeValue,
     invalidRecipientTail: authenticationRecipientTail_(continuation) === false,
     descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism|documentation|example)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
@@ -336,13 +345,13 @@ function authenticationExampleHeading_(text) {
   return /(?:^|\s)(?:example|sample|esempio|placeholder|segnaposto)(?:\s+\d+)?\s*:?\s*$/iu.test(text) ||
     /^(?:documentation|tutorial|documentazione)\s*:?\s*$/iu.test(text);
 }
-function authenticationUseInstruction_(text) {
+function authenticationUseInstruction_(text, complete) {
   // Only a positive instruction clause can introduce a following value.
   // Negated or conceptual mentions ("never ask you to enter", "learn how to
   // use") are not instructions to the recipient.
   return new RegExp('(?:^|[.!?\\n]\\s+)(?:[\\p{L}\\p{N} ._-]{1,60}:\\s*)?(?:(?:please|per\\s+favore,?)\\s+)?' +
     '(?:enter|type|use|inserisci|digita|usa)\\s+(?:(?:the|your|il|il\\s+tuo)\\s+)?' +
-    authenticationLabelPattern_() + '\\b', 'iu').test(text);
+    authenticationLabelPattern_() + (complete ? authenticationLabelQualifier_() + '\\s*[:=]\\s*$' : '\\b'), 'iu').test(text);
 }
 function authenticationExclusion_(source) {
   if (!authenticationMessage_(source)) return null;
