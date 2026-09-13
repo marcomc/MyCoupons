@@ -176,7 +176,7 @@ function authenticationLiteral_(token) {
     !/^(?:OTP|CODE|PASSCODE|PIN|XXX+|CODE_HERE)[.!?,;:]*$/iu.test(token);
 }
 function authenticationLabelPattern_() {
-  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp|e-?mail\\s+confirmation|mfa|account\\s+access)\\s+(?:code|passcode|pin)|' +
+  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp|e-?mail\\s+confirmation|mfa|2fa|(?:two|multi)[ -]?factor|account\\s+access)\\s+(?:code|passcode|pin)|' +
     'one[ -]?time\\s+password|passcode|otp|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso|reimpostazione(?:\\s+password)?))';
 }
 function authenticationLabelQualifier_() {
@@ -348,7 +348,7 @@ function authenticationInstruction_(before, after, code, frame) {
   const nounModifier = /^sconto$/iu.test(code) && /\bcodice\s*$/iu.test(before);
   // These are grammatical predicates, not an issued literal. Check independent
   // of capitalization; an imperative use instruction is a different relation.
-  const predicate = /^(?:required|necessary|needed|optional|available|unavailable|ready|pending|sent|provided|shown|displayed|requested|enabled|disabled|expires?|expired|invalid|valid|status|confidential|private|personal|secret|sensitive|secure|temporary|unique|necessari[oa]|richiest[oa]|obbligatori[oa]|disponibile|pronto|inviato|scade|scadrà|scadut[oa]|riservat[oa]|personal[ei]|segret[oa]|sensibile|temporane[oa]|unic[oa])[.!?,;:]*$/iu.test(code);
+  const predicate = /^(?:used|required|necessary|needed|optional|available|unavailable|ready|pending|sent|provided|shown|displayed|requested|enabled|disabled|expires?|expired|invalid|valid|status|confidential|private|personal|secret|sensitive|secure|temporary|unique|necessari[oa]|richiest[oa]|obbligatori[oa]|disponibile|pronto|inviato|scade|scadrà|scadut[oa]|riservat[oa]|personal[ei]|segret[oa]|sensibile|temporane[oa]|unic[oa])[.!?,;:]*$/iu.test(code);
   if (relation.discussion || relation.descriptive || purposeConnector || instructionLocation || nounModifier || predicate && !relation.imperative) return false;
   const valueEnd = relation.valueTail || !relation.invalidRecipientTail && /[.!?]$/u.test(code);
   return relation.explicit && valueEnd || relation.direct ||

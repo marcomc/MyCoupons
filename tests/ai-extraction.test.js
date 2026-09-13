@@ -403,6 +403,23 @@ test('AI extraction rejects fenced or unknown responses before transport', () =>
   assert.throws(() => ctx.parseAICandidates_({text: JSON.stringify({authentication: null, candidates: [{unknown: 1}]})}, {text: 'x'}), /AI/);
 });
 
+test('R17 actual consumer preserves descriptive participles and excludes qualified factor issuance', () => {
+  const {ctx} = harness();
+  ctx.callGeminiModel_ = () => aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}});
+  const ordinary = ctx.extractCouponOutcome_({text: 'A verification code is used to verify your account. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(ordinary.excludedReason, 'authentication_code_message');
+  assert.equal(ordinary.candidates[0].code, 'SAVE20');
+});
+
+test('R17 actual consumer recognizes 2FA and two-factor labels before model extraction', () => {
+  const {ctx} = harness();
+  ctx.callGeminiModel_ = () => assert.fail('factor authentication must not reach model');
+  for (const label of ['2FA code', 'two-factor code']) {
+    assert.equal(ctx.extractCouponOutcome_({text: 'Your ' + label + ' is 123456', incomplete: false}).excludedReason,
+      'authentication_code_message');
+  }
+});
+
 function aiResponse(overrides = {}) {
   const candidate = Object.assign(Object.fromEntries(['merchant','website','code','discountType','discountValue','minimumSpend','validOn','exclusions','expiry','usageLimits','currency','notes'].map(k => [k, ''])), {
     merchant: 'Brand', code: 'AI20', confidence: 'high', review: false, evidence: {merchant: {quote: 'Brand'}, code: {quote: 'AI20'}}

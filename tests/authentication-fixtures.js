@@ -585,4 +585,37 @@ for (const label of ['one-time password', 'one time password', 'onetime password
   );
 }
 ordinaryMessages.push({text: 'Your password is 123456. Brand coupon code SAVE20'});
+for (const label of ['2FA code', 'two-factor code', 'two factor PIN', 'multi-factor passcode']) {
+  authenticationMessages.push(
+    {text: 'Your ' + label + ' is 123456. Brand coupon code SAVE20'},
+    {text: 'Your ' + label + ' will be 123456'},
+    {text: 'Your ' + label + ':123456'},
+    {text: 'Use 123456 as your ' + label},
+    {text: 'Example: Your ' + label + ' is 123456. Your ' + label + ' is 654321'},
+    {html: '<h1>Your ' + label + '</h1><p>aBcDeF</p>'},
+    {text: '123456 is your ' + label},
+    {subject: 'Your ' + label, text: 'Your code is 123456'}
+  );
+  ordinaryMessages.push(
+    {text: 'Your ' + label + ' is confidential. Brand coupon code SAVE20'},
+    {text: 'Your ' + label + ' is not 123456. Brand coupon code SAVE20'},
+    {text: 'Example: Your ' + label + ' is 123456. Brand coupon code SAVE20'},
+    {text: 'You said that your ' + label + ' is 123456. Brand coupon code SAVE20'},
+    {text: 'Your ' + label + ' manager is available. Brand coupon code SAVE20'},
+    {text: 'Your ' + label + ' is help.brand.example/a. Brand coupon code SAVE20'}
+  );
+}
+for (const predicate of ['used', 'USED']) {
+  for (const label of ['verification code', 'one-time password', '2FA code']) {
+    ordinaryMessages.push(
+      {text: 'A ' + label + ' is ' + predicate + ' to verify your account. Brand coupon code SAVE20'},
+      {text: 'Your ' + label + ' is ' + predicate + ' for MFA. Brand coupon code SAVE20'},
+      {subject: 'Your ' + label, text: 'Your code is ' + predicate + ' to verify your account. Brand coupon code SAVE20'},
+      {html: '<h1>Your ' + label + ' is</h1><p>' + predicate + ' to verify your account.</p><p>Brand coupon code SAVE20</p>'}
+    );
+    authenticationMessages.push({text: 'Use ' + predicate + ' as your ' + label},
+      {text: 'Use code ' + predicate + ' to verify your account'});
+  }
+}
+ordinaryMessages.push({text: 'Your 2FA is available. Brand coupon code SAVE20'});
 module.exports = {authenticationMessages, ordinaryMessages};
