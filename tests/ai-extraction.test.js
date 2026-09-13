@@ -159,6 +159,27 @@ test('grouped authentication recognition is bounded and cannot normalize coupon 
   for (let index = 0; index < text.length; index += 4) ctx.authenticationGroupedLiteral_(measured, index);
 });
 
+for (const [name, message, excluded] of [
+  ['interrogative', {text: 'Was your verification code 123456? Brand coupon code SAVE20'}, false],
+  ['assigned-as', {text: 'Acme: Use 123456 as your verification code.'}, true],
+  ['target-tail', {subject: 'Your verification code', text: 'Your code is SAVE20 for your account discount. Brand coupon code SAVE20'}, false]
+]) {
+  test('R12 authentication role at actual extraction consumer: ' + name, () => {
+    const {ctx} = harness();
+    let calls = 0;
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      return aiResponse({merchant: excluded ? 'Acme' : 'Brand', code: excluded ? '123456' : 'SAVE20',
+        evidence: {merchant: {quote: excluded ? 'Acme' : 'Brand'}, code: {quote: excluded ? message.text : 'Brand coupon code SAVE20'}}});
+    };
+    const outcome = ctx.extractCouponOutcome_({incomplete: false, ...message});
+    assert.equal(outcome.excludedReason, excluded ? 'authentication_code_message' : undefined);
+    assert.equal(calls, excluded ? 0 : 1);
+    assert.equal(outcome.archiveAllowed, !excluded);
+    assert.equal(outcome.candidates.length, excluded ? 0 : 1);
+  });
+}
+
 for (const label of ['email confirmation code', 'MFA code']) {
   test('R11 explicit authentication label at actual extraction consumer: ' + label, () => {
     const {ctx} = harness();

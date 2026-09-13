@@ -399,4 +399,34 @@ ordinaryMessages.push(
   {text: 'Enable MFA for your account. Brand coupon code SAVE20'},
   {text: 'Email confirmation is required. Brand coupon code SAVE20'}
 );
+for (const label of ['verification code', 'MFA code', 'email confirmation code', 'login PIN']) {
+  for (const prefix of ['Was your ', 'Is your ', 'You asked if your ', 'You said your ']) {
+    ordinaryMessages.push({subject: 'Your verification code', text: prefix + label + ' 123456? Brand coupon code SAVE20'});
+    authenticationMessages.push({text: prefix + label + ' 123456? Your verification code is 654321'});
+  }
+  for (const value of ['123456', 'aBcDeF', '"123 456"', 'ABC+12!']) {
+    authenticationMessages.push({text: 'Use ' + value + ' as your ' + label + '. Brand coupon code SAVE20'});
+  }
+  ordinaryMessages.push(
+    {text: 'Did you use 123456 as your ' + label + '? Brand coupon code SAVE20'},
+    {text: 'Do not use 123456 as your ' + label + '. Brand coupon code SAVE20'},
+    {text: 'Example: Use 123456 as your ' + label + '. Brand coupon code SAVE20'},
+    {text: 'Use 123456 as your ' + label + ' example. Brand coupon code SAVE20'}
+  );
+}
+for (const recipient of ['for your account', 'for your order', 'for your purchase', 'per il tuo account', 'per il tuo ordine', 'per il tuo acquisto']) {
+  for (const value of ['SAVE20', 'SAVE20!']) {
+    ordinaryMessages.push({subject: 'Your verification code', text: 'Your code is ' + value + ' ' + recipient + ' discount. Brand coupon code SAVE20'});
+    authenticationMessages.push({subject: 'Your verification code', text: 'Your code is ' + value + ' ' + recipient});
+  }
+}
+ordinaryMessages.push({text: 'Use SAVE20 as your coupon code. Brand coupon code SAVE20'});
+for (const [open, close] of [['"', '"'], ["'", "'"], ['“', '”'], ['‘', '’']]) {
+  for (const separator of [', ', ': ', ' ']) {
+    ordinaryMessages.push({text: 'You reported' + separator + open + 'Your verification code is 123456' + close + '. Brand coupon code SAVE20'});
+    authenticationMessages.push({text: 'You reported' + separator + open + 'Your verification code is 123456' + close + '; your verification code is 654321'});
+  }
+}
+ordinaryMessages.push({text: 'You reported: Your verification code is 123456. Brand coupon code SAVE20'});
+authenticationMessages.push({text: 'You reported: Your verification code is 123456. Your MFA code is 654321'});
 module.exports = {authenticationMessages, ordinaryMessages};

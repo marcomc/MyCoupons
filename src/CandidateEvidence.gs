@@ -188,8 +188,15 @@ function authenticationSubject_(text) {
 }
 function authenticationValueTail_(text) {
   return authenticationPurposeTail_(text) || authenticationCompletionTail_(text) ||
-    /^\s*(?:for\s+(?:(?:your|the)\s+)?(?:account|order|purchase)|per\s+(?:(?:il\s+tuo|il|la\s+tua|la)\s+)?(?:account|ordine|acquisto))\b/iu.test(text) ||
+    authenticationRecipientTail_(text) === true ||
     /^[^\S\n]*(?:$|\n|[.!?](?:\s|$))/u.test(text);
+}
+function authenticationRecipientTail_(text) {
+  const recipient = /^\s*(?:for\s+(?:(?:your|the)\s+)?(?:account|order|purchase)|per\s+(?:(?:il\s+tuo|il|la\s+tua|la)\s+)?(?:account|ordine|acquisto))(?![\p{L}\p{N}\p{M}_])/iu.exec(text);
+  if (!recipient) return null;
+  const remainder = text.slice(recipient[0].length);
+  return new RegExp('^' + authenticationTargetEnd_(), 'iu').test(remainder) ||
+    authenticationCompletionTail_(remainder) || authenticationPurposeTail_(remainder);
 }
 function authenticationCompletionTail_(text) {
   // One matched presentation pair may surround an already-supported clause.
@@ -236,7 +243,12 @@ function authenticationCodeNoun_() {
   return '(?:(?:(?:coupon|promo(?:tional)?|discount)\\s+)?(?:code|passcode|pin)|codice(?:\\s+sconto)?)';
 }
 function authenticationDiscussionClause_(text) {
+  // A quoted report remains connected to its reporting verb across a comma.
+  // Closing the quote ends this role so a later independent issuance survives.
+  if (/\b(?:asked|said|reported|recalled|remembered)\s*[:,]?\s*(?:"[^"\n]*|“[^”\n]*|'[^'\n]*|‘[^’\n]*)$/iu.test(text)) return true;
   const instructionClause = text.slice(Math.max(text.lastIndexOf(','), text.lastIndexOf(';')) + 1);
+  if (/(?:^|:\s*)\s*(?:was|were|is|are|did|does|do|can|could|would|should|has|have|had)\s+(?:you|your|the)\b/iu.test(instructionClause) ||
+      /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(?:you|your|the)\b/iu.test(instructionClause)) return true;
   if (/\b(?:(?:do\s+not|don[’']t|never|non)\s+(?:enter|type|use|inserisci|digita|usa)|(?:never|not)\s+ask\s+(?:you\s+)?to\s+(?:enter|type|use)|(?:learn|explain)\s+how\s+to\s+(?:enter|type|use))\b/iu.test(instructionClause)) return true;
   // A reference to another example is not an example of this issuance. Keep
   // explicit "For example," and "Example;" clauses intact rather than treating
@@ -287,6 +299,8 @@ function authenticationIssuance_(before, after) {
   const introduced = new RegExp('\\b' + noun + '\\s*(?:is\\s*)?[:=]?\\s*$', 'iu').test(before);
   const imperative = new RegExp('\\b(?:use|enter|type|usa|inserisci|digita)\\s+(?:(?:(?:the|your|il|il\\s+tuo)\\s+)?' + noun + '\\s*[:=]?\\s*)?$', 'iu').test(before);
   const purposeAfter = authenticationPurposeTail_(after);
+  const assignedLabel = new RegExp('^\\s+as\\s+(?:(?:your|the)\\s+)?' + label + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
+  const assigned = Boolean(imperative && assignedLabel && authenticationValueTail_(after.slice(assignedLabel[0].length)));
   const usingCode = new RegExp('\\b(?:using|with|con|usando)\\s+(?:(?:the|il)\\s+)?' + noun + '\\s*[:=]?\\s*$', 'iu').test(before);
   const actions = new RegExp('\\b(?:(' + authenticationActionPattern_() + ')|(?:get|receive|save|apply|redeem|use|ottieni|risparmia|applica|usa))(?![\\p{L}\\p{N}\\p{M}_])', 'giu');
   let authAction = false;
@@ -294,8 +308,9 @@ function authenticationIssuance_(before, after) {
   while ((action = actions.exec(before))) authAction = Boolean(action[1]);
   return {explicit: issuingLabel || Boolean(followingLabel && completeValue),
     generic: genericIssued || Boolean(followingGeneric && completeValue),
-    direct: (introduced || imperative) && purposeAfter || usingCode && authAction,
+    direct: (introduced || imperative) && purposeAfter || usingCode && authAction || assigned,
     imperative: imperative, instructionLabel: instructionLabel, sentenceValue: sentenceValue, valueTail: completeValue,
+    invalidRecipientTail: authenticationRecipientTail_(continuation) === false,
     descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism|documentation|example)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
     discussion: negatedLabel || authenticationDiscussionClause_(before) || authenticationExampleSuffix_(continuation)};
 }
@@ -309,7 +324,7 @@ function authenticationInstruction_(before, after, code, frame) {
   // of capitalization; an imperative use instruction is a different relation.
   const predicate = /^(?:required|necessary|needed|optional|available|unavailable|ready|pending|sent|provided|shown|displayed|requested|enabled|disabled|expires?|expired|invalid|valid|status|confidential|private|personal|secret|sensitive|secure|temporary|unique|necessari[oa]|richiest[oa]|obbligatori[oa]|disponibile|pronto|inviato|scade|scadrà|scadut[oa]|riservat[oa]|personal[ei]|segret[oa]|sensibile|temporane[oa]|unic[oa])[.!?,;:]*$/iu.test(code);
   if (relation.discussion || relation.descriptive || purposeConnector || instructionLocation || predicate && !relation.imperative) return false;
-  const valueEnd = relation.valueTail || /[.!?]$/u.test(code);
+  const valueEnd = relation.valueTail || !relation.invalidRecipientTail && /[.!?]$/u.test(code);
   return relation.explicit && valueEnd || relation.direct ||
     Boolean(frame && (frame.subject && relation.generic && valueEnd ||
       frame.heading && valueEnd && (frame.leading || relation.sentenceValue || relation.generic)));
