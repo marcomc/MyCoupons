@@ -126,9 +126,7 @@ function parseAICandidateOutcome_(response, message) {
     const normalized = normalizeCandidate_(raw, message);
     // A grounded token in an authentication-only sentence is not an offer.
     // Evaluate each candidate, rather than excluding a mixed source message.
-    const codeEvidence = ownValue_(raw.evidence, 'code');
-    const codeQuote = codeEvidence && ownValue_(codeEvidence, 'quote');
-    if (normalized.code && authenticationCodeOnly_(normalized.code, codeQuote, source)) {
+    if (normalized.code && authenticationCodeOnly_(normalized.code, raw.evidence, source)) {
       invalidated++;
       return null;
     }

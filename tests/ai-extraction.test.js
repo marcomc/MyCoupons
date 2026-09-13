@@ -68,16 +68,27 @@ test('generic code introductions stay with grounded AI while explicit forms rema
     body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: authenticationProposal.text}]}}]})})});
   assert.deepEqual(Array.from(mixedAuthenticationOutcome.candidates, candidate => candidate.code), ['SAVE20']);
   assert.equal(mixedAuthenticationOutcome.invalidated, true);
-  const loginOffer = {text: 'Brand members: use code SAVE20 after login for 20% off.', incomplete: false};
-  const loginOfferProposal = aiResponse({code: 'SAVE20', evidence: {merchant: {quote: loginOffer.text}, code: {quote: loginOffer.text}}});
-  assert.equal(ctx.extractCouponOutcome_(loginOffer, {fetch: () => ({status: 200,
-    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: loginOfferProposal.text}]}}]})})}).candidates[0].code, 'SAVE20');
+  for (const loginOffer of [{text: 'Brand members: use code SAVE20 after login for 20% off.', incomplete: false},
+    {text: 'Brand members: log in and apply code SAVE20 at checkout.', incomplete: false}]) {
+    const loginOfferProposal = aiResponse({code: 'SAVE20', evidence: {merchant: {quote: loginOffer.text}, code: {quote: loginOffer.text}}});
+    assert.equal(ctx.extractCouponOutcome_(loginOffer, {fetch: () => ({status: 200,
+      body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: loginOfferProposal.text}]}}]})})}).candidates[0].code, 'SAVE20');
+  }
   const collision = {text: 'Use the code LOGIN77 to verify your account. Brand coupon code LOGIN77 gives 20% off.', incomplete: false};
-  const collisionProposal = aiResponse({merchant: 'Account', code: 'LOGIN77', evidence: {merchant: {quote: 'Use the code LOGIN77 to verify your account.'}, code: {quote: 'Use the code LOGIN77 to verify your account.'}}});
+  const collisionProposal = aiResponse({merchant: 'Account', code: 'LOGIN77', evidence: {merchant: {quote: 'Use the code LOGIN77 to verify your account.'}, code: {quote: 'LOGIN77'}}});
   const collisionOutcome = ctx.extractCouponOutcome_(collision, {fetch: () => ({status: 200,
     body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: collisionProposal.text}]}}]})})});
   assert.deepEqual(Array.from(collisionOutcome.candidates, candidate => [candidate.merchant, candidate.code]), [['', 'LOGIN77']]);
   assert.equal(collisionOutcome.invalidated, true);
+  const mismatchProposal = aiResponse({merchant: 'Account', code: 'LOGIN77', discountType: '%', discountValue: '20', evidence: {
+    merchant: {quote: 'Use the code LOGIN77 to verify your account.'}, code: {quote: 'LOGIN77'},
+    discountType: {quote: 'Brand coupon code LOGIN77 gives 20% off.'}, discountValue: {quote: 'Brand coupon code LOGIN77 gives 20% off.'}
+  }});
+  const mismatchOutcome = ctx.extractCouponOutcome_(collision, {fetch: () => ({status: 200,
+    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: mismatchProposal.text}]}}]})})});
+  assert.deepEqual(Array.from(mismatchOutcome.candidates, candidate => [candidate.merchant, candidate.code]), [['', 'LOGIN77']]);
+  assert.equal(mismatchOutcome.invalidated, true);
+  assert.equal(mismatchOutcome.archiveAllowed, false);
   assert.deepEqual(Array.from(ctx.deterministicCandidates_({text: 'Coupon code SAVE20 Promo code PLUS20 Discount code LESS20 Codice sconto ÈTÉ+20', incomplete: false}), c => c.code),
     ['SAVE20', 'PLUS20', 'LESS20', 'ÈTÉ+20']);
   const genericCoupon = {text: 'Brand promo: usa il codice ÈTÉ+20', incomplete: false};
