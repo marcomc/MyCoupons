@@ -225,6 +225,11 @@ The example configuration contains product defaults only.
   names and later independent issuance remain distinct. An adjacent instruction
   such as `enter it to sign in` can complete an issued value, but a checkout or
   other non-authentication instruction cannot.
+  A generic label may carry a complete authentication purpose (`code to sign in
+  is …`). An affirmative authentication action may govern a numeric/mixed value
+  directly (`Sign in with …`); generic commands and inherited subjects cannot
+  grant that authority. One- or two-character values require a specialized label
+  and complete issuance, with the same role and alphabetic-presentation checks.
   A validated authentication subject or heading may
   qualify a generic, non-promotional imperative. Matched typographic value quotes
   count as admission presentation only; factual coupon tokens are unchanged.

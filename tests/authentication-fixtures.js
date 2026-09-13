@@ -287,11 +287,14 @@ for (const [instruction, label] of [
 }
 authenticationMessages.push(
   {text: 'Your verification code is 123 456.'},
-  {text: 'Your verification code is 123456 expires in 10 minutes. See documentation for help.'}
+  {text: 'Your verification code is 123456 expires in 10 minutes. See documentation for help.'},
+  // R28: the first span now independently issues the complete short value 12.
+  {text: 'Your verification code is 12', html: '<p>3456</p><p>Brand coupon code SAVE20</p>'},
+  {html: '<p>Your verification code is 12</p><p>3456</p><p>Brand coupon code SAVE20</p>'}
 );
 ordinaryMessages.push(
-  {text: 'Your verification code is 12', html: '<p>3456</p><p>Brand coupon code SAVE20</p>'},
-  {html: '<p>Your verification code is 12</p><p>3456</p><p>Brand coupon code SAVE20</p>'},
+  {subject: 'Sign in', text: 'Your code is 12', html: '<p>3456</p><p>Brand coupon code SAVE20</p>'},
+  {subject: 'Sign in', html: '<p>Your code is 12</p><p>3456</p><p>Brand coupon code SAVE20</p>'},
   {text: 'Use your coupon code at checkout:\nSAVE20.\nBrand coupon code SAVE20'},
   {text: 'Your verification code is 123 456 orders old. Brand coupon code SAVE20'},
   {text: 'Your verification code is 123456 (valid for 10 minutes. Brand coupon code SAVE20'},
@@ -1000,6 +1003,56 @@ for (const target of ['your account', 'your email', 'your email address', 'your 
 for (const [open, close] of [['“', '”'], ['‘', '’'], ['"', '"'], ["'", "'"], ['<', '>']]) {
   ordinaryMessages.push({text: 'Your verification code is ' + open + 'support.example.com' + close + ', enter it to sign in. Brand coupon code SAVE20'});
   authenticationMessages.push({text: 'Your verification code is ' + open + 'ABC.77' + close + ', enter it to sign in'});
+}
+for (const purpose of ['sign in', 'verify your account', 'confirm your email', 'access your account']) {
+  authenticationMessages.push(
+    {text: 'Your code to ' + purpose + ' is 123456'},
+    {text: '123456 is your code to ' + purpose},
+    {subject: 'Your code to ' + purpose, text: '123456'},
+    {html: '<h1>Your code to ' + purpose + '</h1><p>123456</p>'},
+    {text: 'Your coupon code to ' + purpose + ' is SAVE20'}
+  );
+  for (const role of ['Suppose ', 'You said that ', 'Check whether ']) {
+    ordinaryMessages.push({text: role + 'your code to ' + purpose + ' is 123456. Brand coupon code SAVE20'});
+  }
+}
+for (const action of ['Sign in', 'Log in', 'Authenticate', 'Verify your account', 'Confirm your email']) {
+  for (const connector of ['with', 'using']) for (const value of ['123456', 'Ab+77']) {
+    authenticationMessages.push({text: 'Acme: ' + action + ' ' + connector + ' ' + value});
+  }
+  for (const role of ['Do not ', 'Never ', 'You said: ', 'Example: ', 'Suppose you ', 'Why should I ']) {
+    ordinaryMessages.push({text: role + action + ' with 123456. Brand coupon code SAVE20'});
+  }
+  for (const value of ['support.example.com', 'user@example.com', 'ABCDEF', '42']) {
+    ordinaryMessages.push({text: action + ' with ' + value + '. Brand coupon code SAVE20'});
+  }
+  ordinaryMessages.push({text: action + ' with SAVE20 for a discount. Brand coupon code SAVE20'});
+}
+for (const value of ['7', '42', '“42”', '42.', '“7”.', 'A', 'aB', 'A1']) {
+  authenticationMessages.push({text: 'Your security PIN is: ' + value},
+    {text: 'Your security PIN:\n' + value}, {subject: 'Your security PIN:', text: value});
+}
+for (const text of ['Your code is: 42', 'PIN 42', 'Sign in with 42', 'Use 42 to sign in',
+  'Your security PIN expires in 2 minutes', 'Your security PIN is not 42',
+  'Your security PIN to sign in:', 'Your code to verify your account discount is SAVE20']) {
+  ordinaryMessages.push({text: text + '\nBrand coupon code SAVE20'});
+}
+for (const value of ['42', '42.', '“7”.', 'A1!']) {
+  for (const instruction of ['Use code ', 'Your PIN is ']) {
+    authenticationMessages.push({text: 'Your security PIN:\n' + instruction + value},
+      {subject: 'Your security PIN', text: instruction + value},
+      {html: '<h1>Your security PIN:</h1><p>' + instruction + value + '</p>'});
+  }
+}
+for (const text of ['Use 42.', 'Use coupon code 42', 'Use code 42 at checkout',
+  'Your PIN is 42 for a discount', 'Unrelated greeting.\nUse code 42.', 'Use code to sign in']) {
+  ordinaryMessages.push({text: 'Your security PIN:\n' + text + '\nBrand coupon code SAVE20'});
+}
+for (const value of ['SAVE20', 'SAVE20.', 'SAVE20!', '“SAVE20!”']) {
+  for (const tail of ['for a discount', 'at checkout for 20% off', 'to confirm your order']) {
+    ordinaryMessages.push({text: 'Sign in with ' + value + ' ' + tail + '. Brand coupon code SAVE20'});
+    authenticationMessages.push({text: 'Sign in with ' + value + '\nBrand coupon code SAVE20'});
+  }
 }
 // R24 revises only the known copular all-letter fixture class. Keep its original
 // sources, but assert semantic routing separately from pre-model exclusion.

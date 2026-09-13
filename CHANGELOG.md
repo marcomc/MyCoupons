@@ -42,6 +42,9 @@
   Preserve personal/possessive subjects, wh/contracted questions and suppositions
   in bounded clause handling, including original context during model proof.
   Recognize adjacent anaphoric instructions only with an authentication purpose.
+  Support purpose-qualified generic labels, directly governed numeric/mixed values,
+  and short values under complete specialized-label issuance without borrowing
+  generic subject authority or weakening alphabetic-presentation requirements.
   Associate subject/body issuance, labels in either direction, alphabetic
   values, and heading/instruction/value layouts without relaxing factual quote
   boundaries. Keep verification actions tied to authentication targets and

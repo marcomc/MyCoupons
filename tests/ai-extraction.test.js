@@ -71,6 +71,41 @@ for (const [name, message, code, quote] of [
   });
 }
 
+for (const text of ['Your code to sign in is 123456. Brand coupon code SAVE20',
+  'Sign in with 123456. Brand coupon code SAVE20',
+  'Your security PIN is: 42\nBrand coupon code SAVE20']) {
+  test('R28 actual consumer issuance: ' + text, () => {
+    const {ctx} = harness(); let calls = 0;
+    ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+    const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+    assert.equal(outcome.excludedReason, 'authentication_code_message');
+    assert.equal(calls, 0); assert.equal(outcome.archiveAllowed, false);
+  });
+}
+
+for (const [message, excluded] of [
+  [{text: 'Sign in with SAVE20! for a discount. Brand coupon code SAVE20'}, false],
+  [{text: 'Your security PIN:\nUse code 42.\nBrand coupon code SAVE20'}, true]
+]) test('R28 cumulative boundary: ' + message.text, () => {
+  const {ctx} = harness(); let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({...message, incomplete: false});
+  assert.equal(outcome.excludedReason === 'authentication_code_message', excluded);
+  assert.equal(calls, excluded ? 0 : 1);
+});
+
+test('R28 qualified generic alphabetic values retain grounded semantic admission', () => {
+  const {ctx} = harness();
+  const quote = 'Your code to sign in is “ABCDEF”';
+  const message = {text: quote + '. Brand coupon code SAVE20', incomplete: false};
+  assert.equal(ctx.authenticationMessage_(ctx.candidateSource_(message)), false);
+  const response = {text: JSON.stringify({candidates: [], authentication: {quote, image: null}})};
+  assert.equal(ctx.parseAICandidateOutcome_(response, message).excludedReason, 'authentication_code_message');
+  for (const role of ['Suppose ', 'You said that ', 'Check whether ']) {
+    assert.throws(() => ctx.parseAICandidateOutcome_(response, {...message, text: role + message.text}));
+  }
+});
+
 for (const [text, excluded] of [
   ['Why should I share my verification code 123456? Brand coupon code SAVE20', false],
   ['Your verification code is 123456, enter it to sign in. Brand coupon code SAVE20', true],
@@ -569,7 +604,8 @@ test('message classification uses bounded context work for repeated literals and
   const {ctx} = harness();
   const original = ctx.authenticationInstruction_;
   for (const text of ['LOGIN77 '.repeat(8000), 'use code LOGIN77 '.repeat(8000),
-    'Brand: use code LOGIN77 for a discount.\n'.repeat(8000), 'x'.repeat(100000) + '\n' + 'LOGIN77 '.repeat(8000)]) {
+    'Brand: use code LOGIN77 for a discount.\n'.repeat(8000), 'x'.repeat(100000) + '\n' + 'LOGIN77 '.repeat(8000),
+    '1 a 42 to is '.repeat(8000)]) {
     let units = 0;
     let calls = 0;
     ctx.authenticationInstruction_ = function (before, after, code, frame) {
@@ -580,7 +616,7 @@ test('message classification uses bounded context work for repeated literals and
     assert.equal(ctx.authenticationMessage_(ctx.candidateSource_({text, incomplete: false})), false);
     assert.equal(calls, ctx.codeLexemes_(text).filter(code => ctx.authenticationLiteral_(code)).length);
     assert.ok(units <= 480 * calls, 'fixed per-literal context, no growing prefix/suffix');
-    assert.ok(units <= 160 * text.length, 'linear total context bound for minimum three-unit literals');
+    assert.ok(units <= 480 * text.length, 'linear total context bound including one-unit literals');
   }
   ctx.authenticationInstruction_ = original;
 });
