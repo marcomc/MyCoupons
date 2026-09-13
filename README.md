@@ -181,16 +181,16 @@ The example configuration contains product defaults only.
   authentication code—even if it also contains an offer. The check also guards
   direct AI/deterministic extraction and Retry. Ordinary login requirements and
   generic discussion of verification codes do not exclude a promotion.
-  Supported English/Italian evidence includes explicit verification/security/OTP
+  Supported English/Italian evidence includes explicit verification/security/OTP/passcode
   labels before or after their values, code-use instructions for verification,
-  sign-in or password reset, an explicit authentication subject plus generic
+  sign-in, password reset or email/account confirmation, an explicit authentication subject plus generic
   code issuance in the body, and a verification heading with a leading
   code on a separate line, sentence, or rendered block (including expiry text).
   This admission decision can combine those message-level signals;
   factual coupon quotes still cannot cross original source spans.
   This is a bounded text recognizer, not universal language understanding:
-  recognition requires a concrete 3–40-code-point value containing digits or
-  an all-uppercase alphabetic value. Ordinary predicates such as REQUIRED and
+  recognition requires a concrete 3–40-code-point value with an issuance
+  relation, independently of letter case. Ordinary predicates such as REQUIRED and
   NECESSARIO, example/documentation frames, and explicit placeholder forms
   are not guessed as issued values. URL and email references are not code values.
   Unsupported wording,

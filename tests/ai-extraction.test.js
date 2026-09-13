@@ -187,7 +187,7 @@ test('message classification uses bounded context work for repeated literals and
       return original(before, after, code, frame);
     };
     assert.equal(ctx.authenticationMessage_(ctx.candidateSource_({text, incomplete: false})), false);
-    assert.equal(calls, 8000);
+    assert.equal(calls, ctx.codeLexemes_(text).filter(code => ctx.authenticationLiteral_(code)).length);
     assert.ok(units <= 480 * calls, 'fixed per-literal context, no growing prefix/suffix');
     assert.ok(units <= 160 * text.length, 'linear total context bound for minimum three-unit literals');
   }

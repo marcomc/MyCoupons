@@ -124,19 +124,18 @@ function authenticationMessage_(source) {
   return false;
 }
 function authenticationLiteral_(token) {
-  // A label followed by ordinary prose is not a concrete issued value. Numeric
-  // and uppercase/alphanumeric literals are recognized; unfamiliar lowercase
-  // words remain with normal extraction rather than becoming a guessed code.
+  // Shape only: purpose and complete issuance are checked separately. Case is
+  // never authority; a real issued value may be numeric or alphabetic in any case.
   const length = Array.from(token).length;
   return length >= 3 && length <= 40 && /[\p{L}\p{N}\p{M}]/u.test(token) &&
+    !/^[("'[{<]*(?:example|sample|documentation|tutorial|documentazione|esempio|segnaposto|placeholder)[)"'\]}>.!?,;:]*$/iu.test(token) &&
     !/^(?:[a-z][a-z\d+.-]*:\/\/|www\.)\S+$/iu.test(token) &&
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token) &&
-    (/\p{Nd}/u.test(token) || /\p{Lu}/u.test(token) && !/\p{Ll}/u.test(token)) &&
-    !/^(?:OTP|CODE|PIN|XXX+|CODE_HERE)[.!?,;:]*$/u.test(token);
+    !/^(?:OTP|CODE|PASSCODE|PIN|XXX+|CODE_HERE)[.!?,;:]*$/iu.test(token);
 }
 function authenticationLabelPattern_() {
-  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp)\\s+code|' +
-    'otp|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso|reimpostazione(?:\\s+password)?))';
+  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp)\\s+(?:code|passcode)|' +
+    'passcode|otp|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso|reimpostazione(?:\\s+password)?))';
 }
 function authenticationHeading_(text) {
   return new RegExp('^(?:[\\p{L}\\p{N} ._-]{1,60}:\\s*)?(?:(?:your|il\\s+tuo|tuo)\\s+)?' +
@@ -147,6 +146,7 @@ function authenticationSubject_(text) {
   // Promotional login subjects and ordinary account discussion do not.
   if (text.length > 240 || authenticationDiscussion_(text)) return false;
   if (authenticationHeading_(text.trim())) return true;
+  if (new RegExp('^' + authenticationConfirmationPattern_() + '[.!]?$', 'iu').test(text.trim())) return true;
   return (
     /^(?:sign[ -]?in|log[ -]?in)(?:\s+to\s+[\p{L}\p{N} ._-]+)?[.!]?$/iu.test(text.trim()) ||
     /^(?:(?:reset|verify|authenticate)\s+(?:(?:your|the)\s+)?(?:password|account|identity)|(?:reimposta|verifica)\s+(?:(?:la|il|il\s+tuo|la\s+tua)\s+)?(?:password|account|identità)|accedi(?:\s+al\s+tuo\s+account)?)[.!]?$/iu.test(text.trim())
@@ -155,16 +155,21 @@ function authenticationSubject_(text) {
 }
 function authenticationValueTail_(text) {
   return authenticationPurposeTail_(text) ||
+    /^\s*(?:for\s+(?:(?:your|the)\s+)?(?:account|order|purchase)|per\s+(?:(?:il\s+tuo|il|la\s+tua|la)\s+)?(?:account|ordine|acquisto))\b/iu.test(text) ||
     /^[^\S\n]*(?:$|\n|[.!?](?:\s|$)|(?:(?:[,;]|and|e)\s*)?(?:expires?|is\s+valid|valid\s+(?:for|until)|scad(?:e|rà)|(?:è\s+)?valid[oa]\s+(?:per|fino))(?![\p{L}\p{N}\p{M}_]))/iu.test(text);
 }
 function authenticationPurposeTail_(text) {
   return new RegExp('^\\s*(?:(?:to|for|per)\\s+)?' + authenticationActionPattern_() + '\\b', 'iu').test(text);
 }
 function authenticationActionPattern_() {
-  return '(?:verif(?:y|ying)|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|verifica(?:re)?|reimposta(?:re)?|ripristina|acced(?:i|ere))';
+  return '(?:verif(?:y|ying)|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|verifica(?:re)?|reimposta(?:re)?|ripristina|acced(?:i|ere)|' + authenticationConfirmationPattern_() + ')';
+}
+function authenticationConfirmationPattern_() {
+  return '(?:confirm(?:ing)?\\s+(?:(?:your|the)\\s+)?(?:e-?mail(?:\\s+address)?|account|identity)|' +
+    'conferma(?:re)?\\s+(?:(?:la\\s+tua|il\\s+tuo|la|il)\\s+)?(?:e-?mail|account|identità))';
 }
 function authenticationCodeNoun_() {
-  return '(?:(?:(?:coupon|promo(?:tional)?|discount)\\s+)?code|codice(?:\\s+sconto)?)';
+  return '(?:(?:(?:coupon|promo(?:tional)?|discount)\\s+)?(?:code|passcode)|codice(?:\\s+sconto)?)';
 }
 function authenticationDiscussionClause_(text) {
   // A reference to another example is not an example of this issuance. Keep
@@ -191,14 +196,22 @@ function authenticationIssuance_(before, after) {
     before.lastIndexOf('?'), before.lastIndexOf('\n')) + 1);
   const label = authenticationLabelPattern_();
   const qualifier = '(?:\\s+(?:is|è|e[’\x27]|monouso|below|shown\\s+below|riportato\\s+sotto|seguente))*';
-  const issuingLabel = new RegExp('\\b' + label + qualifier + '\\s*[:=]?\\s*$', 'iu').test(before);
+  const precedingLabel = new RegExp('\\b' + label + qualifier + '\\s*[:=]?\\s*$', 'iu').exec(before);
+  // In "value is your verification code ..." the label belongs to the value
+  // before it; its following descriptive words cannot become another value.
+  const labelPrefix = precedingLabel ? before.slice(0, precedingLabel.index) : '';
+  const priorValue = /(?:^|\s)(\S+)\s+(?:is|è|e[’'])\s+(?:(?:your|the|il\s+tuo|il|tuo)\s+)?$/iu.exec(labelPrefix);
+  const reversed = Boolean(priorValue && !/^(?:here|there|this|below|following|attached|questo|questa)$/iu.test(priorValue[1]));
+  const promotional = Boolean(precedingLabel && /^passcode\b/iu.test(precedingLabel[0]) &&
+    /\b(?:coupon|promo(?:tional)?|discount|sconto)\s*$/iu.test(labelPrefix));
+  const issuingLabel = Boolean(precedingLabel && !reversed && !promotional);
   const followingPrefix = '^\\s+(?:is|è|e[’\x27])\\s+(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?';
   const followingLabel = new RegExp(followingPrefix + label + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
-  const followingGeneric = new RegExp(followingPrefix + '(?:code|codice)(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
+  const followingGeneric = new RegExp(followingPrefix + '(?:code|passcode|codice)(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
   const following = followingLabel || followingGeneric;
   const continuation = following ? after.slice(following[0].length) : after;
   const completeValue = authenticationValueTail_(continuation);
-  const generic = /(?:^|\s|:)(?:(?:your|the|il\s+tuo|il|tuo)\s+)?(?:code|codice)\s*(?:(?:is|è|e[’'])\s*[:=]?\s+|[:=]\s*)$/iu.exec(before);
+  const generic = /(?:^|\s|:)(?:(?:your|the|il\s+tuo|il|tuo)\s+)?(?:code|passcode|codice)\s*(?:(?:is|è|e[’'])\s*[:=]?\s+|[:=]\s*)$/iu.exec(before);
   const genericIssued = Boolean(generic && !/\b(?:coupon|promo(?:tional)?|discount|sconto|use|enter|type|usa|inserisci|digita)\s*$/iu.test(before.slice(0, generic.index)));
   const noun = authenticationCodeNoun_();
   const introduced = new RegExp('\\b' + noun + '\\s*(?:is\\s*)?[:=]?\\s*$', 'iu').test(before);
@@ -213,16 +226,17 @@ function authenticationIssuance_(before, after) {
     generic: genericIssued || Boolean(followingGeneric && completeValue),
     direct: (introduced || imperative) && purposeAfter || usingCode && authAction,
     imperative: imperative, sentenceValue: sentenceValue, valueTail: completeValue,
+    descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism|documentation|example)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
     discussion: authenticationDiscussionClause_(before) || authenticationExampleSuffix_(continuation)};
 }
 function authenticationInstruction_(before, after, code, frame) {
   const relation = authenticationIssuance_(before, after);
   // These are grammatical predicates, not an issued literal. Check independent
   // of capitalization; an imperative use instruction is a different relation.
-  const predicate = /^(?:required|necessary|needed|optional|unavailable|expired|invalid|necessari[oa]|richiest[oa]|obbligatori[oa]|scadut[oa])[.!?,;:]*$/iu.test(code);
-  if (relation.discussion || predicate && !relation.imperative) return false;
+  const predicate = /^(?:required|necessary|needed|optional|available|unavailable|ready|pending|sent|provided|shown|displayed|requested|enabled|disabled|expires?|expired|invalid|status|necessari[oa]|richiest[oa]|obbligatori[oa]|disponibile|pronto|inviato|scade|scadrà|scadut[oa])[.!?,;:]*$/iu.test(code);
+  if (relation.discussion || relation.descriptive || predicate && !relation.imperative) return false;
   const valueEnd = relation.valueTail || /[.!?]$/u.test(code);
-  return relation.explicit && (/\p{Nd}/u.test(code) || valueEnd) || relation.direct ||
+  return relation.explicit && valueEnd || relation.direct ||
     Boolean(frame && (frame.subject && relation.generic && valueEnd ||
       frame.heading && valueEnd && (frame.leading || relation.sentenceValue || relation.generic)));
 }
