@@ -71,6 +71,56 @@ for (const [name, message, code, quote] of [
   });
 }
 
+for (const [text, excluded] of [
+  ['Why should I share my verification code 123456? Brand coupon code SAVE20', false],
+  ['Your verification code is 123456, enter it to sign in. Brand coupon code SAVE20', true],
+  ['Suppose your verification code is 123456. Brand coupon code SAVE20', false]
+]) test('R27 actual consumer admission: ' + text, () => {
+  const {ctx} = harness(); let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.equal(outcome.excludedReason === 'authentication_code_message', excluded);
+  assert.equal(calls, excluded ? 0 : 1);
+  if (!excluded) assert.equal(outcome.candidates[0].code, 'SAVE20');
+});
+
+test('R27 question and supposition context cannot be cropped from semantic proof', () => {
+  const {ctx} = harness();
+  const quote = 'your verification code is “ABCDEF”';
+  for (const prefix of ['Why should I confirm ', 'Suppose ', 'Assuming that ']) {
+    const message = {text: prefix + quote + '. Brand coupon code SAVE20', incomplete: false};
+    assert.equal(ctx.authenticationMessage_(ctx.candidateSource_(message), true), false);
+    assert.throws(() => ctx.parseAICandidateOutcome_({text: JSON.stringify({candidates: [], authentication: {quote, image: null}})}, message));
+  }
+});
+
+for (const [phrase, excluded] of [
+  ['Your verification code is 123456, use it to confirm your account discount', false],
+  ['Your verification code is ABCDEF, enter it to sign in', true],
+  ['Who should use my verification code 123456?', false],
+  ['Your verification code is “support.acme.com”, enter it to sign in', false]
+]) test('R27 cumulative boundary: ' + phrase, () => {
+  const {ctx} = harness(); let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: phrase + '. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason === 'authentication_code_message', excluded);
+  assert.equal(calls, excluded ? 0 : 1);
+  if (!excluded) assert.equal(outcome.candidates[0].code, 'SAVE20');
+});
+
+test('R27 anaphoric presentation supports alphabetic values without crossing blocks', () => {
+  const {ctx} = harness();
+  ctx.callGeminiModel_ = () => { throw new Error('clear issuance must precede model'); };
+  for (const value of ['ABCDEF', 'aBcDeF', '“ABCDEF”', '‘aBcDeF’', '“123 456”']) {
+    const message = {text: 'Your verification code is ' + value + ', enter it to sign in. Brand coupon code SAVE20', incomplete: false};
+    assert.equal(ctx.extractCouponOutcome_(message).excludedReason, 'authentication_code_message', value);
+  }
+  for (const message of [
+    {text: 'Your code is ABCDEF, enter it\nto sign in. Brand coupon code SAVE20'},
+    {html: '<p>Your code is ABCDEF, enter it</p><p>to sign in. Brand coupon code SAVE20</p>'}
+  ]) assert.equal(ctx.authenticationMessage_(ctx.candidateSource_(message)), false);
+});
+
 test('R26 direct first-person authentication questions preserve a genuine promotion', () => {
   const {ctx} = harness(); let calls = 0;
   ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };

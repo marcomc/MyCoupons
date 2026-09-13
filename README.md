@@ -220,8 +220,11 @@ The example configuration contains product defaults only.
   only with an explicit delimiter; duration digits are not the issued code.
   Connected indirect `if`/`whether` questions remain discussion, including in
   model evidence; later independent issuance is evaluated separately.
-  Direct auxiliary questions retain personal/possessive subjects and supported
-  outer quotes; issuer names and affirmative modal statements remain distinct.
+  Direct questions, including wh-words and contracted auxiliaries, and explicit
+  suppositions retain their non-issuing role and supported outer quotes; issuer
+  names and later independent issuance remain distinct. An adjacent instruction
+  such as `enter it to sign in` can complete an issued value, but a checkout or
+  other non-authentication instruction cannot.
   A validated authentication subject or heading may
   qualify a generic, non-promotional imperative. Matched typographic value quotes
   count as admission presentation only; factual coupon tokens are unchanged.

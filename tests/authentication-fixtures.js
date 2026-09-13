@@ -967,6 +967,40 @@ for (const issuer of ['Can I Bank', 'Could We Services', 'My Bank', 'Our Service
 }
 authenticationMessages.push({text: 'I can use code 123456 to sign in'}, {text: 'Your verification code: CAN+I77'});
 for (const modal of ['may', 'might', 'will', 'shall']) authenticationMessages.push({text: 'I ' + modal + ' use code 123456 to sign in'});
+for (const role of ['Why should I share my', 'How can I use my', 'When would we use our',
+  'Where should I enter my', "Why can't I share my", 'Why can’t I share my',
+  "Shouldn't I use my", 'Shouldn’t I use my', "Won't I use my", "Isn't my", 'Isn’t my',
+  'Who should use my', 'Who can share my', 'Who could use my',
+  'Suppose your', 'Supposing your', 'Assume that your', 'Assuming your', 'Imagine your']) {
+  const phrase = role + ' verification code is 123456';
+  ordinaryMessages.push({text: phrase + '? Brand coupon code SAVE20'},
+    {subject: phrase, text: 'Brand coupon code SAVE20'},
+    {html: '<p>' + phrase + '?</p><p>Brand coupon code SAVE20</p>'});
+  for (const separator of ['. ', '; ', '\n']) authenticationMessages.push({text: phrase + separator + 'Your verification code is 654321'});
+  for (const [open, close] of [['"', '"'], ['“', '”']]) {
+    ordinaryMessages.push({text: 'Acme: ' + open + phrase.replace('is 123456', ': 123456') + '; your verification code is 654321' + close + '. Brand coupon code SAVE20'});
+  }
+}
+for (const issuer of ['Why Bank', 'Who Can Bank', 'Suppose Bank', 'Assume Services']) authenticationMessages.push({text: issuer + ': Your verification code is 123456'});
+for (const value of ['123456', 'ABC.77!', '“aBc77”']) {
+  for (const instruction of ['enter it to sign in', 'use this code to verify your email', 'please type the code to access your account']) {
+    authenticationMessages.push({text: 'Your verification code is ' + value + ', ' + instruction + '. Brand coupon code SAVE20'});
+  }
+}
+for (const instruction of ['enter it at checkout for 20% off', 'use it to confirm your order',
+  'use it to verify your account discount', 'do not enter it to sign in', 'if you enter it to sign in',
+  'you said enter it to sign in', 'enter another code 654321 at checkout']) {
+  ordinaryMessages.push({text: 'Your verification code is 123456, ' + instruction + '. Brand coupon code SAVE20'});
+}
+for (const target of ['your account', 'your email', 'your email address', 'your identity']) {
+  authenticationMessages.push({text: 'Your verification code is 123456, enter it to confirm ' + target});
+  authenticationMessages.push({text: 'Your verification code to confirm ' + target + ' is 123456'});
+  ordinaryMessages.push({text: 'Your verification code is 123456, enter it to confirm ' + target + ' discount. Brand coupon code SAVE20'});
+}
+for (const [open, close] of [['“', '”'], ['‘', '’'], ['"', '"'], ["'", "'"], ['<', '>']]) {
+  ordinaryMessages.push({text: 'Your verification code is ' + open + 'support.example.com' + close + ', enter it to sign in. Brand coupon code SAVE20'});
+  authenticationMessages.push({text: 'Your verification code is ' + open + 'ABC.77' + close + ', enter it to sign in'});
+}
 // R24 revises only the known copular all-letter fixture class. Keep its original
 // sources, but assert semantic routing separately from pre-model exclusion.
 // This fixture partition does not call the production admission implementation.

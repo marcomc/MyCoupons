@@ -39,8 +39,9 @@
   Recognize bounded affirmative declarative assignments with qualified labels.
   Carry complete, delimiter-terminated duration qualifiers to their actual value
   and retain indirect-question roles without suppressing later independent issuance.
-  Preserve personal/possessive subjects and quoted direct questions in the same
-  bounded clause handling, including their original context during model proof.
+  Preserve personal/possessive subjects, wh/contracted questions and suppositions
+  in bounded clause handling, including original context during model proof.
+  Recognize adjacent anaphoric instructions only with an authentication purpose.
   Associate subject/body issuance, labels in either direction, alphabetic
   values, and heading/instruction/value layouts without relaxing factual quote
   boundaries. Keep verification actions tied to authentication targets and

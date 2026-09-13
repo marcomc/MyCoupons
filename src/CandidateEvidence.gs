@@ -131,7 +131,7 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
         }
         const token = line.slice(literalIndex, match.index + match[0].length);
         const grouped = authenticationGroupedLiteral_(line, literalIndex);
-        // A sentence stop outside one matched wrapper is admission presentation.
+        // Clause punctuation outside one matched wrapper is admission presentation.
         // Keep the factual token lexer and every stored/evidenced code unchanged.
         const wrappedLiteral = authenticationWrappedLiteral_(token);
         const code = grouped ? grouped.code : wrappedLiteral === null ? codeLexemes_(token)[0] : wrappedLiteral;
@@ -178,7 +178,7 @@ function authenticationClosingWrapper_(opening) {
 }
 function authenticationWrappedLiteral_(token) {
   const closing = authenticationClosingWrapper_(token.charAt(0));
-  const end = token.length - (/[.!?]$/u.test(token) ? 1 : 0);
+  const end = token.length - (/[.!?,;]$/u.test(token) ? 1 : 0);
   return closing && end > 2 && token.charAt(end - 1) === closing ? token.slice(1, end - 1) : null;
 }
 function authenticationGroupedLiteral_(line, index) {
@@ -193,7 +193,7 @@ function authenticationGroupedLiteral_(line, index) {
   let next = end + (closing ? 1 : 0);
   // Sentence punctuation after a matched quote is presentation, not a suffix
   // attached to the numeric group. It never enters factual code identity.
-  if (closing && /[.!?]/u.test(line.charAt(next))) next++;
+  if (closing && /[.!?,;]/u.test(line.charAt(next))) next++;
   if (next < line.length && !/\s/u.test(line.charAt(next))) return null;
   return {code: match[0], start: start, next: next};
 }
@@ -261,9 +261,19 @@ function authenticationCompletionTail_(text) {
   const wrapper = authenticationWrappedTail_(text);
   const clause = wrapper === null ? text : wrapper;
   return (wrapper === null || !authenticationDiscussion_(clause)) && (
+    authenticationAnaphoricTail_(clause) ||
     /^[^\S\n]*(?:[,;][^\S\n]*)?(?:(?:and|e)\s+)?(?:(?:should|must)\s+not\s+be\s+shared|(?:do\s+not|never)\s+share|(?:must|should)\s+be\s+kept\s+secret|non\s+(?:deve\s+essere\s+condiviso|condividerlo)|deve\s+rimanere\s+segreto)(?![\p{L}\p{N}\p{M}_])/iu.test(clause) ||
     /^[^\S\n]*(?:(?:[,;]|and|e)\s*)?(?:expires?|is\s+valid|valid\s+(?:for|until)|scad(?:e|rà)|(?:è\s+)?valid[oa]\s+(?:per|fino))(?![\p{L}\p{N}\p{M}_])/iu.test(clause)
   );
+}
+function authenticationAnaphoricTail_(text) {
+  // One adjacent use instruction both completes and presents the same value.
+  // Never borrow another code, a later block, or a merely promotional target.
+  const line = text.split('\n', 1)[0];
+  const wrapper = authenticationWrappedTail_(line);
+  const clause = wrapper === null ? line : wrapper;
+  const instruction = /^[^\S\n]*(?:[,;][^\S\n]*)?(?:(?:and|then)\s+)?(?:please\s+)?(?:enter|type|use)\s+(?:it|(?:this|the)\s+(?:code|passcode|pin))\s+/iu.exec(clause);
+  return Boolean(instruction && !authenticationDiscussion_(clause) && authenticationPurposeTail_(clause.slice(instruction[0].length)));
 }
 function authenticationWrappedTail_(text) {
   const match = /^[^\S\n]*(?:\(([^()\n]*)\)|\[([^\[\]\n]*)\])(?=\s|[.!?,;:]|$)/u.exec(text);
@@ -292,11 +302,11 @@ function authenticationTargetEnd_(beforeValue) {
 function authenticationActionPattern_(beforeValue) {
   return '(?:' + authenticationVerificationPattern_(beforeValue) + '|' + authenticationAccessPattern_(beforeValue) +
     '|(?:authentication|(?:two[ -]factor|multi[ -]factor)\\s+authentication|(?:mfa|2fa)(?:\\s+authentication)?)' + authenticationTargetEnd_(beforeValue) +
-    '|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|reimposta(?:re)?|ripristina|acced(?:i|ere)|' + authenticationConfirmationPattern_() + ')';
+    '|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|reimposta(?:re)?|ripristina|acced(?:i|ere)|' + authenticationConfirmationPattern_(beforeValue) + ')';
 }
-function authenticationConfirmationPattern_() {
+function authenticationConfirmationPattern_(beforeValue) {
   return '(?:confirm(?:ing)?\\s+(?:(?:your|the)\\s+)?(?:e-?mail(?:\\s+address)?|account|identity)|' +
-    'conferma(?:re)?\\s+(?:(?:la\\s+tua|il\\s+tuo|la|il)\\s+)?(?:e-?mail|account|identità))';
+    'conferma(?:re)?\\s+(?:(?:la\\s+tua|il\\s+tuo|la|il)\\s+)?(?:e-?mail|account|identità))' + authenticationTargetEnd_(beforeValue);
 }
 function authenticationCodeNoun_() {
   return '(?:(?:(?:coupon|promo(?:tional)?|discount)\\s+)?(?:code|passcode|pin)|codice(?:\\s+sconto)?)';
@@ -329,17 +339,19 @@ function authenticationReportedClause_(text) {
   // Retain a connected report through politeness and a bounded dotted issuer.
   // A closing quote or independent sentence ends its authority over later values.
   const indirect = /\b(?:if|whether)(?:\s+|$)(["“'‘]?)\s*(?:(?=(?:your|the|a|an|this|that|you|i|we|he|she|it|they|il|la|tuo)\b|\S+\s+(?:is|è)(?=\s))(?:(?![.!?]\s|["”'’])[^\n])*|$)$/iu.exec(text);
-  const questionHead = '(?:am|was|were|is|are|did|does|do|can|could|would|should|has|have|had|may|might|will|shall)\\s+' +
-    '(?:i|we|you|he|she|it|they|my|our|your|his|her|its|their|the)\\b';
+  const auxiliary = '(?:(?:am|was|were|is|are|did|does|do|can|could|would|should|has|have|had|may|might|must|will|shall)(?:n[’\x27]t)?|(?:ca|wo|sha)n[’\x27]t)';
+  const questionHead = '(?:(?:(?:why|how|when|where|what|which|who|whom)\\s+)?' + auxiliary + '\\s+' +
+    '(?:i|we|you|he|she|it|they|my|our|your|his|her|its|their|the)\\b|who\\s+' + auxiliary + '\\b)';
   // A colon inside a captured quote belongs to the question. Only unquoted
   // clauses need the issuer-prefix guard (for example, "Can I Bank:").
   const direct = new RegExp('(?:^|[.!?;]\\s+|:\\s*)\\s*(["“\x27‘])\\s*' + questionHead + '(?:(?![.!?]\\s|["”\x27’])[^\\n])*$', 'iu').exec(text) ||
     new RegExp('(?:^|[.!?;]\\s+|:\\s*)\\s*()' + questionHead + '(?:(?![.!?]\\s|["”\x27’]|:\\s*\\S)[^\\n])*$', 'iu').exec(text);
-  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*)?(?:(?:i|we|you|he|she|they|it)\s+(?:(?:should|could|would|must|may|might|can|will)\s+)?)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita|(?:have\s+)?assigned)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text) || indirect || direct;
+  const supposition = /(?:^|[.!?;]\s+|:\s*)\s*(["“'‘]?)\s*(?:suppose|supposing|assume|assuming|imagine)(?:\s+that)?\s+(["“'‘]?)\s*(?=(?:your|the|a|an|this|that|you|i|we|he|she|it|they|my|our)\b|\S+\s+is(?=\s))(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text);
+  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*)?(?:(?:i|we|you|he|she|they|it)\s+(?:(?:should|could|would|must|may|might|can|will)\s+)?)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita|(?:have\s+)?assigned)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text) || indirect || direct || supposition;
   // A semicolon starts an independent clause unless it remains inside a quote.
   if (!report) return false;
   const separator = Math.max(text.lastIndexOf(';'), report === indirect && /^if\b/iu.test(report[0]) ? text.lastIndexOf(',') : -1);
-  if (report[1] || separator < report.index) return true;
+  if (report[1] || report === supposition && report[2] || separator < report.index) return true;
   // Inspect only the final unquoted clause, which may itself be a new report.
   return authenticationReportedClause_(text.slice(separator + 1));
 }
@@ -399,7 +411,7 @@ function authenticationIssuance_(before, after) {
   let authAction = false;
   let action;
   while ((action = actions.exec(before))) authAction = Boolean(action[1]);
-  const assignmentPresentation = usingCode && authAction ||
+  const assignmentPresentation = authenticationAnaphoricTail_(continuation) || usingCode && authAction ||
     /[:=]\s*$/u.test(before) && (issuingLabel || genericIssued || imperative || inlineInstruction);
   return {explicit: issuingLabel || Boolean(followingLabel && completeValue) || preposedPurpose,
     presented: wrappedValue || assignmentPresentation,
