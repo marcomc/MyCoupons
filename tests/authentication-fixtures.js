@@ -462,4 +462,47 @@ ordinaryMessages.push(
   {text: 'You reported: "Use the verification code to sign in: 123456". Brand coupon code SAVE20'},
   {text: 'Use the verification code to sign in:', html: '<p>123456</p><p>Brand coupon code SAVE20</p>'}
 );
+for (const label of ['Your verification code', 'OTP', 'Your account access PIN']) {
+  for (const delimiter of [':', '=']) {
+    for (const value of ['123456', 'aBcDeF', '"123 456"', 'ABC:77!']) {
+      authenticationMessages.push({text: label + delimiter + value + '. Brand coupon code SAVE20'});
+    }
+    ordinaryMessages.push(
+      {text: 'Example: ' + label + delimiter + '123456. Brand coupon code SAVE20'},
+      {text: 'This is not a ' + label + delimiter + '123456. Brand coupon code SAVE20'},
+      {text: 'You reported: "' + label + delimiter + '123456". Brand coupon code SAVE20'},
+      {text: label + delimiter + 'help.acme.example/article/12345. Brand coupon code SAVE20'}
+    );
+  }
+}
+for (const purpose of ['to verify your email', 'to access your account', 'for two-factor authentication',
+  'for multi-factor authentication', 'for MFA', 'for MFA authentication', 'for 2FA']) {
+  authenticationMessages.push(
+    {text: '123456 is your code ' + purpose + '. Brand coupon code SAVE20'},
+    {text: 'Use 123456 ' + purpose + '. Brand coupon code SAVE20'}
+  );
+  ordinaryMessages.push(
+    {text: 'Example: 123456 is your code ' + purpose + '. Brand coupon code SAVE20'},
+    {text: 'Did you use 123456 ' + purpose + '? Brand coupon code SAVE20'},
+    {text: 'Do not use 123456 ' + purpose + '. Brand coupon code SAVE20'},
+    {text: 'You reported: "123456 is your code ' + purpose + '". Brand coupon code SAVE20'}
+  );
+}
+ordinaryMessages.push(
+  {text: 'SAVE20 is your code to verify your account discount. Brand coupon code SAVE20'},
+  {text: 'Use SAVE20 for two-factor authentication discount. Brand coupon code SAVE20'},
+  {text: 'Use SAVE20 for MFA merchandise. Brand coupon code SAVE20'}
+);
+for (const noun of ['code', 'passcode', 'PIN', 'coupon code', 'promotional passcode', 'codice sconto']) {
+  authenticationMessages.push({text: '123456 is your ' + noun + ' to verify your email. Brand coupon code SAVE20'});
+  ordinaryMessages.push({text: 'You said 123456 is your ' + noun + ' to verify your email. Brand coupon code SAVE20'});
+  authenticationMessages.push({text: 'You said 123456 is your ' + noun + ' to verify your email. Your verification code is 654321'});
+}
+ordinaryMessages.push({subject: 'Your verification code', text: 'SAVE20 is your coupon code. Brand coupon code SAVE20'});
+for (const report of ['You said that ', 'You asked if ', 'You asked whether ']) {
+  for (const noun of ['code', 'coupon code']) {
+    ordinaryMessages.push({text: report + '123456 is your ' + noun + ' to verify your email. Brand coupon code SAVE20'});
+    authenticationMessages.push({text: report + '123456 is your ' + noun + ' to verify your email. Your verification code is 654321'});
+  }
+}
 module.exports = {authenticationMessages, ordinaryMessages};

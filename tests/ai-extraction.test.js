@@ -202,6 +202,32 @@ for (const [name, text, excluded] of [
   });
 }
 
+for (const text of ['Your verification code:123456', 'OTP=123456',
+  '123456 is your code to verify your email', 'Use 123456 for two-factor authentication']) {
+  test('R14 authentication relation at actual extraction consumer: ' + text, () => {
+    const {ctx} = harness();
+    let calls = 0;
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      return aiResponse({merchant: '', code: '123456', evidence: {code: {quote: text}}});
+    };
+    const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+    assert.equal(outcome.excludedReason, 'authentication_code_message');
+    assert.equal(calls, 0);
+    assert.equal(outcome.archiveAllowed, false);
+    assert.deepEqual(Array.from(outcome.candidates), []);
+  });
+}
+
+test('R14 admission delimiters never split factual coupon codes', () => {
+  const {ctx} = harness();
+  for (const code of ['SAVE:20', 'SAVE=20', 'ABC.77', 'ÈTÉ:20=VIP']) {
+    const message = {text: 'Brand coupon code ' + code, incomplete: false};
+    assert.equal(ctx.authenticationMessage_(ctx.candidateSource_(message)), false);
+    assert.deepEqual(Array.from(ctx.deterministicCandidates_(message), candidate => candidate.code), [code]);
+  }
+});
+
 for (const label of ['email confirmation code', 'MFA code']) {
   test('R11 explicit authentication label at actual extraction consumer: ' + label, () => {
     const {ctx} = harness();
