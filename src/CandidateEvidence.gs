@@ -213,7 +213,8 @@ function authenticationLabelPattern_() {
 }
 function authenticationLabelQualifier_() {
   return '(?:\\s+(?:to|for|per)\\s+' + authenticationActionPattern_(true) + ')?' +
-    '(?:\\s+(?:' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+sent(?:\\s+to\\s+you)?|monouso|below|shown\\s+below|riportato\\s+sotto|seguente))*';
+    '(?:\\s+(?:' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+sent(?:\\s+to\\s+you)?|monouso|below|shown\\s+below|riportato\\s+sotto|seguente|' +
+    '(?:expires?\\s+in|(?:is\\s+)?valid\\s+for|scad(?:e|rà)\\s+(?:tra|fra)|(?:è\\s+)?valid[oa]\\s+per)\\s+\\p{Nd}{1,4}\\s+(?:seconds?|minutes?|hours?|secondi|minuti|ore)(?=\\s*[:=])))*';
 }
 function authenticationCopulaPattern_() {
   return '(?:is|will\\s+be|è|sarà|e[’\x27])';
@@ -308,7 +309,7 @@ function authenticationDiscussionClause_(text) {
   if (/(?:^|:\s*)\s*(?:if|unless|se)(?:\s*$|\s+(?:your|the|il|la)\b)/iu.test(instructionClause)) return true;
   if (/(?:^|:\s*)\s*(?:was|were|is|are|did|does|do|can|could|would|should|has|have|had)\s+(?:you|your|the)\b/iu.test(instructionClause) ||
       /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?$/iu.test(instructionClause) ||
-      /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(?:you|your|the)\b/iu.test(instructionClause)) return true;
+      /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(?:you|your|the|il|la|tuo)\b/iu.test(instructionClause)) return true;
   if (/\b(?:(?:do\s+not|don[’']t|never|non)\s+(?:enter|type|use|inserisci|digita|usa)|(?:never|not)\s+ask\s+(?:you\s+)?to\s+(?:enter|type|use)|(?:learn|explain)\s+how\s+to\s+(?:enter|type|use))\b/iu.test(instructionClause)) return true;
   // A reference to another example is not an example of this issuance. Keep
   // explicit "For example," and "Example;" clauses intact rather than treating
@@ -325,15 +326,17 @@ function authenticationExampleSuffix_(text) {
     new RegExp('^[^\\S\\n]*[,;:]?[^\\S\\n]*[(\\[]?[^\\S\\n]*(?:(?:for|ad)\\s+)?' +
       authenticationDiscussionPattern_(), 'iu').test(text);
 }
-function authenticationReportedInstruction_(text) {
+function authenticationReportedClause_(text) {
   // Retain a connected report through politeness and a bounded dotted issuer.
   // A closing quote or independent sentence ends its authority over later values.
-  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*)?(?:(?:i|we|you|he|she|they|it)\s+(?:(?:should|could|would|must|may|might|can|will)\s+)?)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita|(?:have\s+)?assigned)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text);
+  const indirect = /\b(?:if|whether)(?:\s+|$)(["“'‘]?)\s*(?:(?=(?:your|the|a|an|this|that|you|i|we|he|she|it|they|il|la|tuo)\b|\S+\s+(?:is|è)(?=\s))(?:(?![.!?]\s|["”'’])[^\n])*|$)$/iu.exec(text);
+  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*)?(?:(?:i|we|you|he|she|they|it)\s+(?:(?:should|could|would|must|may|might|can|will)\s+)?)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita|(?:have\s+)?assigned)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text) || indirect;
   // A semicolon starts an independent clause unless it remains inside a quote.
   if (!report) return false;
-  if (report[1] || report[0].indexOf(';') < 0) return true;
+  const separator = Math.max(text.lastIndexOf(';'), report === indirect && /^if\b/iu.test(report[0]) ? text.lastIndexOf(',') : -1);
+  if (report[1] || separator < report.index) return true;
   // Inspect only the final unquoted clause, which may itself be a new report.
-  return authenticationReportedInstruction_(text.slice(text.lastIndexOf(';') + 1));
+  return authenticationReportedClause_(text.slice(separator + 1));
 }
 function authenticationIssuance_(before, after) {
   // Wrapper bytes are presentation, not purpose. Keep punctuation inside the
@@ -406,7 +409,7 @@ function authenticationIssuance_(before, after) {
     frameContinuation: authenticationFrameContinuation_(continuation),
     invalidRecipientTail: authenticationRecipientTail_(continuation) === false,
     descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
-    discussion: negatedLabel || authenticationReportedInstruction_(beforeLine) ||
+    discussion: negatedLabel || authenticationReportedClause_(beforeLine) ||
       authenticationDiscussionClause_(before) || authenticationExampleSuffix_(continuation)};
 }
 function authenticationInstruction_(before, after, code, frame, allowAmbiguousCopular) {

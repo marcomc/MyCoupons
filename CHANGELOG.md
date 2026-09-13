@@ -37,6 +37,8 @@
   Apply semantic admission before historical Confirm, finalization and partial
   replay; keep complete non-ambiguous image-free manual admission model-free.
   Recognize bounded affirmative declarative assignments with qualified labels.
+  Carry complete, delimiter-terminated duration qualifiers to their actual value
+  and retain indirect-question roles without suppressing later independent issuance.
   Associate subject/body issuance, labels in either direction, alphabetic
   values, and heading/instruction/value layouts without relaxing factual quote
   boundaries. Keep verification actions tied to authentication targets and

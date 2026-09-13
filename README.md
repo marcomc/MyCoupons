@@ -216,6 +216,10 @@ The example configuration contains product defaults only.
   passive issuance (`has been sent` / `was sent`, optionally `to you`) must still
   present a concrete value. Affirmative `We assigned … as your verification code`
   supports a completed qualified label; reports, hypotheses and negation do not.
+  A complete duration qualifier (`expires in 10 minutes:`) may precede the value
+  only with an explicit delimiter; duration digits are not the issued code.
+  Connected indirect `if`/`whether` questions remain discussion, including in
+  model evidence; later independent issuance is evaluated separately.
   A validated authentication subject or heading may
   qualify a generic, non-promotional imperative. Matched typographic value quotes
   count as admission presentation only; factual coupon tokens are unchanged.

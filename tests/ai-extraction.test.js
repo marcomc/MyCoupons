@@ -71,6 +71,29 @@ for (const [name, message, code, quote] of [
   });
 }
 
+for (const [name, text, excluded] of [
+  ['expiration-qualified-label', 'Your verification code expires in 10 minutes: 123456. Brand coupon code SAVE20', true],
+  ['indirect-question', 'Check whether your verification code is 123456. Brand coupon code SAVE20', false]
+]) test('R25 actual consumer admission: ' + name, () => {
+  const {ctx} = harness(); let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.equal(outcome.excludedReason === 'authentication_code_message', excluded);
+  assert.equal(calls, excluded ? 0 : 1);
+  if (!excluded) assert.equal(outcome.candidates[0].code, 'SAVE20');
+});
+
+test('R25 indirect questions cannot ground semantic authentication by cropping their role', () => {
+  const {ctx} = harness();
+  for (const conjunction of ['if', 'whether']) {
+    const quote = 'your code is “ABCDEF”';
+    const message = {subject: 'Sign in to Acme', text: 'Check ' + conjunction + ' ' + quote + '. Brand coupon code SAVE20', incomplete: false};
+    const source = ctx.candidateSource_(message);
+    assert.equal(ctx.authenticationMessage_(source, true), false);
+    assert.throws(() => ctx.parseAICandidateOutcome_({text: JSON.stringify({candidates: [], authentication: {quote, image: null}})}, message));
+  }
+});
+
 test('R24 wrapper-only copular alphabetic values defer to grounded model semantics', () => {
   for (const value of ['incorrect', 'ABCDEF', 'aBcDeF']) {
     const {ctx} = harness(); let calls = 0;

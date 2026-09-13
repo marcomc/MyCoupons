@@ -899,6 +899,47 @@ ordinaryMessages.push(
   {text: 'We assigned ABCDEF as your verification code. Brand coupon code SAVE20'},
   {text: 'We assigned SAVE20 as your coupon code. Brand coupon code SAVE20'}
 );
+for (const [label, expiry] of [
+  ['Your verification code', 'expires in 10 minutes'], ['Your login PIN', 'is valid for 1 hour'],
+  ['Your security passcode', 'valid for 30 seconds'], ['Il tuo codice di verifica', 'scade tra 10 minuti'],
+  ['Il tuo codice di accesso', 'scadrà fra 2 ore'], ['Il tuo codice di sicurezza', 'è valido per 30 secondi']
+]) {
+  for (const delimiter of [': ', ':', '= ']) for (const value of ['123456', 'ABC.77!', '“aBcDeF”']) {
+    const heading = label + ' ' + expiry;
+    authenticationMessages.push(
+      {text: heading + delimiter + value + '\nBrand coupon code SAVE20'},
+      {text: heading + delimiter.trim() + '\n' + value},
+      {html: '<h1>' + heading + delimiter.trim() + '</h1><p>' + value + '</p>'},
+      {subject: heading + delimiter.trim(), text: value}
+    );
+  }
+  ordinaryMessages.push(
+    {text: label + ' ' + expiry + '. Brand coupon code SAVE20'},
+    {text: label + ' ' + expiry + ':\nBrand coupon code SAVE20'},
+    {text: label + ' ' + expiry + ' 123456. Brand coupon code SAVE20'},
+    {html: '<h1>' + label + ' ' + expiry + ':</h1><p>Brand coupon code SAVE20</p>'},
+    {text: 'Example: ' + label + ' ' + expiry + ': 123456. Brand coupon code SAVE20'},
+    {text: 'You said that ' + label + ' ' + expiry + ': 123456. Brand coupon code SAVE20'}
+  );
+}
+for (const expiry of ['expires in 10', 'expires in minutes', 'expires in 10 minutes discount', 'does not expire in 10 minutes']) {
+  ordinaryMessages.push({text: 'Your verification code ' + expiry + ': 123456. Brand coupon code SAVE20'});
+}
+for (const verb of ['Check', 'Determine', 'Find out', 'Ask']) for (const conjunction of ['if', 'whether']) {
+  for (const phrase of ['your verification code is 123456', '123456 is your verification code']) {
+    const question = verb + ' ' + conjunction + ' ' + phrase;
+    ordinaryMessages.push({text: question + '. Brand coupon code SAVE20'});
+    for (const separator of ['. ', '; ', '\n']) {
+      authenticationMessages.push({text: question + separator + 'Your verification code is 654321'});
+    }
+    for (const [open, close] of [['"', '"'], ['“', '”']]) {
+      ordinaryMessages.push({text: verb + ' ' + conjunction + ' ' + open + phrase + '; your verification code is 654321' + close + '. Brand coupon code SAVE20'});
+      authenticationMessages.push({text: verb + ' ' + conjunction + ' ' + open + phrase + close + '. Your verification code is 654321'});
+    }
+  }
+}
+for (const issuer of ['If Bank', 'Whether Services']) authenticationMessages.push({text: issuer + ': Your verification code is 123456'});
+for (const value of ['IF+77', 'WHETHER77']) authenticationMessages.push({text: 'Your verification code is ' + value});
 // R24 revises only the known copular all-letter fixture class. Keep its original
 // sources, but assert semantic routing separately from pre-model exclusion.
 // This fixture partition does not call the production admission implementation.
