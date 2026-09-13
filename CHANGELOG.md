@@ -23,6 +23,8 @@
   through finalization recovery and include account/identity confirmation labels.
   Require the same strict admission before pending v3 replay appends; incomplete
   coverage and image/model failures preserve existing rows and pending payloads.
+  Keep host-only locator punctuation out of authentication literals, recognize
+  completed nominal authentication purposes, and preserve reported-instruction roles.
   Persist validated Retry image exclusions across Ignore and restart. Replace
   adjective lists with explicit assignment presentation for ambiguous all-letter
   values; preserve digit-bearing/mixed identities, governing preposed purposes

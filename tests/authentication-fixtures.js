@@ -756,4 +756,54 @@ ordinaryMessages.push(
   {text: 'Your confirmation code is 123456. Brand coupon code SAVE20'},
   {text: 'Your order confirmation code is 123456. Brand coupon code SAVE20'}
 );
+for (const host of ['support.acme.com', 'help.shop.example', '123.shop.example', 'HELP.SHOP.EXAMPLE', 'shop.example:8443']) {
+  for (const suffix of ['', '.', '!', '?', ',', ';', '/help', '?page=help', '#help']) {
+    ordinaryMessages.push({text: 'For help with your verification code: ' + host + suffix + ' Brand coupon code SAVE20'});
+  }
+  for (const [open, close] of [['"', '"'], ["'", "'"], ['<', '>'], ['(', ')'], ['[', ']']]) {
+    ordinaryMessages.push({text: 'Your verification code: ' + open + host + close + '. Brand coupon code SAVE20'});
+  }
+  authenticationMessages.push({text: 'For help with your verification code: ' + host + '. Your verification code: 123456'});
+}
+for (const value of ['ABC.77', 'ABC.77.', 'ABC.77!', '123.456', 'CODE+VIP', 'ÈTÉ.77']) {
+  authenticationMessages.push({text: 'Your verification code: ' + value});
+}
+for (const noun of ['code', 'passcode', 'PIN']) {
+  authenticationMessages.push(
+    {text: 'Use ' + noun + ' 123456 for authentication. Brand coupon code SAVE20'},
+    {text: 'For authentication, use this ' + noun + ' 123456. Brand coupon code SAVE20'},
+    {text: 'Use this ' + noun + ' for authentication: 123456'},
+    {text: 'Use this ' + noun + ' for authentication:\n123456'},
+    {text: 'Your verification ' + noun + ' for authentication is 123456'}
+  );
+  for (const marker of ['Example: ', 'You said: ', 'Do not ']) {
+    ordinaryMessages.push({text: marker + 'use ' + noun + ' 123456 for authentication. Brand coupon code SAVE20'});
+    authenticationMessages.push({text: marker + 'use ' + noun + ' 123456 for authentication. Use code 654321 for authentication'});
+  }
+  for (const compound of ['authentication discount', 'authentication-service', 'authentication services', 'authentication2']) {
+    ordinaryMessages.push({text: 'Use code SAVE20 for ' + compound + '. Brand coupon code SAVE20'});
+  }
+}
+for (const verb of ['asked', 'said', 'reported', 'recalled', 'remembered']) {
+  for (const purpose of ['for authentication', 'to sign in']) {
+    ordinaryMessages.push({text: 'You ' + verb + ': use code 123456 ' + purpose + '. Brand coupon code SAVE20'});
+  }
+}
+for (const issuer of ['', 'Acme Inc.: ', 'A.C.M.E.: ']) for (const polite of ['', 'please ']) {
+  for (const instruction of ['use code 123456 for authentication', 'use your verification code 123456']) {
+    const phrase = issuer + polite + instruction;
+    ordinaryMessages.push({text: 'You said: ' + phrase + '. Brand coupon code SAVE20'});
+    ordinaryMessages.push({text: 'You said: use code 111111 for authentication; You said: ' + phrase + '. Brand coupon code SAVE20'});
+    authenticationMessages.push({text: phrase});
+    authenticationMessages.push({text: 'You said: ' + phrase + '. Use code 654321 for authentication'});
+    authenticationMessages.push({text: 'You said: ' + phrase + '; Use code 654321 for authentication'});
+    for (const [open, close] of [['"', '"'], ['“', '”'], ["'", "'"], ['‘', '’']]) {
+      ordinaryMessages.push({text: 'You said: ' + open + phrase + close + '. Brand coupon code SAVE20'});
+      ordinaryMessages.push({text: 'You said: ' + open + phrase + '; use code 654321 for authentication' + close + '. Brand coupon code SAVE20'});
+      authenticationMessages.push({text: 'You said: ' + open + phrase + close + '. Use code 654321 for authentication'});
+      authenticationMessages.push({text: 'You said: ' + open + phrase + close + '; Use code 654321 for authentication'});
+    }
+  }
+}
+authenticationMessages.push({text: 'You said: welcome back. Acme Inc.: please use code 123456 for authentication'});
 module.exports = {authenticationMessages, ordinaryMessages};

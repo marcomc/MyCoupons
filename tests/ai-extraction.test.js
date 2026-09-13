@@ -221,7 +221,7 @@ for (const text of ['Your verification code:123456', 'OTP=123456',
 
 test('R14 admission delimiters never split factual coupon codes', () => {
   const {ctx} = harness();
-  for (const code of ['SAVE:20', 'SAVE=20', 'ABC.77', 'ÈTÉ:20=VIP', '"aBcDeF".', "'aBcDeF'!", '<aBcDeF>?']) {
+  for (const code of ['SAVE:20', 'SAVE=20', 'ABC.77', 'ÈTÉ:20=VIP', '"aBcDeF".', "'aBcDeF'!", '<aBcDeF>?', 'SAVE.VIP', 'SAVE.VIP.']) {
     const message = {text: 'Brand coupon code ' + code, incomplete: false};
     assert.equal(ctx.authenticationMessage_(ctx.candidateSource_(message)), false);
     assert.deepEqual(Array.from(ctx.deterministicCandidates_(message), candidate => candidate.code), [code]);
@@ -439,6 +439,42 @@ test('R19 issuer names do not turn clear authentication issuance into an example
   const outcome = ctx.extractCouponOutcome_({text: 'Sample Bank: Your verification code is 123456', incomplete: false});
   assert.equal(outcome.excludedReason, 'authentication_code_message');
   assert.equal(outcome.archiveAllowed, false);
+});
+
+test('R22 host-only help domains do not suppress a grounded promotion', () => {
+  const {ctx} = harness();
+  const message = {text: 'For help with your verification code: support.acme.com. Brand coupon code SAVE20', incomplete: false};
+  ctx.callGeminiModel_ = () => aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}});
+  const outcome = ctx.extractCouponOutcome_(message);
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(outcome.candidates[0].code, 'SAVE20');
+});
+
+test('R22 connected polite and dotted-issuer reports cannot suppress promotions', () => {
+  const {ctx} = harness();
+  ctx.callGeminiModel_ = () => aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}});
+  for (const prefix of ['You said: please ', 'You said: Acme Inc.: ', 'You said: Acme Inc.: please ']) {
+    const message = {text: prefix + 'use code 123456 for authentication. Brand coupon code SAVE20', incomplete: false};
+    const outcome = ctx.extractCouponOutcome_(message);
+    assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+    assert.equal(outcome.candidates[0].code, 'SAVE20');
+  }
+});
+
+test('R22 unquoted reports end before independent semicolon authentication issuance', () => {
+  const {ctx} = harness(); let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const message = {text: 'You said: please use code 123456 for authentication; Use code 654321 for authentication. Brand coupon code SAVE20', incomplete: false};
+  assert.equal(ctx.extractCouponOutcome_(message).excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+test('R22 standalone authentication purpose excludes mixed mail before the model', () => {
+  const {ctx} = harness(); let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const message = {text: 'Use code 123456 for authentication. Brand coupon code SAVE20', incomplete: false};
+  assert.equal(ctx.extractCouponOutcome_(message).excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
 });
 
 test('R21 account and identity confirmation labels exclude mixed mail before the model', () => {

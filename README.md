@@ -211,7 +211,10 @@ The example configuration contains product defaults only.
   issuance support. A governing purpose may precede the imperative; supported
   recipient-qualified passive issuance must still present a concrete value.
   Examples, documentation and explicit placeholders are not issued values.
-  URL and email references are not code values. The model uses the same contract.
+  URL and email references, including host-only domains with sentence punctuation,
+  are not authentication values; factual coupon token identity is unchanged.
+  A completed `for authentication` purpose is supported, but compound nouns and
+  reported instructions are not issuance. The model uses the same contract.
   If text does not decide admission, the model also checks inspected images.
   Its response requires `authentication: null` or `{quote, image}` alongside
   `candidates`. Valid image authentication excludes the whole message before

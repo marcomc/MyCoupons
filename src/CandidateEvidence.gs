@@ -179,7 +179,7 @@ function authenticationLiteral_(token) {
   const length = Array.from(token).length;
   return length >= 3 && length <= 40 && /[\p{L}\p{N}\p{M}]/u.test(token) &&
     !/^[("'[{<]*(?:example|sample|documentation|tutorial|documentazione|esempio|segnaposto|placeholder)[)"'\]}>.!?,;:]*$/iu.test(token) &&
-    !/^["'([{<]?(?:[a-z][a-z\d+.-]*:\/\/|www\.|\/\/|(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+[\p{L}]{2,}(?::\d+)?[/?#])\S*$/iu.test(token) &&
+    !/^["'([{<]?(?:(?:[a-z][a-z\d+.-]*:\/\/|www\.|\/\/)\S*|(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+[\p{L}]{2,}(?::\d+)?(?:[/?#]\S*|[.!?,;:]*[)"'\]}>]?[.!?,;:]*))$/iu.test(token) &&
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token) &&
     !/^(?:OTP|CODE|PASSCODE|PIN|XXX+|CODE_HERE)[.!?,;:]*$/iu.test(token);
 }
@@ -259,7 +259,7 @@ function authenticationTargetEnd_(beforeValue) {
 }
 function authenticationActionPattern_(beforeValue) {
   return '(?:' + authenticationVerificationPattern_(beforeValue) + '|' + authenticationAccessPattern_(beforeValue) +
-    '|(?:(?:two[ -]factor|multi[ -]factor)\\s+authentication|(?:mfa|2fa)(?:\\s+authentication)?)' + authenticationTargetEnd_(beforeValue) +
+    '|(?:authentication|(?:two[ -]factor|multi[ -]factor)\\s+authentication|(?:mfa|2fa)(?:\\s+authentication)?)' + authenticationTargetEnd_(beforeValue) +
     '|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|reimposta(?:re)?|ripristina|acced(?:i|ere)|' + authenticationConfirmationPattern_() + ')';
 }
 function authenticationConfirmationPattern_() {
@@ -293,6 +293,16 @@ function authenticationExampleSuffix_(text) {
   return wrapper !== null && authenticationDiscussion_(wrapper) ||
     new RegExp('^[^\\S\\n]*[,;:]?[^\\S\\n]*[(\\[]?[^\\S\\n]*(?:(?:for|ad)\\s+)?' +
       authenticationDiscussionPattern_(), 'iu').test(text);
+}
+function authenticationReportedInstruction_(text) {
+  // Retain a connected report through politeness and a bounded dotted issuer.
+  // A closing quote or independent sentence ends its authority over later values.
+  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text);
+  // A semicolon starts an independent clause unless it remains inside a quote.
+  if (!report) return false;
+  if (report[1] || report[0].indexOf(';') < 0) return true;
+  // Inspect only the final unquoted clause, which may itself be a new report.
+  return authenticationReportedInstruction_(text.slice(text.lastIndexOf(';') + 1));
 }
 function authenticationIssuance_(before, after) {
   // Wrapper bytes are presentation, not purpose. Keep punctuation inside the
@@ -357,7 +367,8 @@ function authenticationIssuance_(before, after) {
     promotionalFollowing: Boolean(followingGeneric && !followingOrdinary),
     invalidRecipientTail: authenticationRecipientTail_(continuation) === false,
     descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
-    discussion: negatedLabel || authenticationDiscussionClause_(before) || authenticationExampleSuffix_(continuation)};
+    discussion: negatedLabel || authenticationReportedInstruction_(beforeLine) ||
+      authenticationDiscussionClause_(before) || authenticationExampleSuffix_(continuation)};
 }
 function authenticationInstruction_(before, after, code, frame) {
   const relation = authenticationIssuance_(before, after);
