@@ -130,8 +130,8 @@ The example configuration contains product defaults only.
   without replacing their facts, preserve reviewed rows, and cannot archive until
   every intended candidate is durably bound. New rows recovered after an
   interruption require review. Before any pending v3 row is appended, strict
-  authentication admission checks complete source coverage and, when present,
-  images through the model. Failed admission preserves the pending payload and
+  authentication admission checks complete source coverage and resolves images
+  or wrapper-only copular text ambiguity through the model. Failed admission preserves the pending payload and
   existing rows for recovery; positive authentication durably excludes the batch.
 - Legacy `awaiting_extraction` records are recovered through full extraction. A
   complete, structurally valid empty model list becomes a non-offer checkpoint
@@ -207,10 +207,16 @@ The example configuration contains product defaults only.
   relation, independently of letter case. Bare all-letter words, including
   surrounding punctuation, are ambiguous with status prose: they require an
   explicit assignment delimiter, matched value wrapper (also before a sentence stop), or affirmative use
-  instruction. Digit-bearing or internally mixed Unicode values retain unwrapped
+  instruction. Exception: when only a wrapper presents an all-letter copular value
+  (`Your verification code is “ABCDEF”`), the model decides whether it is a code or
+  status prose. Quotes alone do not exclude `“incorrect”`; a grounded model verdict
+  preserves support for genuine quoted alphabetic codes without a word/case blacklist.
+  Digit-bearing or internally mixed Unicode values retain unwrapped
   issuance support. A governing purpose may precede the imperative; supported
   passive issuance (`has been sent` / `was sent`, optionally `to you`) must still
-  present a concrete value. A validated authentication subject or heading may
+  present a concrete value. Affirmative `We assigned … as your verification code`
+  supports a completed qualified label; reports, hypotheses and negation do not.
+  A validated authentication subject or heading may
   qualify a generic, non-promotional imperative. Matched typographic value quotes
   count as admission presentation only; factual coupon tokens are unchanged.
   Examples, documentation and explicit placeholders are not issued values.
@@ -223,8 +229,11 @@ The example configuration contains product defaults only.
   `candidates`. Valid image authentication excludes the whole message before
   deterministic merging or staging, including mixed promotions and incomplete
   messages. Image references require valid supplied descriptors; malformed or
-  unsupported proof fails closed. Text-only proof must also satisfy the shared
-  source-derived policy. A null signal supplies no extra completion, offer-absence,
+  unsupported proof fails closed. Text proof binds the complete value and copular
+  relation to one exact original quote occurrence, retaining its source context.
+  A verified authentication subject may supply purpose, never concatenated factual
+  evidence. Coupon-only, value-only, reported or cross-block quotes cannot supply proof.
+  A null signal supplies no extra completion, offer-absence,
   or archival authority. Ordinary image offers retain their existing review rules.
   Code punctuation and Unicode identity are never rewritten.
   Exclusion returns `excludedReason: authentication_code_message`, not verified
@@ -238,8 +247,10 @@ The example configuration contains product defaults only.
   disposition but cannot erase the exclusion or re-enable later Confirm.
   No historical rows are removed. Confirm checks authentication before promoting
   a row and again on refreshed source before Gmail finalization, including historical
-  batches. Complete image-bearing source uses the shared validated model response;
-  only admission is consumed, never replacement offer facts. Incomplete source or
+  batches. Complete image-bearing source and ambiguous wrapper-only copular text
+  use the shared validated model response, also before partial-v3 replay writes;
+  complete image-free, non-ambiguous source remains model-free for manual admission.
+  Only admission is consumed, never replacement offer facts. Incomplete source or
   image coverage, truncated model input, invalid admission and model/image failures
   block Confirm. The final reread may require a second model call.
   A persisted authentication exclusion blocks Confirm and Retry. Manual review

@@ -77,7 +77,7 @@ function deterministicCandidateOutcome_(message) {
   });
   return {candidates: codes.slice(0, MC.maxCandidates), complete: complete && codes.length <= MC.maxCandidates};
 }
-function authenticationMessage_(source) {
+function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
   // Admission is message-wide; this is deliberately independent of factual
   // quotes, which still must remain within one original source span.
   let heading = false;
@@ -101,6 +101,10 @@ function authenticationMessage_(source) {
       representation = sourceSpan.kind;
     }
     const span = sourceSpan.text;
+    // Evidence queries bind the selected literal to an exact original occurrence.
+    // Advance monotonically through disjoint quote ranges, never rescan prefixes.
+    const quoteRanges = evidenceQuote === undefined ? null : rawOccurrences_(evidenceQuote, span, false);
+    let quoteIndex = 0;
     let offset = 0;
     for (const line of span.split('\n')) {
       const trimmed = line.trim();
@@ -141,7 +145,20 @@ function authenticationMessage_(source) {
         const after = span.slice(end, Math.min(span.length, end + 240));
         const frame = {heading: heading, presentation: presentation, instruction: instructionFrame, subject: subjectPurpose && sourceSpan.kind !== 'subject',
           leading: match.index === leadingIndex};
-        if (!example && authenticationInstruction_(before, after, code, frame)) return true;
+        if (example || !authenticationInstruction_(before, after, code, frame, allowAmbiguousCopular)) continue;
+        if (quoteRanges) {
+          while (quoteIndex < quoteRanges.length && quoteRanges[quoteIndex].end < end) quoteIndex++;
+          const range = quoteRanges[quoteIndex];
+          if (!range || start < range.start || end > range.end) continue;
+          const quoteBefore = span.slice(Math.max(range.start, start - 240), start);
+          const quoteAfter = span.slice(end, Math.min(range.end, end + 240));
+          // A value-only or promotion-only excerpt cannot borrow a copular
+          // relation from outside the quote. Original subject/frame context stays
+          // admission context only; no factual spans are concatenated.
+          if (!authenticationIssuance_(quoteBefore, quoteAfter).copular ||
+              !authenticationInstruction_(quoteBefore, quoteAfter, code, frame, true)) continue;
+        }
+        return true;
       }
       // A heading applies to a following value or explicit auth-use instruction,
       // not to a later promotional block. Example frames have the same scope.
@@ -311,7 +328,7 @@ function authenticationExampleSuffix_(text) {
 function authenticationReportedInstruction_(text) {
   // Retain a connected report through politeness and a bounded dotted issuer.
   // A closing quote or independent sentence ends its authority over later values.
-  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*)?(?:(?:i|we|you|he|she|they|it)\s+(?:(?:should|could|would|must|may|might|can|will)\s+)?)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text);
+  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*)?(?:(?:i|we|you|he|she|they|it)\s+(?:(?:should|could|would|must|may|might|can|will)\s+)?)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita|(?:have\s+)?assigned)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text);
   // A semicolon starts an independent clause unless it remains inside a quote.
   if (!report) return false;
   if (report[1] || report[0].indexOf(';') < 0) return true;
@@ -367,15 +384,20 @@ function authenticationIssuance_(before, after) {
       authenticationActionPattern_() + '\\s*,\\s*(?:please\\s+)?$', 'iu').test(governingPurpose);
   const purposeAfter = authenticationPurposeTail_(after);
   const assignedLabel = new RegExp('^\\s+as\\s+(?:(?:your|the)\\s+)?' + label + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
-  const assigned = Boolean(imperative && assignedLabel && authenticationValueTail_(after.slice(assignedLabel[0].length)));
+  const declarativeAssignment = /(?:^|[.!?;]\s+)(?!(?:if|unless|se)\b)(?:[\p{L}\p{N} ._-]{1,60}:\s*)?(?:we|i)\s+(?:have\s+)?assigned\s*$/iu.test(beforeLine);
+  const assigned = Boolean((imperative || declarativeAssignment) && assignedLabel && authenticationValueTail_(after.slice(assignedLabel[0].length)));
   const usingCode = new RegExp('\\b(?:using|with|con|usando)\\s+(?:(?:the|il)\\s+)?' + noun + '\\s*[:=]?\\s*$', 'iu').test(before);
   const actions = new RegExp('\\b(?:(' + authenticationActionPattern_() + ')|(?:get|receive|save|apply|redeem|use|ottieni|risparmia|applica|usa))(?![\\p{L}\\p{N}\\p{M}_])', 'giu');
   let authAction = false;
   let action;
   while ((action = actions.exec(before))) authAction = Boolean(action[1]);
+  const assignmentPresentation = usingCode && authAction ||
+    /[:=]\s*$/u.test(before) && (issuingLabel || genericIssued || imperative || inlineInstruction);
   return {explicit: issuingLabel || Boolean(followingLabel && completeValue) || preposedPurpose,
-    presented: wrappedValue || usingCode && authAction ||
-      /[:=]\s*$/u.test(before) && (issuingLabel || genericIssued || imperative || inlineInstruction),
+    presented: wrappedValue || assignmentPresentation,
+    wrapperOnly: wrappedValue && !assignmentPresentation,
+    copular: Boolean(following || (issuingLabel || genericIssued) &&
+      new RegExp('(?:^|\\s)' + authenticationCopulaPattern_() + '\\s*$', 'iu').test(before)),
     generic: genericIssued || Boolean(followingOrdinary && completeValue),
     direct: (introduced || imperative) && purposeAfter || usingCode && authAction || assigned || inlineInstruction && completeValue ||
       Boolean(followingGeneric && authenticationPurposeTail_(continuation)),
@@ -387,7 +409,7 @@ function authenticationIssuance_(before, after) {
     discussion: negatedLabel || authenticationReportedInstruction_(beforeLine) ||
       authenticationDiscussionClause_(before) || authenticationExampleSuffix_(continuation)};
 }
-function authenticationInstruction_(before, after, code, frame) {
+function authenticationInstruction_(before, after, code, frame, allowAmbiguousCopular) {
   const relation = authenticationIssuance_(before, after);
   const purposeConnector = /^(?:for|per)$/iu.test(code) &&
     !/^\s*(?:to|for|per)\s+/iu.test(after) && authenticationPurposeTail_(after);
@@ -401,6 +423,10 @@ function authenticationInstruction_(before, after, code, frame) {
   const bareWord = /^[^\p{L}\p{N}\p{M}]*[\p{L}\p{M}]+[^\p{L}\p{N}\p{M}]*$/u.test(code);
   const presented = relation.presented || relation.imperative || relation.instructionLabel || relation.inlineInstruction ||
     frame && frame.leading && (frame.presentation || frame.instruction);
+  const ambiguousCopular = bareWord && relation.copular && relation.wrapperOnly &&
+    !relation.imperative && !relation.instructionLabel && !relation.inlineInstruction &&
+    !(frame && frame.leading && (frame.presentation || frame.instruction));
+  if (ambiguousCopular && !allowAmbiguousCopular) return false;
   if (relation.discussion || relation.descriptive || purposeConnector || instructionLocation || nounModifier || bareWord && !presented) return false;
   const valueEnd = relation.valueTail || !relation.invalidRecipientTail && /[.!?]$/u.test(code);
   return relation.explicit && valueEnd || relation.direct ||

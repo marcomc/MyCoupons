@@ -31,6 +31,12 @@
   and passive issuance with or without an explicit recipient. Associate generic
   non-promotional imperatives with authentication subject/heading frames, recognize
   matched typographic value quotes for admission, and retain modal reporting roles.
+  Resolve wrapper-only copular alphabetic ambiguity through grounded model evidence,
+  not a status-word blacklist. Bind proof to an exact original value/relation
+  occurrence and retain verified subject context without joining factual spans.
+  Apply semantic admission before historical Confirm, finalization and partial
+  replay; keep complete non-ambiguous image-free manual admission model-free.
+  Recognize bounded affirmative declarative assignments with qualified labels.
   Associate subject/body issuance, labels in either direction, alphabetic
   values, and heading/instruction/value layouts without relaxing factual quote
   boundaries. Keep verification actions tied to authentication targets and

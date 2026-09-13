@@ -881,4 +881,34 @@ for (const value of ['123456.', 'ABC.77!', '“ABCDEF”.', '‘123456’!']) {
     );
   }
 }
-module.exports = {authenticationMessages, ordinaryMessages};
+for (const prefix of ['We assigned ', 'I assigned ', 'We have assigned ', 'Acme Inc.: We assigned ']) {
+  for (const value of ['123456', 'ABC.77!', 'ÈTÉ+77']) {
+    authenticationMessages.push({text: prefix + value + ' as your verification code. Brand coupon code SAVE20'});
+    for (const report of ['You said: ', 'You reported that ', 'Example: ', 'If ']) {
+      ordinaryMessages.push({text: report + prefix + value + ' as your verification code. Brand coupon code SAVE20'});
+      authenticationMessages.push({text: report + prefix + value + ' as your verification code' +
+        (report === 'Example: ' ? '. ' : '; ') + 'We assigned 654321 as your verification code'});
+    }
+  }
+}
+for (const prefix of ['We did not assign ', 'We have not assigned ', 'We could have assigned ', 'We will assign ', 'We might assign ']) {
+  ordinaryMessages.push({text: prefix + '123456 as your verification code. Brand coupon code SAVE20'});
+}
+ordinaryMessages.push(
+  {text: 'We assigned a value as your verification code. Brand coupon code SAVE20'},
+  {text: 'We assigned ABCDEF as your verification code. Brand coupon code SAVE20'},
+  {text: 'We assigned SAVE20 as your coupon code. Brand coupon code SAVE20'}
+);
+// R24 revises only the known copular all-letter fixture class. Keep its original
+// sources, but assert semantic routing separately from pre-model exclusion.
+// This fixture partition does not call the production admission implementation.
+const alphaFixture = '["\x27“‘<][\\p{L}\\p{M}]+["\x27”’>]';
+const ambiguousFixture = new RegExp('(?:is|will be|è|sarà|e[’\x27])[ \\t]+' + alphaFixture +
+  '|' + alphaFixture + '[ \\t]+(?:is|è|e[’\x27])[ \\t]+', 'iu');
+const ambiguousMessages = [];
+for (let index = authenticationMessages.length - 1; index >= 0; index--) {
+  if (ambiguousFixture.test(authenticationMessages[index].text || '')) {
+    ambiguousMessages.unshift(authenticationMessages.splice(index, 1)[0]);
+  }
+}
+module.exports = {authenticationMessages, ordinaryMessages, ambiguousMessages};

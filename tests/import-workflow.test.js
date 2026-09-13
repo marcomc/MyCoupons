@@ -61,6 +61,29 @@ test('real admission checkpoints excluded mail without candidate staging, coupon
   }
 });
 
+test('R24 grounded semantic text exclusion checkpoints before initial staging', () => {
+  for (const mode of ['auth', 'invalid-proof', 'failure']) {
+    const {ctx, config} = harness();
+    const quote = 'Your verification code is “ABCDEF”';
+    const message = {id: 'abc123', receivedAtMs: 0, subject: '', sender: '',
+      link: 'https://mail.google.com/mail/#all/abc123', incomplete: false, text: quote + '. Brand coupon code SAVE20'};
+    let calls = 0;
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      if (mode === 'failure') throw new Error('synthetic semantic failure');
+      return {text: JSON.stringify({candidates: [], authentication: {quote: mode === 'invalid-proof' ? 'Brand coupon code SAVE20' : quote, image: null}})};
+    };
+    ctx.createBatchIntent_ = () => assert.fail('excluded or invalid semantic proof cannot stage');
+    ctx.appendCouponRow_ = () => assert.fail('excluded or invalid semantic proof cannot append');
+    ctx.Gmail.Users.Messages = {modify: () => assert.fail('excluded or invalid semantic proof cannot mutate Gmail')};
+    const state = {config, couponSheet: sheet([HEADERS]), journalSheet: sheet([JOURNAL]), messages: [message]};
+    const result = ctx.runImportWorkflow_(state);
+    assert.equal(calls, 1); assert.equal(state.couponSheet.getLastRow(), 1);
+    assert.equal(result.messages[0].status, mode === 'auth' ? 'ignored' : 'failed');
+    if (mode === 'auth') assert.equal(ctx.getMessageState_(state.journalSheet, message.id).outcome, 'authentication_code_message');
+  }
+});
+
 test('image authentication excludes before staging and Retry checkpoints exclusion without row changes', () => {
   const {png} = require('./mime-fixtures');
   const {wireCandidate} = require('./ai-wire-fixtures');

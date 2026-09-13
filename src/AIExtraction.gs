@@ -61,10 +61,10 @@ function validateAIAuthentication_(authentication, source) {
       typeof authentication.quote !== 'string' || authentication.quote.length > 2000 ||
       !wellFormedUtf16_(authentication.quote)) fail_('AI');
   if (authentication.image === null) {
-    // A grounded promotion excerpt is not authentication proof. Text must also
-    // satisfy the shared source-derived policy, never a model-only assertion.
-    if (!authentication.quote.trim() || !source.spans.some(function (span) { return span.indexOf(authentication.quote) >= 0; }) ||
-        !authenticationMessage_(source)) fail_('AI');
+    // The model resolves wrapper-only copular ambiguity. Evidence still needs
+    // one exact source occurrence, a complete value/relation inside its quote,
+    // and the original source's supported purpose and non-discussion context.
+    if (!authentication.quote.trim() || !authenticationMessage_(source, true, authentication.quote)) fail_('AI');
     return;
   }
   if (!Number.isInteger(authentication.image) || authentication.image < 0 ||
@@ -120,7 +120,7 @@ function candidatePrompt_(message) {
     'Use an empty authentication quote only for image-only evidence. A text quote must be exact; image is one supplied integer index or null.',
     'If any source issues an authentication code, exclude the ENTIRE message, even if it also contains a promotion: report authentication evidence and return no coupon candidates.',
     'Generic account discussion, descriptive predicates, examples, and negated authentication labels are not issuance. Null authentication does not establish absence of offers or complete inspection.',
-    'A bare all-letter value, regardless of case or surrounding sentence punctuation, is ambiguous with status prose: require an explicit assignment delimiter, matched value wrapper, or affirmative use instruction before reporting authentication. Numeric or internally mixed Unicode tokens still require a clear issuance relation.',
+    'A bare all-letter value, regardless of case or surrounding sentence punctuation, is ambiguous with status prose. Explicit assignment delimiters and affirmative use instructions establish presentation, but a wrapper alone around a copular value does not establish issuance: distinguish an actual quoted code from a quoted status description semantically. For such text authentication, quote the complete value and copular relation within one original span; an independently supported authentication subject may supply purpose but must not be concatenated into the quote. Numeric or internally mixed Unicode tokens still require a clear issuance relation.',
     'discountType is the exact unit beside the discount amount, such as %, EUR, or a currency symbol; never a phrase such as percent off or % off. The type and value quotes must support the same adjacent amount and unit.',
     'An image-only fact is always review=true. Incomplete source coverage requires review=true and cannot verify absence of an offer.',
     'Each candidate has exactly these keys: ' + aiCandidateKeys_().join(', ') + '.',

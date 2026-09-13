@@ -73,7 +73,7 @@ function reviewAuthenticationAdmission_(message) {
   if (authenticationMessage_(source)) return true;
   // Manual factual edits cannot account for source/image content never inspected.
   if (source.incomplete) fail_('REVIEW');
-  if (!source.images.length) return false;
+  if (!source.images.length && !authenticationMessage_(source, true)) return false;
   const prompt = candidatePrompt_(message);
   if (prompt.truncated) fail_('REVIEW');
   validateAIAuthenticationImages_(source);

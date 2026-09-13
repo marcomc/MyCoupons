@@ -92,6 +92,89 @@ function interruptedAuthenticationBatch(written) {
   return f;
 }
 
+test('R24 ambiguous image-free Confirm and finalization require semantic admission', () => {
+  const quote = 'Your verification code is “ABCDEF”';
+  for (const final of [false, true]) for (const mode of ['auth', 'ordinary', 'invalid-proof', 'malformed', 'failure']) {
+    const f = fixture(); f.run();
+    const facts = JSON.stringify(f.coupon.rows.slice(1).map(row => row.slice(0, 17)));
+    const payload = JSON.stringify(f.saved().batchIntent);
+    f.ctx.getReviewMessage_ = () => ({...f.message, text: f.message.text + '\n' + quote});
+    let calls = 0;
+    f.ctx.callGeminiModel_ = () => {
+      calls++;
+      const deciding = !final || calls === 3;
+      if (deciding && mode === 'failure') throw new Error('synthetic text-admission failure');
+      if (deciding && mode === 'malformed') return {text: '{"authentication":null}'};
+      return {text: JSON.stringify({candidates: [], authentication: deciding && mode !== 'ordinary' ?
+        {quote: mode === 'invalid-proof' ? 'Brand coupon code Save+20' : quote, image: null} : null})};
+    };
+    f.action(2, 'Confirm');
+    if (final || mode === 'ordinary') f.action(3, 'Confirm');
+    assert.equal(JSON.stringify(f.coupon.rows.slice(1).map(row => row.slice(0, 17))), facts, mode);
+    assert.equal(JSON.stringify(f.saved().batchIntent), payload, mode);
+    assert.equal(calls, final || mode === 'ordinary' ? 3 : 1, mode);
+    if (mode === 'ordinary') {
+      assert.equal(f.coupon.rows[1][17], 'Imported'); assert.equal(f.coupon.rows[2][17], 'Imported');
+      assert.equal(f.mutations.length, 2);
+    } else {
+      assert.equal(f.mutations.length, 0);
+      assert.equal(f.saved().outcome, mode === 'auth' ? 'authentication_code_message' : 'review');
+      assert.equal(f.coupon.rows[1][17], 'Needs review');
+      f.boot();
+      if (mode === 'auth') {
+        f.ctx.Gmail.Users.Messages.get = () => assert.fail('durable semantic exclusion cannot fetch');
+        assert.equal(f.action(2, 'Confirm').excludedReason, 'authentication_code_message');
+        f.action(2, 'Ignore'); assert.equal(f.saved().outcome, 'authentication_code_message');
+      }
+    }
+  }
+});
+
+test('R24 partial v3 replay resolves image-free ambiguity before any retained row writes', () => {
+  const quote = 'Your verification code is “aBcDeF”';
+  for (const written of [0, 1]) for (const mode of ['auth', 'ordinary', 'invalid-proof', 'failure']) {
+    const f = fixture();
+    const append = f.ctx.appendCouponRow_; let count = 0;
+    f.ctx.appendCouponRow_ = (...args) => { if (count++ === written) f.ctx.fail_('WRITE'); return append(...args); };
+    assert.equal(f.run().messages[0].status, 'failed');
+    const original = JSON.stringify(f.saved());
+    const rows = JSON.stringify([f.coupon.rows, f.coupon.notes]);
+    const payload = JSON.stringify(f.saved().batchIntent);
+    f.boot();
+    f.state.messages = [{...f.message, text: f.message.text + '\n' + quote}];
+    f.state.extractCouponOutcome = () => assert.fail('retained replay cannot replace facts');
+    let calls = 0;
+    f.ctx.callGeminiModel_ = () => {
+      calls++;
+      if (mode === 'failure') throw new Error('synthetic text replay failure');
+      return {text: JSON.stringify({candidates: [], authentication: mode === 'ordinary' ? null :
+        {quote: mode === 'invalid-proof' ? '“aBcDeF”' : quote, image: null}})};
+    };
+    if (mode === 'ordinary') { assert.equal(f.run().messages[0].status, 'review'); assert.equal(f.coupon.rows.length, 3); }
+    else {
+      if (mode === 'auth') assert.equal(f.run().messages[0].excludedReason, 'authentication_code_message');
+      else { assert.throws(f.run); assert.equal(JSON.stringify(f.saved()), original); }
+      assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rows);
+    }
+    assert.equal(calls, 1); assert.equal(f.mutations.length, 0);
+    assert.equal(JSON.stringify(f.saved().batchIntent), payload);
+    f.boot();
+    if (mode === 'auth') assert.equal(f.run().messages[0].excludedReason, 'authentication_code_message');
+    else if (mode !== 'ordinary') {
+      f.state.messages = [{...f.message, text: f.message.text + '\n' + quote}];
+      f.ctx.callGeminiModel_ = () => modelResponse([]);
+      assert.equal(f.run().messages[0].status, 'review'); assert.equal(f.coupon.rows.length, 3);
+    }
+  }
+});
+
+test('R24 complete non-ambiguous image-free manual admission remains model-free', () => {
+  const f = fixture(); f.run();
+  f.ctx.callGeminiModel_ = () => assert.fail('ordinary complete text needs no semantic admission call');
+  f.action(2, 'Confirm'); f.action(3, 'Confirm');
+  assert.equal(f.mutations.length, 2);
+});
+
 test('R21 direct historical Confirm inspects image authentication before promotion without Retry', () => {
   const {png} = require('./mime-fixtures');
   const f = fixture(); f.run();

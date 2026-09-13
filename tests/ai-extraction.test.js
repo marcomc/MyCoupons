@@ -51,7 +51,7 @@ test('subject is independent factual evidence while sender remains metadata only
 
 for (const [name, message, code, quote] of [
   ['subject-purpose', {subject: 'Sign in to Acme', text: 'Your code is 123456'}, '123456'],
-  ['alphabetic', {text: 'Acme: Your verification code is "ABCDEF"'}, 'ABCDEF'],
+  ['alphabetic-delimiter', {text: 'Acme: Your verification code is: "ABCDEF"'}, 'ABCDEF'],
   ['heading-expiry', {subject: 'Acme', html: '<h1>Your verification code</h1><p>123456 expires in 10 minutes</p>'},
     '123456', '123456 expires in 10 minutes'],
   ['trailing-label', {text: 'Acme: 123456 is your verification code.'}, '123456']
@@ -70,6 +70,80 @@ for (const [name, message, code, quote] of [
     assert.deepEqual(Array.from(outcome.candidates), []);
   });
 }
+
+test('R24 wrapper-only copular alphabetic values defer to grounded model semantics', () => {
+  for (const value of ['incorrect', 'ABCDEF', 'aBcDeF']) {
+    const {ctx} = harness(); let calls = 0;
+    const quote = 'Your verification code is “' + value + '”';
+    const message = {text: quote + '. Brand coupon code SAVE20', incomplete: false};
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      return value === 'incorrect' ? aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}) :
+        {text: JSON.stringify({candidates: [], authentication: {quote, image: null}})};
+    };
+    const outcome = ctx.extractCouponOutcome_(message);
+    assert.equal(calls, 1, value);
+    assert.equal(outcome.excludedReason === 'authentication_code_message', value !== 'incorrect');
+    if (value === 'incorrect') assert.equal(outcome.candidates[0].code, 'SAVE20');
+  }
+});
+
+test('R24 former wrapper-only copular fixtures retain semantic rather than deterministic authority', () => {
+  const {ctx} = harness();
+  const {ambiguousMessages} = require('./authentication-fixtures');
+  assert.ok(ambiguousMessages.length > 50);
+  for (const message of ambiguousMessages) {
+    const input = {incomplete: false, ...message};
+    assert.equal(ctx.authenticationMessage_(ctx.candidateSource_(input)), false, JSON.stringify(message));
+    let calls = 0;
+    ctx.callGeminiModel_ = () => { calls++; return {text: JSON.stringify({candidates: [], authentication: null})}; };
+    assert.notEqual(ctx.extractCouponOutcome_(input).excludedReason, 'authentication_code_message');
+    assert.equal(calls, 1);
+    // Stub semantic verdict, not a lexical guess about the selected word.
+    ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: [], authentication: {quote: message.text, image: null}})});
+    assert.equal(ctx.extractCouponOutcome_(input).excludedReason, 'authentication_code_message', JSON.stringify(message));
+  }
+});
+
+test('R24 semantic authentication proof is exact, occurrence-local and context-bound', () => {
+  const {ctx} = harness();
+  const statement = 'Your verification code is “ABCDEF”';
+  const response = quote => ({text: JSON.stringify({candidates: [], authentication: {quote, image: null}})});
+  for (const message of [
+    {text: statement + '. Brand coupon code SAVE20'},
+    {subject: 'Sign in to Acme', text: 'Your code is “ABCDEF”'},
+    {subject: 'Sign in to Acme', html: '<p>Your code is “ABCDEF”</p>'},
+    {html: '<h1>Your verification code</h1><p>Your code is “ABCDEF”</p>'},
+    {text: 'Example: ' + statement + '.\n' + statement},
+    {text: statement + '. Example: ' + statement}
+  ]) {
+    const quote = (message.text || '').includes(statement) ? statement : 'Your code is “ABCDEF”';
+    assert.equal(ctx.parseAICandidateOutcome_(response(quote), {...message, incomplete: false}).excludedReason, 'authentication_code_message');
+  }
+  for (const [message, quote] of [
+    [{text: statement + '. Brand coupon code SAVE20'}, 'Brand coupon code SAVE20'],
+    [{text: statement}, '“ABCDEF”'],
+    [{text: statement}, 'Your verification code is “ABC'],
+    [{text: statement}, statement.replace('ABCDEF', 'abcdef')],
+    [{text: 'Example: ' + statement + '. Brand coupon code SAVE20'}, statement],
+    [{text: 'You said that ' + statement + '. Brand coupon code SAVE20'}, statement],
+    [{text: 'Your verification code is not “ABCDEF”. Brand coupon code SAVE20'}, 'Your verification code is not “ABCDEF”'],
+    [{subject: 'Sign in to Acme', text: 'Your coupon code is “ABCDEF”'}, 'Your coupon code is “ABCDEF”'],
+    [{subject: 'Sign in to Acme', text: 'Your code is “ABCDEF”'}, 'Sign in to Acme\nYour code is “ABCDEF”'],
+    [{text: 'Example: ' + statement, html: '<p>Brand coupon code ABCDEF</p>'}, 'Brand coupon code ABCDEF']
+  ]) assert.throws(() => ctx.parseAICandidateOutcome_(response(quote), {...message, incomplete: false}), undefined, JSON.stringify({message, quote}));
+  assert.throws(() => ctx.validateAIAuthentication_({quote: 'Your verification code is “ABCDEF”', image: null},
+    ctx.candidateSource_({html: '<p>Your verification code is</p><p>“ABCDEF”</p>', incomplete: false})));
+  assert.throws(() => ctx.parseAICandidateOutcome_({text: JSON.stringify({authentication: {quote: statement, image: null}, candidates: [{}]})},
+    {text: statement, incomplete: false}));
+});
+
+test('R24 affirmative declarative assignment excludes mixed mail before the model', () => {
+  const {ctx} = harness();
+  ctx.callGeminiModel_ = () => assert.fail('clear assignment must exclude before model');
+  assert.equal(ctx.extractCouponOutcome_({text: 'We assigned 123456 as your verification code. Brand coupon code SAVE20', incomplete: false}).excludedReason,
+    'authentication_code_message');
+});
 
 test('R23 inherited purpose cannot override promotional tails on punctuated code values', () => {
   const {ctx} = harness();
@@ -505,7 +579,7 @@ for (const [name, message, excluded] of [
   ['modal-report', {text: 'You said that I should use code 123456 to sign in. Brand coupon code SAVE20'}, false],
   ['recipientless-passive', {text: 'Your verification code has been sent: 123456. Brand coupon code SAVE20'}, true],
   ['subject-imperative', {subject: 'Sign in to Acme', text: 'Use code 123456. Brand coupon code SAVE20'}, true],
-  ['curly-value', {text: 'Your verification code is “ABCDEF”. Brand coupon code SAVE20'}, true]
+  ['curly-delimited-value', {text: 'Your verification code is: “ABCDEF”. Brand coupon code SAVE20'}, true]
 ]) {
   test('R23 actual consumer admission: ' + name, () => {
     const {ctx} = harness(); let calls = 0;
@@ -527,7 +601,7 @@ test('R21 account and identity confirmation labels exclude mixed mail before the
 });
 
 for (const text of ['To sign in, use code 123456. Brand coupon code SAVE20',
-  'Your verification code is "aBcDeF". Brand coupon code SAVE20',
+  'Your verification code is: "aBcDeF". Brand coupon code SAVE20',
   'To sign in, use this code 123456. Brand coupon code SAVE20',
   'Acme Inc.: To sign in, use code 123456. Brand coupon code SAVE20',
   'A verification code has been sent to you: 123456. Brand coupon code SAVE20']) {
