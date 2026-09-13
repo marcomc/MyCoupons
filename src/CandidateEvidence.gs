@@ -81,6 +81,7 @@ function authenticationMessage_(source) {
   // Admission is message-wide; this is deliberately independent of factual
   // quotes, which still must remain within one original source span.
   let heading = false;
+  let instructionFrame = false;
   let example = false;
   const subject = source.sourceSpans.find(function (span) { return span.kind === 'subject'; });
   const subjectPurpose = Boolean(subject && authenticationSubject_(subject.text));
@@ -93,6 +94,7 @@ function authenticationMessage_(source) {
       // Plain text and HTML are independent alternatives. Only explicit subject
       // associations seed each body; transient body frames never cross between them.
       heading = sourceSpan.kind !== 'subject' && subjectHeading;
+      instructionFrame = false;
       example = sourceSpan.kind !== 'subject' && subjectExample;
       representation = sourceSpan.kind;
     }
@@ -103,10 +105,11 @@ function authenticationMessage_(source) {
       const leadingIndex = line.search(/\S/u);
       const exampleHeading = authenticationExampleHeading_(trimmed);
       const codeHeading = authenticationHeading_(trimmed);
-      if (exampleHeading) { example = true; heading = false; }
+      if (exampleHeading) { example = true; heading = false; instructionFrame = false; }
       else if (codeHeading) {
         example = example || authenticationDiscussion_(trimmed);
         heading = !example;
+        instructionFrame = false;
       }
       const tokens = /\S+/gu;
       let match;
@@ -130,7 +133,7 @@ function authenticationMessage_(source) {
         // Fixed context work per literal; never truncate the code identity.
         const before = span.slice(Math.max(0, start - 240), start);
         const after = span.slice(end, Math.min(span.length, end + 240));
-        const frame = {heading: heading, subject: subjectPurpose && sourceSpan.kind !== 'subject',
+        const frame = {heading: heading, instruction: instructionFrame, subject: subjectPurpose && sourceSpan.kind !== 'subject',
           leading: match.index === leadingIndex};
         if (!example && authenticationInstruction_(before, after, code, frame)) return true;
       }
@@ -138,6 +141,7 @@ function authenticationMessage_(source) {
       // not to a later promotional block. Example frames have the same scope.
       if (trimmed && !exampleHeading && !codeHeading) {
         heading = !example && !authenticationDiscussionClause_(trimmed) && authenticationUseInstruction_(trimmed);
+        instructionFrame = heading;
         example = false;
       }
       offset += line.length + 1;
@@ -177,7 +181,10 @@ function authenticationLabelPattern_() {
 }
 function authenticationLabelQualifier_() {
   return '(?:\\s+(?:to|for|per)\\s+' + authenticationActionPattern_(true) + ')?' +
-    '(?:\\s+(?:is|è|e[’\x27]|monouso|below|shown\\s+below|riportato\\s+sotto|seguente))*';
+    '(?:\\s+(?:' + authenticationCopulaPattern_() + '|monouso|below|shown\\s+below|riportato\\s+sotto|seguente))*';
+}
+function authenticationCopulaPattern_() {
+  return '(?:is|will\\s+be|è|sarà|e[’\x27])';
 }
 function authenticationHeading_(text) {
   return new RegExp('^(?:[\\p{L}\\p{N} ._-]{1,60}:\\s*)?(?:(?:your|il\\s+tuo|tuo)\\s+)?' +
@@ -240,7 +247,7 @@ function authenticationTargetEnd_(beforeValue) {
   // A complete authentication target may end or introduce another clause, but
   // cannot be only the first noun in a different object such as account discount.
   return '(?=\\s*(?:$|[.!?:;,)\\]>"\x27]|(?:using|with|con|usando|and|then|to|for|e|poi|per' +
-    (beforeValue ? '|is|è|e[’\x27]' : '') + ')(?![\\p{L}\\p{N}\\p{M}_])))';
+    (beforeValue ? '|' + authenticationCopulaPattern_() : '') + ')(?![\\p{L}\\p{N}\\p{M}_])))';
 }
 function authenticationActionPattern_(beforeValue) {
   return '(?:' + authenticationVerificationPattern_(beforeValue) + '|' + authenticationAccessPattern_(beforeValue) +
@@ -259,6 +266,7 @@ function authenticationDiscussionClause_(text) {
   // Closing the quote ends this role so a later independent issuance survives.
   if (/\b(?:asked|said|reported|recalled|remembered)\s*[:,]?\s*(?:"[^"\n]*|“[^”\n]*|'[^'\n]*|‘[^’\n]*)$/iu.test(text)) return true;
   const instructionClause = text.slice(Math.max(text.lastIndexOf(','), text.lastIndexOf(';')) + 1);
+  if (/(?:^|:\s*)\s*(?:if|unless|se)(?:\s*$|\s+(?:your|the|il|la)\b)/iu.test(instructionClause)) return true;
   if (/(?:^|:\s*)\s*(?:was|were|is|are|did|does|do|can|could|would|should|has|have|had)\s+(?:you|your|the)\b/iu.test(instructionClause) ||
       /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?$/iu.test(instructionClause) ||
       /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(?:you|your|the)\b/iu.test(instructionClause)) return true;
@@ -295,13 +303,13 @@ function authenticationIssuance_(before, after) {
   // before it; its following descriptive words cannot become another value.
   const labelPrefix = precedingLabel ? before.slice(0, precedingLabel.index) : '';
   const instructionLabel = Boolean(precedingLabel && /\b(?:enter|type|use|inserisci|digita|usa)\s+(?:(?:your|the|il|il\s+tuo)\s+)?$/iu.test(labelPrefix));
-  const priorValue = /(?:^|\s)(\S+)\s+(?:is|è|e[’'])\s+(?:(?:your|the|il\s+tuo|il|tuo)\s+)?$/iu.exec(labelPrefix);
+  const priorValue = new RegExp('(?:^|\\s)(\\S+)\\s+' + authenticationCopulaPattern_() + '\\s+(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?$', 'iu').exec(labelPrefix);
   const reversed = Boolean(priorValue && !/^(?:here|there|this|below|following|attached|questo|questa)$/iu.test(priorValue[1]));
   const promotional = Boolean(precedingLabel && /^passcode\b/iu.test(precedingLabel[0]) &&
     /\b(?:coupon|promo(?:tional)?|discount|sconto)\s*$/iu.test(labelPrefix));
   const negatedLabel = /\b(?:not|never|non)(?:\s+(?:is|è|e[’']|a|an|the|your|un|uno|una|il|lo|la|tuo|tua))*\s*$/iu.test(labelPrefix);
   const issuingLabel = Boolean(precedingLabel && !reversed && !promotional && !negatedLabel);
-  const followingPrefix = '^\\s+(?:is|è|e[’\x27])\\s+(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?';
+  const followingPrefix = '^\\s+' + authenticationCopulaPattern_() + '\\s+(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?';
   const followingLabel = new RegExp(followingPrefix + label + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
   const noun = authenticationCodeNoun_();
   const followingGeneric = new RegExp(followingPrefix + noun + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
@@ -309,7 +317,7 @@ function authenticationIssuance_(before, after) {
   const following = followingLabel || followingGeneric;
   const continuation = following ? after.slice(following[0].length) : after;
   const completeValue = authenticationValueTail_(continuation);
-  const generic = /(?:^|\s|:)(?:(?:your|the|il\s+tuo|il|tuo)\s+)?(?:code|passcode|pin|codice)\s*(?:(?:is|è|e[’'])\s*[:=]?\s+|[:=]\s*)$/iu.exec(before);
+  const generic = new RegExp('(?:^|\\s|:)(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?(?:code|passcode|pin|codice)\\s*(?:' + authenticationCopulaPattern_() + '\\s*[:=]?\\s+|[:=]\\s*)$', 'iu').exec(before);
   const genericIssued = Boolean(generic && !/\b(?:coupon|promo(?:tional)?|discount|sconto|use|enter|type|usa|inserisci|digita)\s*$/iu.test(before.slice(0, generic.index)));
   const introduced = new RegExp('\\b' + noun + '\\s*(?:is\\s*)?[:=]?\\s*$', 'iu').test(before);
   const imperative = new RegExp('\\b(?:use|enter|type|usa|inserisci|digita)\\s+(?:(?:(?:the|your|il|il\\s+tuo)\\s+)?' + noun + '\\s*[:=]?\\s*)?$', 'iu').test(before);
@@ -325,7 +333,7 @@ function authenticationIssuance_(before, after) {
     generic: genericIssued || Boolean(followingOrdinary && completeValue),
     direct: (introduced || imperative) && purposeAfter || usingCode && authAction || assigned || inlineInstruction && completeValue ||
       Boolean(followingGeneric && authenticationPurposeTail_(continuation)),
-    imperative: imperative, instructionLabel: instructionLabel, sentenceValue: sentenceValue, valueTail: completeValue,
+    imperative: imperative, instructionLabel: instructionLabel, inlineInstruction: inlineInstruction, sentenceValue: sentenceValue, valueTail: completeValue,
     promotionalFollowing: Boolean(followingGeneric && !followingOrdinary),
     invalidRecipientTail: authenticationRecipientTail_(continuation) === false,
     descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism|documentation|example)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
@@ -335,7 +343,7 @@ function authenticationInstruction_(before, after, code, frame) {
   const relation = authenticationIssuance_(before, after);
   const purposeConnector = /^(?:for|per)$/iu.test(code) &&
     !/^\s*(?:to|for|per)\s+/iu.test(after) && authenticationPurposeTail_(after);
-  const instructionLocation = relation.instructionLabel &&
+  const instructionLocation = (relation.instructionLabel || relation.inlineInstruction || frame && frame.instruction && frame.leading) &&
     /^(?:here|there|now|above|below|qui|qua|ora|sotto|sopra)[.!?,;:]*$/iu.test(code);
   const nounModifier = /^sconto$/iu.test(code) && /\bcodice\s*$/iu.test(before);
   // These are grammatical predicates, not an issued literal. Check independent
@@ -358,9 +366,12 @@ function authenticationUseInstruction_(text, complete) {
   // Only a positive instruction clause can introduce a following value.
   // Negated or conceptual mentions ("never ask you to enter", "learn how to
   // use") are not instructions to the recipient.
+  const qualified = authenticationLabelPattern_() + (complete ? authenticationLabelQualifier_() + '\\s*[:=]\\s*$' : '\\b');
+  const generic = authenticationCodeNoun_() + '\\s+(?:to|for|per)\\s+' + authenticationActionPattern_() +
+    (complete ? '\\s*[:=]\\s*$' : '\\s*[:=]?\\s*$');
   return new RegExp('(?:^|[.!?\\n]\\s+)(?:[\\p{L}\\p{N} ._-]{1,60}:\\s*)?(?:(?:please|per\\s+favore,?)\\s+)?' +
-    '(?:enter|type|use|inserisci|digita|usa)\\s+(?:(?:the|your|il|il\\s+tuo)\\s+)?' +
-    authenticationLabelPattern_() + (complete ? authenticationLabelQualifier_() + '\\s*[:=]\\s*$' : '\\b'), 'iu').test(text);
+    '(?:enter|type|use|inserisci|digita|usa)\\s+(?:(?:this|the|your|questo|il|il\\s+tuo)\\s+)?' +
+    '(?:' + qualified + '|' + generic + ')', 'iu').test(text);
 }
 function authenticationExclusion_(source) {
   if (!authenticationMessage_(source)) return null;

@@ -228,6 +228,22 @@ test('R14 admission delimiters never split factual coupon codes', () => {
   }
 });
 
+for (const text of ['Acme: Your verification code will be 123456.', 'Use this code to sign in: 123456.']) {
+  test('R15 authentication assignment at actual extraction consumer: ' + text, () => {
+    const {ctx} = harness();
+    let calls = 0;
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      return aiResponse({merchant: '', code: '123456.', evidence: {code: {quote: text}}});
+    };
+    const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+    assert.equal(outcome.excludedReason, 'authentication_code_message');
+    assert.equal(calls, 0);
+    assert.equal(outcome.archiveAllowed, false);
+    assert.deepEqual(Array.from(outcome.candidates), []);
+  });
+}
+
 for (const label of ['email confirmation code', 'MFA code']) {
   test('R11 explicit authentication label at actual extraction consumer: ' + label, () => {
     const {ctx} = harness();
