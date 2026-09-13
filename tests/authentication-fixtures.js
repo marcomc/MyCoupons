@@ -647,4 +647,35 @@ ordinaryMessages.push(
   {text: 'Your recovery code is 123456. Brand coupon code SAVE20'},
   {text: 'Read about account recovery. Use code SAVE20 to save 20%.'}
 );
+for (const issuer of ['Sample Bank', 'Example Shop', 'Tutorial Services', 'Documentation Store']) {
+  authenticationMessages.push(
+    {text: issuer + ': Your verification code is 123456'},
+    {text: 'Your verification code is 123456. ' + issuer},
+    {text: 'Your verification code is 123456 (valid for 10 minutes at ' + issuer + ')'},
+    {subject: 'Sign in to ' + issuer, text: 'Your code is 123456'},
+    {subject: issuer + ': Your verification code', text: 'Your code is 123456'},
+    {html: '<h1>' + issuer + ': Your verification code</h1><p>123456</p>'}
+  );
+  ordinaryMessages.push(
+    {text: issuer + ': For example, your verification code is 123456. Brand coupon code SAVE20'},
+    {text: issuer + ': For example your verification code is 123456. Brand coupon code SAVE20'},
+    {text: issuer + ': Example: Your verification code is 123456. Brand coupon code SAVE20'},
+    {text: issuer + ': Your verification code is confidential. Brand coupon code SAVE20'}
+  );
+}
+for (const marker of ['Example 1:', 'Sample 2:', 'Documentation says', 'Documentation states']) {
+  ordinaryMessages.push(
+    {text: marker + ' Your verification code is 123456. Brand coupon code SAVE20'},
+    {html: '<p>' + marker + ' Your verification code is 123456.</p><p>Brand coupon code SAVE20</p>'}
+  );
+  if (marker.endsWith(':')) ordinaryMessages.push(
+    {text: marker + '\nYour verification code is 123456. Brand coupon code SAVE20'},
+    {html: '<h1>' + marker + '</h1><p>Your verification code is 123456.</p><p>Brand coupon code SAVE20</p>'}
+  );
+  authenticationMessages.push({text: marker + ' Your verification code is 123456. Your verification code is 654321'});
+}
+for (const issuer of ['Sample 123 Bank', 'Documentation 2 Services']) {
+  authenticationMessages.push({text: issuer + ': Your verification code is 123456'});
+  ordinaryMessages.push({text: issuer + ': Example 1: Your verification code is 123456. Brand coupon code SAVE20'});
+}
 module.exports = {authenticationMessages, ordinaryMessages};

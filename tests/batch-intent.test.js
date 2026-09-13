@@ -169,7 +169,7 @@ test('R16 exclusion checkpoint failure and response loss cannot authorize replay
   }
 });
 
-test('R16 malformed replay source fails closed and explicit manual dispositions retain their authority', () => {
+test('R19 malformed replay source fails closed and Confirm cannot bypass authentication exclusion', () => {
   for (const written of [1, 2]) {
     const f = interruptedAuthenticationBatch(written); f.boot();
     const journal = JSON.stringify(f.journal.rows); const rows = JSON.stringify(f.coupon.rows);
@@ -177,17 +177,80 @@ test('R16 malformed replay source fails closed and explicit manual dispositions 
     assert.throws(f.run, /AI/);
     assert.equal(JSON.stringify(f.journal.rows), journal); assert.equal(JSON.stringify(f.coupon.rows), rows);
     f.boot(); assert.equal(f.run().messages[0].status, 'ignored');
-    f.action(2, 'Confirm');
+    const rowsBeforeConfirm = JSON.stringify([f.coupon.rows, f.coupon.notes]);
+    assert.equal(f.action(2, 'Confirm').excludedReason, 'authentication_code_message');
     assert.equal(f.saved().candidateStates[0].status, 'confirmed');
-    if (written === 1) {
-      assert.equal(f.saved().outcome, 'authentication_code_message');
-      assert.equal(f.ctx.completeCandidateBatch_(f.saved()), false);
-      assert.equal(f.mutations.length, 0);
-      assert.equal(f.run().messages[0].status, 'ignored');
-    } else {
-      assert.equal(f.saved().status, 'confirmed'); assert.equal(f.mutations.length, 2);
-    }
+    assert.equal(f.saved().outcome, 'authentication_code_message');
+    assert.equal(f.ctx.completeCandidateBatch_(f.saved()), written === 2);
+    assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rowsBeforeConfirm);
+    assert.equal(f.mutations.length, 0);
+    assert.equal(f.run().messages[0].status, 'ignored');
   }
+});
+
+test('R19 Confirm cannot promote a historical complete review batch from authentication mail', () => {
+  for (const issued of ['Use code 123456 to sign in.', 'Sample Bank: Your verification code is 123456.']) {
+    const f = fixture(); setSource(f, issued + ' ' + f.message.text);
+    f.ctx.authenticationMessage_ = () => false;
+    assert.equal(f.run().messages[0].status, 'review');
+    f.boot();
+    const rows = JSON.stringify([f.coupon.rows, f.coupon.notes]);
+    const payload = JSON.stringify(f.saved().batchIntent);
+    const bindings = JSON.stringify(f.saved().candidateStates);
+    f.ctx.callGeminiModel_ = () => assert.fail('Confirm must not call model');
+    const result = f.action(2, 'Confirm');
+    assert.equal(result.excludedReason, 'authentication_code_message');
+    assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rows);
+    assert.equal(JSON.stringify(f.saved().batchIntent), payload);
+    assert.equal(JSON.stringify(f.saved().candidateStates), bindings);
+    assert.equal(f.saved().status, 'ignored');
+    assert.equal(f.mutations.length, 0);
+    assert.equal(f.action(3, 'Confirm').excludedReason, 'authentication_code_message');
+  }
+});
+
+test('R19 Confirm read and exclusion-checkpoint failures leave rows and Gmail unchanged', () => {
+  for (const mode of ['read-failure', 'not-written', 'response-loss']) {
+    const f = fixture(); setSource(f, f.message.text + ' Your verification code is 123456');
+    f.ctx.authenticationMessage_ = () => false; f.run(); f.boot();
+    const rows = JSON.stringify([f.coupon.rows, f.coupon.notes]);
+    const payload = JSON.stringify(f.journal.rows[1].slice(2));
+    const getRange = f.journal.getRange;
+    if (mode === 'read-failure') f.ctx.Gmail.Users.Messages.get = () => { throw new Error('unavailable'); };
+    else f.journal.getRange = (...args) => {
+      const range = getRange(...args);
+      return {...range, setValues: values => {
+        if (args[1] === 1 && JSON.parse(values[0][1]).outcome === 'authentication_code_message') {
+          if (mode === 'response-loss') range.setValues(values);
+          throw new Error('checkpoint interrupted');
+        }
+        range.setValues(values);
+      }};
+    };
+    assert.throws(() => f.action(2, 'Confirm'));
+    assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rows);
+    assert.equal(JSON.stringify(f.journal.rows[1].slice(2)), payload);
+    assert.equal(f.mutations.length, 0);
+    f.journal.getRange = getRange; f.boot();
+    assert.equal(f.action(2, 'Confirm').excludedReason, 'authentication_code_message');
+    assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rows);
+    assert.equal(f.mutations.length, 0);
+  }
+});
+
+test('R19 finalization re-read cannot grant Gmail authority when authentication becomes visible', () => {
+  const f = fixture(); f.run(); f.action(2, 'Confirm');
+  const read = f.ctx.Gmail.Users.Messages.get; let reads = 0;
+  f.ctx.Gmail.Users.Messages.get = (...args) => {
+    const raw = read(...args);
+    if (++reads === 1) return raw;
+    const text = f.message.text + ' Your verification code is 123456';
+    return {...raw, payload: {...raw.payload, body: {data: Buffer.from(text).toString('base64url'), size: Buffer.byteLength(text)}}};
+  };
+  f.action(3, 'Confirm');
+  assert.equal(reads, 2); assert.equal(f.mutations.length, 0);
+  assert.equal(f.saved().status, 'review');
+  assert.deepEqual(f.coupon.rows.slice(1).map(row => row[17]), ['Needs review', 'Needs review']);
 });
 
 test('real extraction keeps deterministic Notes and code-count losses in review through import and AI retry', () => {

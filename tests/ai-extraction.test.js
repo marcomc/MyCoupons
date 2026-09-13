@@ -433,6 +433,14 @@ test('R18 account-recovery issuance excludes before a grounded mistaken coupon p
   assert.deepEqual(Array.from(outcome.candidates), []);
 });
 
+test('R19 issuer names do not turn clear authentication issuance into an example', () => {
+  const {ctx} = harness();
+  ctx.callGeminiModel_ = () => assert.fail('clear issuer-labelled authentication must not reach model');
+  const outcome = ctx.extractCouponOutcome_({text: 'Sample Bank: Your verification code is 123456', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(outcome.archiveAllowed, false);
+});
+
 function aiResponse(overrides = {}) {
   const candidate = Object.assign(Object.fromEntries(['merchant','website','code','discountType','discountValue','minimumSpend','validOn','exclusions','expiry','usageLimits','currency','notes'].map(k => [k, ''])), {
     merchant: 'Brand', code: 'AI20', confidence: 'high', review: false, evidence: {merchant: {quote: 'Brand'}, code: {quote: 'AI20'}}

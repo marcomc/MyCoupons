@@ -220,8 +220,11 @@ The example configuration contains product defaults only.
   row replay or Gmail finalization. Exclusion preserves their immutable payload,
   existing rows and acknowledged mail flags; it does not mark a partial batch
   complete. The scanner and Retry respect that checkpoint after restart.
-  No historical rows are removed. Explicit manual review authority is unchanged;
-  confirming a retained row cannot resume an excluded, incomplete remainder.
+  No historical rows are removed. Confirm also checks readable-source
+  authentication before promoting a row, including historical complete batches.
+  A persisted authentication exclusion blocks Confirm and Retry. Manual review
+  can still authorize edited or incomplete coupon evidence, but cannot override
+  this whole-message exclusion or resume an excluded incomplete remainder.
   Deterministic candidates currently require review. Tokens end at whitespace;
   one matching pair of outer ASCII quotes or angle brackets may wrap a token.
   Internal punctuation is never silently removed. Introducers require whitespace

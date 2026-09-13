@@ -283,7 +283,8 @@ function authenticationExampleSuffix_(text) {
   // later documentation sentence. Do not scan unrelated following blocks.
   const wrapper = authenticationWrappedTail_(text);
   return wrapper !== null && authenticationDiscussion_(wrapper) ||
-    /^[^\S\n]*[,;:]?[^\S\n]*[(\[]?[^\S\n]*(?:(?:for|ad)\s+)?(?:example|sample|esempio|placeholder|segnaposto)\b/iu.test(text);
+    new RegExp('^[^\\S\\n]*[,;:]?[^\\S\\n]*[(\\[]?[^\\S\\n]*(?:(?:for|ad)\\s+)?' +
+      authenticationDiscussionPattern_(), 'iu').test(text);
 }
 function authenticationIssuance_(before, after) {
   // Wrapper bytes are presentation, not purpose. Keep punctuation inside the
@@ -336,7 +337,7 @@ function authenticationIssuance_(before, after) {
     imperative: imperative, instructionLabel: instructionLabel, inlineInstruction: inlineInstruction, sentenceValue: sentenceValue, valueTail: completeValue,
     promotionalFollowing: Boolean(followingGeneric && !followingOrdinary),
     invalidRecipientTail: authenticationRecipientTail_(continuation) === false,
-    descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism|documentation|example)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
+    descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
     discussion: negatedLabel || authenticationDiscussionClause_(before) || authenticationExampleSuffix_(continuation)};
 }
 function authenticationInstruction_(before, after, code, frame) {
@@ -356,7 +357,15 @@ function authenticationInstruction_(before, after, code, frame) {
       frame.heading && valueEnd && (frame.leading || relation.sentenceValue || relation.generic)));
 }
 function authenticationDiscussion_(text) {
-  return /\b(?:example|sample|placeholder|tutorial|documentation|esempio|segnaposto)\b/iu.test(text);
+  // A marker must introduce explanatory syntax or end its clause. A word in
+  // an issuer name ("Sample Bank:") is not an example of the following value.
+  return /\b(?:for|ad)\s+(?:example|esempio)\b/iu.test(text) ||
+    new RegExp('\\b' + authenticationDiscussionPattern_(), 'iu').test(text);
+}
+function authenticationDiscussionPattern_() {
+  return '(?:example|sample|placeholder|tutorial|documentation|esempio|segnaposto)(?:\\s+\\d+)?' +
+    '(?=\\s*(?:$|[:,;.!?)]|' + authenticationLabelPattern_() + '\\b|' +
+    '(?:code|value|codice|above|below|shows|uses|illustrates|explains|says|states|describes|reads|for|of|di)\\b))';
 }
 function authenticationExampleHeading_(text) {
   return /(?:^|\s)(?:example|sample|esempio|placeholder|segnaposto)(?:\s+\d+)?\s*:?\s*$/iu.test(text) ||

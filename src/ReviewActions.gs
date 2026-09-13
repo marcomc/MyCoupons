@@ -54,8 +54,12 @@ function processReviewAction_(sheet, rowNumber, action, c) {
     candidate[0].status = 'ignored';
     return completeReviewMessage_(state, sheet, journalSheet, c);
   }
+  if (authenticationExcludedState_(state)) return authenticationExcludedResult_(state);
   const message = getReviewMessage_(state.messageId);
   if (action === EN.actions.retry_ai) return retryReviewCandidate_(sheet, rowNumber, state, candidate[0], message, journalSheet, c);
+  // Manual evidence review does not override entire-message authentication
+  // exclusion. Check before promoting any row or granting Gmail authority.
+  if (authenticationMessage_(candidateSource_(message))) return checkpointAuthenticationExclusion_(journalSheet, state);
   if (!validateReviewRow_(row, message, displayRow, candidate[0].imageEvidence, formulas, c, key, legacyTechnicalNotes)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   setReviewStatus_(sheet, rowNumber, EN.statuses.confirmed, '');
   candidate[0].status = 'confirmed';
@@ -296,6 +300,7 @@ function restoreReviewRows_(state, sheet) {
 function refreshAndValidateReviewRows_(state, sheet, c) {
   if (!completeCandidateBatch_(state)) return false;
   const message = getReviewMessage_(state.messageId);
+  if (authenticationExcludedState_(state) || authenticationMessage_(candidateSource_(message))) return false;
   const complete = state.candidateStates.every(function (item) {
     const index = state.candidateKeys.indexOf(item.key);
     if (index < 0) return false;
