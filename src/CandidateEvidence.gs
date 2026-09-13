@@ -129,9 +129,8 @@ function authenticationMessage_(source) {
         const grouped = authenticationGroupedLiteral_(line, literalIndex);
         // A sentence stop outside one matched wrapper is admission presentation.
         // Keep the factual token lexer and every stored/evidenced code unchanged.
-        const punctuatedWrapper = /^(?:"([^"]+)"|'([^']+)'|<([^<>]+)>)[.!?]$/u.exec(token);
-        const code = grouped ? grouped.code : punctuatedWrapper ?
-          punctuatedWrapper[1] || punctuatedWrapper[2] || punctuatedWrapper[3] : codeLexemes_(token)[0];
+        const wrappedLiteral = authenticationWrappedLiteral_(token);
+        const code = grouped ? grouped.code : wrappedLiteral === null ? codeLexemes_(token)[0] : wrappedLiteral;
         if (!authenticationLiteral_(code)) continue;
         const wrapped = code !== token;
         const start = offset + (grouped ? grouped.start : literalIndex + (wrapped ? 1 : 0));
@@ -157,10 +156,18 @@ function authenticationMessage_(source) {
   }
   return false;
 }
+function authenticationClosingWrapper_(opening) {
+  return {'"': '"', "'": "'", '<': '>', '“': '”', '‘': '’'}[opening];
+}
+function authenticationWrappedLiteral_(token) {
+  const closing = authenticationClosingWrapper_(token.charAt(0));
+  const end = token.length - (/[.!?]$/u.test(token) ? 1 : 0);
+  return closing && end > 2 && token.charAt(end - 1) === closing ? token.slice(1, end - 1) : null;
+}
 function authenticationGroupedLiteral_(line, index) {
   // Admission only: inspect at most 80 UTF-16 units for a 40-code-point value.
   // Coupon tokens, factual quotes and stored identities never use this grouping.
-  const closing = {'"': '"', "'": "'", '<': '>'}[line.charAt(index)];
+  const closing = authenticationClosingWrapper_(line.charAt(index));
   const start = index + (closing ? 1 : 0);
   const match = /^\p{Nd}+(?:[^\S\r\n\u2028\u2029]+\p{Nd}+)+[.!?]?/u.exec(line.slice(start, start + 80));
   if (!match || Array.from(match[0]).length > 40) return null;
@@ -189,7 +196,7 @@ function authenticationLabelPattern_() {
 }
 function authenticationLabelQualifier_() {
   return '(?:\\s+(?:to|for|per)\\s+' + authenticationActionPattern_(true) + ')?' +
-    '(?:\\s+(?:' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+sent\\s+to\\s+you|monouso|below|shown\\s+below|riportato\\s+sotto|seguente))*';
+    '(?:\\s+(?:' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+sent(?:\\s+to\\s+you)?|monouso|below|shown\\s+below|riportato\\s+sotto|seguente))*';
 }
 function authenticationCopulaPattern_() {
   return '(?:is|will\\s+be|è|sarà|e[’\x27])';
@@ -215,6 +222,13 @@ function authenticationValueTail_(text) {
   return authenticationPurposeTail_(text) || authenticationCompletionTail_(text) ||
     authenticationRecipientTail_(text) === true ||
     /^[^\S\n]*(?:$|\n|[.!?](?:\s|$))/u.test(text);
+}
+function authenticationFrameContinuation_(text) {
+  // Code punctuation alone cannot detach an adjacent purpose/location clause.
+  // Inherited authority requires that clause to have a supported auth meaning.
+  const clause = text.split('\n', 1)[0].replace(/^\s*[.!?]\s*/u, ' ');
+  return !/^\s*(?:at|in|on|to|for|per|al|alla|nel|nella)(?![\p{L}\p{N}\p{M}_])/iu.test(clause) ||
+    authenticationPurposeTail_(clause) || authenticationCompletionTail_(clause) || authenticationRecipientTail_(clause) === true;
 }
 function authenticationRecipientTail_(text) {
   const recipient = /^\s*(?:for\s+(?:(?:your|the)\s+)?(?:account|order|purchase)|per\s+(?:(?:il\s+tuo|il|la\s+tua|la)\s+)?(?:account|ordine|acquisto))(?![\p{L}\p{N}\p{M}_])/iu.exec(text);
@@ -297,7 +311,7 @@ function authenticationExampleSuffix_(text) {
 function authenticationReportedInstruction_(text) {
   // Retain a connected report through politeness and a bounded dotted issuer.
   // A closing quote or independent sentence ends its authority over later values.
-  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text);
+  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*)?(?:(?:i|we|you|he|she|they|it)\s+(?:(?:should|could|would|must|may|might|can|will)\s+)?)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text);
   // A semicolon starts an independent clause unless it remains inside a quote.
   if (!report) return false;
   if (report[1] || report[0].indexOf(';') < 0) return true;
@@ -307,8 +321,8 @@ function authenticationReportedInstruction_(text) {
 function authenticationIssuance_(before, after) {
   // Wrapper bytes are presentation, not purpose. Keep punctuation inside the
   // literal itself out of the context; an exclamation in a code is not a stop.
-  const wrappedValue = before.endsWith('"') && after.startsWith('"') || before.endsWith("'") && after.startsWith("'") ||
-    before.endsWith('<') && after.startsWith('>');
+  const closingWrapper = authenticationClosingWrapper_(before.slice(-1));
+  const wrappedValue = Boolean(closingWrapper && after.startsWith(closingWrapper));
   if (wrappedValue) {
     before = before.slice(0, -1); after = after.slice(1);
   }
@@ -345,6 +359,8 @@ function authenticationIssuance_(before, after) {
   const introduced = new RegExp('\\b' + noun + '\\s*(?:is\\s*)?[:=]?\\s*$', 'iu').test(before);
   const imperativeMatch = new RegExp('\\b(?:use|enter|type|usa|inserisci|digita)\\s+(?:(?:(?:this|the|your|questo|il|il\\s+tuo)\\s+)?' + noun + '\\s*[:=]?\\s*)?$', 'iu').exec(beforeLine);
   const imperative = Boolean(imperativeMatch);
+  const genericImperative = imperative && /\b(?:code|passcode|pin|codice)\s*[:=]?\s*$/iu.test(imperativeMatch[0]) &&
+    !/\b(?:coupon|promo(?:tional)?|discount|sconto)\b/iu.test(imperativeMatch[0]);
   const governingPurpose = imperative ? beforeLine.slice(0, imperativeMatch.index).trim() : '';
   const preposedPurpose = imperative && !/\b(?:asked|said|reported|recalled|remembered)\s*:/iu.test(governingPurpose) &&
     new RegExp('(?:^|[.!?]\\s+)(?:[\\p{L}\\p{N} ._-]{1,60}:\\s*)?(?:to|for|per)\\s+' +
@@ -363,8 +379,9 @@ function authenticationIssuance_(before, after) {
     generic: genericIssued || Boolean(followingOrdinary && completeValue),
     direct: (introduced || imperative) && purposeAfter || usingCode && authAction || assigned || inlineInstruction && completeValue ||
       Boolean(followingGeneric && authenticationPurposeTail_(continuation)),
-    imperative: imperative, instructionLabel: instructionLabel, inlineInstruction: inlineInstruction, sentenceValue: sentenceValue, valueTail: completeValue,
+    imperative: imperative, genericImperative: genericImperative, instructionLabel: instructionLabel, inlineInstruction: inlineInstruction, sentenceValue: sentenceValue, valueTail: completeValue,
     promotionalFollowing: Boolean(followingGeneric && !followingOrdinary),
+    frameContinuation: authenticationFrameContinuation_(continuation),
     invalidRecipientTail: authenticationRecipientTail_(continuation) === false,
     descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
     discussion: negatedLabel || authenticationReportedInstruction_(beforeLine) ||
@@ -374,7 +391,8 @@ function authenticationInstruction_(before, after, code, frame) {
   const relation = authenticationIssuance_(before, after);
   const purposeConnector = /^(?:for|per)$/iu.test(code) &&
     !/^\s*(?:to|for|per)\s+/iu.test(after) && authenticationPurposeTail_(after);
-  const instructionLocation = (relation.instructionLabel || relation.inlineInstruction || frame && frame.instruction && frame.leading) &&
+  const instructionLocation = (relation.instructionLabel || relation.inlineInstruction || frame &&
+    (frame.instruction && frame.leading || (frame.subject || frame.heading) && relation.genericImperative)) &&
     /^(?:here|there|now|above|below|qui|qua|ora|sotto|sopra)[.!?,;:]*$/iu.test(code);
   const nounModifier = /^sconto$/iu.test(code) && /\bcodice\s*$/iu.test(before);
   // A bare alphabetic word has the same syntax as status prose. Require an
@@ -386,8 +404,8 @@ function authenticationInstruction_(before, after, code, frame) {
   if (relation.discussion || relation.descriptive || purposeConnector || instructionLocation || nounModifier || bareWord && !presented) return false;
   const valueEnd = relation.valueTail || !relation.invalidRecipientTail && /[.!?]$/u.test(code);
   return relation.explicit && valueEnd || relation.direct ||
-    Boolean(frame && !relation.promotionalFollowing && (frame.subject && relation.generic && valueEnd ||
-      frame.heading && valueEnd && (frame.leading || relation.sentenceValue || relation.generic)));
+    Boolean(frame && relation.frameContinuation && !relation.promotionalFollowing && (frame.subject && (relation.generic || relation.genericImperative) && valueEnd ||
+      frame.heading && valueEnd && (frame.leading || relation.sentenceValue || relation.generic || relation.genericImperative)));
 }
 function authenticationDiscussion_(text) {
   // A marker must introduce explanatory syntax or end its clause. A word in

@@ -209,7 +209,10 @@ The example configuration contains product defaults only.
   explicit assignment delimiter, matched value wrapper (also before a sentence stop), or affirmative use
   instruction. Digit-bearing or internally mixed Unicode values retain unwrapped
   issuance support. A governing purpose may precede the imperative; supported
-  recipient-qualified passive issuance must still present a concrete value.
+  passive issuance (`has been sent` / `was sent`, optionally `to you`) must still
+  present a concrete value. A validated authentication subject or heading may
+  qualify a generic, non-promotional imperative. Matched typographic value quotes
+  count as admission presentation only; factual coupon tokens are unchanged.
   Examples, documentation and explicit placeholders are not issued values.
   URL and email references, including host-only domains with sentence punctuation,
   are not authentication values; factual coupon token identity is unchanged.

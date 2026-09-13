@@ -71,6 +71,30 @@ for (const [name, message, code, quote] of [
   });
 }
 
+test('R23 inherited purpose cannot override promotional tails on punctuated code values', () => {
+  const {ctx} = harness();
+  ctx.callGeminiModel_ = () => aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}});
+  for (const value of ['SAVE20!', 'ABC.77!', '“SAVE20!”']) {
+    const message = {subject: 'Sign in to Acme', text: 'Use code ' + value + ' at checkout for 20% off. Brand coupon code SAVE20', incomplete: false};
+    assert.notEqual(ctx.extractCouponOutcome_(message).excludedReason, 'authentication_code_message');
+  }
+});
+
+test('R23 later promotional lines cannot veto completed authentication instructions', () => {
+  const {ctx} = harness(); let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const message = {subject: 'Sign in to Acme', text: 'Use code 123456.\nAt checkout get 20% off with coupon code SAVE20.', incomplete: false};
+  assert.equal(ctx.extractCouponOutcome_(message).excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+test('R23 authentication subjects cannot turn nounless commands into issued codes', () => {
+  const {ctx} = harness();
+  ctx.callGeminiModel_ = () => aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}});
+  const message = {subject: 'Sign in to Acme', text: 'Use coupons. Brand coupon code SAVE20', incomplete: false};
+  assert.notEqual(ctx.extractCouponOutcome_(message).excludedReason, 'authentication_code_message');
+});
+
 for (const [name, message, excluded] of [
   ['qualified-pin', {text: 'Acme: Your login PIN is 123456'}, true],
   ['representation-heading', {text: 'Your verification code', html: '<p>SAVE20.</p><p>Brand coupon code SAVE20</p>'}, false],
@@ -221,7 +245,7 @@ for (const text of ['Your verification code:123456', 'OTP=123456',
 
 test('R14 admission delimiters never split factual coupon codes', () => {
   const {ctx} = harness();
-  for (const code of ['SAVE:20', 'SAVE=20', 'ABC.77', 'ÈTÉ:20=VIP', '"aBcDeF".', "'aBcDeF'!", '<aBcDeF>?', 'SAVE.VIP', 'SAVE.VIP.']) {
+  for (const code of ['SAVE:20', 'SAVE=20', 'ABC.77', 'ÈTÉ:20=VIP', '"aBcDeF".', "'aBcDeF'!", '<aBcDeF>?', 'SAVE.VIP', 'SAVE.VIP.', '“ABCDEF”.', '‘ÈTÉ+77’']) {
     const message = {text: 'Brand coupon code ' + code, incomplete: false};
     assert.equal(ctx.authenticationMessage_(ctx.candidateSource_(message)), false);
     assert.deepEqual(Array.from(ctx.deterministicCandidates_(message), candidate => candidate.code), [code]);
@@ -476,6 +500,22 @@ test('R22 standalone authentication purpose excludes mixed mail before the model
   assert.equal(ctx.extractCouponOutcome_(message).excludedReason, 'authentication_code_message');
   assert.equal(calls, 0);
 });
+
+for (const [name, message, excluded] of [
+  ['modal-report', {text: 'You said that I should use code 123456 to sign in. Brand coupon code SAVE20'}, false],
+  ['recipientless-passive', {text: 'Your verification code has been sent: 123456. Brand coupon code SAVE20'}, true],
+  ['subject-imperative', {subject: 'Sign in to Acme', text: 'Use code 123456. Brand coupon code SAVE20'}, true],
+  ['curly-value', {text: 'Your verification code is “ABCDEF”. Brand coupon code SAVE20'}, true]
+]) {
+  test('R23 actual consumer admission: ' + name, () => {
+    const {ctx} = harness(); let calls = 0;
+    ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+    const outcome = ctx.extractCouponOutcome_({incomplete: false, ...message});
+    assert.equal(outcome.excludedReason === 'authentication_code_message', excluded);
+    assert.equal(calls, excluded ? 0 : 1);
+    if (!excluded) assert.equal(outcome.candidates[0].code, 'SAVE20');
+  });
+}
 
 test('R21 account and identity confirmation labels exclude mixed mail before the model', () => {
   const {ctx} = harness();
