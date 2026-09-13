@@ -61,7 +61,7 @@ test('real admission checkpoints excluded mail without candidate staging, coupon
   }
 });
 
-test('image authentication excludes before staging and is a no-op for Retry', () => {
+test('image authentication excludes before staging and Retry checkpoints exclusion without row changes', () => {
   const {png} = require('./mime-fixtures');
   const {wireCandidate} = require('./ai-wire-fixtures');
   for (const incomplete of [false, true]) {
@@ -94,12 +94,13 @@ test('image authentication excludes before staging and is a no-op for Retry', ()
     ctx.runImportWorkflow_(retryState);
     const journal = ctx.getMessageState_(retryState.journalSheet, message.id);
     const before = JSON.stringify({rows: retryState.couponSheet._values, notes: retryState.couponSheet._notes,
-      journal: retryState.journalSheet._values});
+      payload: journal.batchIntent});
     const retried = ctx.retryReviewCandidate_(retryState.couponSheet, 2, journal, journal.candidateStates[0],
       message, retryState.journalSheet, config);
     assert.equal(retried.excludedReason, 'authentication_code_message');
+    assert.equal(ctx.getMessageState_(retryState.journalSheet, message.id).outcome, 'authentication_code_message');
     assert.equal(JSON.stringify({rows: retryState.couponSheet._values, notes: retryState.couponSheet._notes,
-      journal: retryState.journalSheet._values}), before);
+      payload: ctx.getMessageState_(retryState.journalSheet, message.id).batchIntent}), before);
   }
 });
 
@@ -169,7 +170,7 @@ test('concept-only authentication discussion does not suppress grounded review c
   }
 });
 
-test('Retry exclusion is a no-op for an existing immutable review batch', () => {
+test('Retry exclusion preserves existing rows and immutable payload while checkpointing admission', () => {
   const {ctx, config} = harness();
   const message = {id: 'abc123', receivedAtMs: 0, subject: '', sender: '',
     link: 'https://mail.google.com/mail/#all/abc123', text: 'Brand coupon code SAVE20', incomplete: false};
@@ -177,7 +178,7 @@ test('Retry exclusion is a no-op for an existing immutable review batch', () => 
   const state = stateWithExtraction(ctx, {config, couponSheet: coupon, journalSheet, messages: [message]});
   ctx.runImportWorkflow_(state);
   const journal = ctx.getMessageState_(journalSheet, message.id);
-  const before = JSON.stringify({rows: coupon._values, notes: coupon._notes, journal: journalSheet._values});
+  const before = JSON.stringify({rows: coupon._values, notes: coupon._notes, payload: journal.batchIntent});
   ctx.callGeminiModel_ = () => assert.fail('Retry auth exclusion must precede model');
   ctx.Gmail.Users.Messages = {modify: () => assert.fail('Retry exclusion must not mutate Gmail')};
   const {authenticationMessages} = require('./authentication-fixtures');
@@ -185,7 +186,8 @@ test('Retry exclusion is a no-op for an existing immutable review batch', () => 
     const outcome = ctx.retryReviewCandidate_(coupon, 2, journal, journal.candidateStates[0],
       {...message, text: '', ...source}, journalSheet, config);
     assert.equal(outcome.excludedReason, 'authentication_code_message', JSON.stringify(source));
-    assert.equal(JSON.stringify({rows: coupon._values, notes: coupon._notes, journal: journalSheet._values}), before);
+    assert.equal(ctx.getMessageState_(journalSheet, message.id).outcome, 'authentication_code_message');
+    assert.equal(JSON.stringify({rows: coupon._values, notes: coupon._notes, payload: journal.batchIntent}), before);
   }
 });
 

@@ -92,6 +92,71 @@ function interruptedAuthenticationBatch(written) {
   return f;
 }
 
+test('R20 Retry persists image authentication across Ignore, restart and Confirm', () => {
+  const {png} = require('./mime-fixtures');
+  const f = fixture(); f.run();
+  const rows = JSON.stringify([f.coupon.rows, f.coupon.notes]);
+  const payload = JSON.stringify(f.saved().batchIntent);
+  const message = {...f.message, images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-auth'}]};
+  f.ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: [], authentication: {quote: '', image: 0}})});
+  const saved = f.saved();
+  assert.equal(f.ctx.retryReviewCandidate_(f.coupon, 2, saved, saved.candidateStates[0], message, f.journal, f.config).excludedReason,
+    'authentication_code_message');
+  assert.equal(f.saved().outcome, 'authentication_code_message');
+  assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rows);
+  assert.equal(JSON.stringify(f.saved().batchIntent), payload);
+  f.boot(); f.action(2, 'Ignore');
+  assert.equal(f.saved().outcome, 'authentication_code_message');
+  assert.equal(f.saved().candidateStates[0].status, 'ignored');
+  const checkpoint = JSON.stringify(f.journal.rows);
+  f.ctx.Gmail.Users.Messages.get = () => assert.fail('known exclusion must not fetch');
+  assert.equal(f.action(3, 'Confirm').excludedReason, 'authentication_code_message');
+  assert.equal(JSON.stringify(f.journal.rows), checkpoint);
+  assert.equal(f.coupon.rows[2][17], 'Needs review'); assert.equal(f.mutations.length, 0);
+});
+
+test('R20 Retry image exclusion survives checkpoint response loss without row writes', () => {
+  const {png} = require('./mime-fixtures');
+  for (const mode of ['not-written', 'response-loss', 'invalid-proof']) {
+    const f = fixture(); f.run();
+    const rows = JSON.stringify([f.coupon.rows, f.coupon.notes]);
+    const payload = JSON.stringify(f.journal.rows[1].slice(2));
+    const message = {...f.message, images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-auth'}]};
+    f.ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: [],
+      authentication: {quote: '', image: mode === 'invalid-proof' ? 9 : 0}})});
+    const getRange = f.journal.getRange;
+    f.journal.getRange = (...args) => {
+      const range = getRange(...args);
+      return {...range, setValues: values => {
+        if (args[1] === 1 && JSON.parse(values[0][1]).outcome === 'authentication_code_message') {
+          if (mode === 'response-loss') range.setValues(values);
+          throw new Error('checkpoint interrupted');
+        }
+        range.setValues(values);
+      }};
+    };
+    const state = f.saved();
+    const retry = () => f.ctx.retryReviewCandidate_(f.coupon, 2, state, state.candidateStates[0], message, f.journal, f.config);
+    if (mode === 'invalid-proof') {
+      assert.equal(retry().status, 'failed');
+      // Existing review-error behavior exposes Confirm but cannot promote it.
+      const expected = JSON.parse(rows); expected[0][1][24] = 'Confirm';
+      assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), JSON.stringify(expected));
+    } else {
+      assert.throws(retry);
+      assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rows);
+    }
+    assert.equal(JSON.stringify(f.journal.rows[1].slice(2)), payload);
+    assert.equal(f.mutations.length, 0);
+    f.journal.getRange = getRange; f.boot();
+    assert.equal(f.saved().outcome === 'authentication_code_message', mode === 'response-loss');
+    if (mode === 'response-loss') {
+      f.ctx.Gmail.Users.Messages.get = () => assert.fail('persisted image exclusion must not fetch');
+      assert.equal(f.action(2, 'Confirm').excludedReason, 'authentication_code_message');
+    }
+  }
+});
+
 test('R16 readable authentication stops partial and mail-stage v3 replay without changing retained payload or rows', () => {
   for (const written of [0, 1, 2]) {
     for (const labelApplied of [false, true]) {

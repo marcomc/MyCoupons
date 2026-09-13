@@ -17,6 +17,10 @@
   excluded partial batches during scanner recovery or Retry.
   Apply the same exclusion before manual Confirm promotion and finalization;
   ordinary edited/incomplete coupon evidence remains manually reviewable.
+  Persist validated Retry image exclusions across Ignore and restart. Replace
+  adjective lists with explicit assignment presentation for ambiguous all-letter
+  values; preserve digit-bearing/mixed identities, governing preposed purposes
+  and recipient-qualified passive issuance.
   Associate subject/body issuance, labels in either direction, alphabetic
   values, and heading/instruction/value layouts without relaxing factual quote
   boundaries. Keep verification actions tied to authentication targets and

@@ -201,9 +201,14 @@ The example configuration contains product defaults only.
   purchase wording.
   This is a bounded text recognizer, not universal language understanding:
   recognition requires a concrete 3–40-code-point value with an issuance
-  relation, independently of letter case. Ordinary predicates such as REQUIRED and
-  NECESSARIO, example/documentation frames, and explicit placeholder forms
-  are not guessed as issued values. URL and email references are not code values.
+  relation, independently of letter case. Bare all-letter words, including
+  surrounding punctuation, are ambiguous with status prose: they require an
+  explicit assignment delimiter, matched value wrapper (also before a sentence stop), or affirmative use
+  instruction. Digit-bearing or internally mixed Unicode values retain unwrapped
+  issuance support. A governing purpose may precede the imperative; supported
+  recipient-qualified passive issuance must still present a concrete value.
+  Examples, documentation and explicit placeholders are not issued values.
+  URL and email references are not code values. The model uses the same contract.
   If text does not decide admission, the model also checks inspected images.
   Its response requires `authentication: null` or `{quote, image}` alongside
   `candidates`. Valid image authentication excludes the whole message before
@@ -220,6 +225,8 @@ The example configuration contains product defaults only.
   row replay or Gmail finalization. Exclusion preserves their immutable payload,
   existing rows and acknowledged mail flags; it does not mark a partial batch
   complete. The scanner and Retry respect that checkpoint after restart.
+  Retry also persists validated image-only exclusion; Ignore may change its row
+  disposition but cannot erase the exclusion or re-enable later Confirm.
   No historical rows are removed. Confirm also checks readable-source
   authentication before promoting a row, including historical complete batches.
   A persisted authentication exclusion blocks Confirm and Retry. Manual review

@@ -51,7 +51,7 @@ test('subject is independent factual evidence while sender remains metadata only
 
 for (const [name, message, code, quote] of [
   ['subject-purpose', {subject: 'Sign in to Acme', text: 'Your code is 123456'}, '123456'],
-  ['alphabetic', {text: 'Acme: Your verification code is ABCDEF'}, 'ABCDEF'],
+  ['alphabetic', {text: 'Acme: Your verification code is "ABCDEF"'}, 'ABCDEF'],
   ['heading-expiry', {subject: 'Acme', html: '<h1>Your verification code</h1><p>123456 expires in 10 minutes</p>'},
     '123456', '123456 expires in 10 minutes'],
   ['trailing-label', {text: 'Acme: 123456 is your verification code.'}, '123456']
@@ -221,7 +221,7 @@ for (const text of ['Your verification code:123456', 'OTP=123456',
 
 test('R14 admission delimiters never split factual coupon codes', () => {
   const {ctx} = harness();
-  for (const code of ['SAVE:20', 'SAVE=20', 'ABC.77', 'ÈTÉ:20=VIP']) {
+  for (const code of ['SAVE:20', 'SAVE=20', 'ABC.77', 'ÈTÉ:20=VIP', '"aBcDeF".', "'aBcDeF'!", '<aBcDeF>?']) {
     const message = {text: 'Brand coupon code ' + code, incomplete: false};
     assert.equal(ctx.authenticationMessage_(ctx.candidateSource_(message)), false);
     assert.deepEqual(Array.from(ctx.deterministicCandidates_(message), candidate => candidate.code), [code]);
@@ -439,6 +439,39 @@ test('R19 issuer names do not turn clear authentication issuance into an example
   const outcome = ctx.extractCouponOutcome_({text: 'Sample Bank: Your verification code is 123456', incomplete: false});
   assert.equal(outcome.excludedReason, 'authentication_code_message');
   assert.equal(outcome.archiveAllowed, false);
+});
+
+for (const text of ['To sign in, use code 123456. Brand coupon code SAVE20',
+  'Your verification code is "aBcDeF". Brand coupon code SAVE20',
+  'To sign in, use this code 123456. Brand coupon code SAVE20',
+  'Acme Inc.: To sign in, use code 123456. Brand coupon code SAVE20',
+  'A verification code has been sent to you: 123456. Brand coupon code SAVE20']) {
+  test('R20 actual consumer recognizes governing issuance: ' + text, () => {
+    const {ctx} = harness(); let calls = 0;
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      return aiResponse({code: '123456.', evidence: {merchant: {quote: 'Brand'}, code: {quote: text}}});
+    };
+    const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+    assert.equal(outcome.excludedReason, 'authentication_code_message');
+    assert.equal(calls, 0); assert.equal(outcome.archiveAllowed, false);
+  });
+}
+
+test('R20 bare alphabetic status and code words cannot establish source or model authentication', () => {
+  const {ctx} = harness();
+  for (const word of ['incorrect', 'wrong', 'missing', 'aBcDeF', 'HERE', 'ÈTÉ']) {
+    const message = {text: 'Your verification code is ' + word + '. Brand coupon code SAVE20', incomplete: false};
+    ctx.callGeminiModel_ = () => aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}});
+    const outcome = ctx.extractCouponOutcome_(message);
+    assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+    assert.equal(outcome.candidates[0].code, 'SAVE20');
+    assert.throws(() => ctx.parseAICandidateOutcome_({text: JSON.stringify({candidates: [],
+      authentication: {quote: message.text, image: null}})}, message), error => error.code === 'AI');
+    const presented = {text: 'Your verification code: ' + word, incomplete: false};
+    assert.equal(ctx.parseAICandidateOutcome_({text: JSON.stringify({candidates: [],
+      authentication: {quote: presented.text, image: null}})}, presented).excludedReason, 'authentication_code_message');
+  }
 });
 
 function aiResponse(overrides = {}) {

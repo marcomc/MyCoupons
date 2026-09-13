@@ -181,7 +181,7 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
   let extraction;
   try { extraction = extractCouponOutcome_(message); } catch (e) { return reviewFailure_(sheet, rowNumber, errorCode_(e)); }
   if (extraction.excludedReason === 'authentication_code_message') {
-    return {status: 'ignored', excludedReason: extraction.excludedReason};
+    return checkpointAuthenticationExclusion_(journalSheet, state);
   }
   const candidates = extraction.candidates;
   const row = retryComparableRow_(sheet, rowNumber, candidate.key, c);
@@ -234,6 +234,12 @@ function retryComparableRow_(sheet, rowNumber, key, c) {
 }
 
 function completeReviewMessage_(state, sheet, journalSheet, c) {
+  // An explicit Ignore can update its row, but cannot erase known image/text
+  // authentication and let a later Confirm revive the remaining batch.
+  if (authenticationExcludedState_(state)) {
+    saveMessageState_(journalSheet, state);
+    return authenticationExcludedResult_(state);
+  }
   if (!completeCandidateBatch_(state)) { keepIncompleteBatch_(state, journalSheet); return; }
   state.outcome = messageOutcome_(state.candidateStates.map(function (item) {
     const status = Object.create(null); status.status = item.status; return status;

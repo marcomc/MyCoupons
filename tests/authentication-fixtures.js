@@ -1,10 +1,10 @@
 // Synthetic admission fixtures. Mixed messages are policy tests, not observed mail.
 const authenticationMessages = [
   {subject: 'Sign in to Acme', text: 'Your code is 123456'},
-  {text: 'Acme: Your verification code is ABCDEF'},
+  {text: 'Acme: Your verification code is "ABCDEF"'},
   {subject: 'Acme', html: '<h1>Your verification code</h1><p>123456 expires in 10 minutes</p>'},
   {text: 'Acme: 123456 is your verification code.'},
-  {text: 'Acme: Your verification code is aBcDeF'},
+  {text: 'Acme: Your verification code is "aBcDeF"'},
   {text: 'Acme: Your one-time passcode is 123456'},
   {text: 'Acme: Use 123456 to confirm your email'},
   {text: 'Acme: Here is your verification code: aBcDeF'},
@@ -12,7 +12,7 @@ const authenticationMessages = [
   {text: 'Acme: This is your security passcode: aBcDeF'},
   {text: 'Acme: Use coupon passcode SAVE20 to verify your account.'},
   {text: 'Acme: Your coupon verification code is 123456'},
-  {text: 'Acme: Your discount security passcode is aBcDeF'},
+  {text: 'Acme: Your discount security passcode is "aBcDeF"'},
   {text: 'Acme: verify your account using coupon code SAVE20.'},
   {text: 'Acme: 123456 is your verification code for signing in.'},
   {text: 'Acme: Enter 123456 to sign in.'},
@@ -50,7 +50,7 @@ const authenticationMessages = [
 
 // Small synthetic cross-product of the R5 association dimensions. All consumers
 // share these cases; no example here is represented as observed private mail.
-for (const code of ['123456', 'ABCDEF', 'abcdef', 'aBcDeF', 'LOGIN77', 'ÈTÉ+20!']) {
+for (const code of ['123456', '"ABCDEF"', '"abcdef"', '"aBcDeF"', 'LOGIN77', 'ÈTÉ+20!']) {
   for (const locale of [
     {subject: 'Sign in to Acme', label: 'your verification code', generic: 'Your code is ',
       copula: ' is ', expiry: ' expires in 10 minutes'},
@@ -71,9 +71,9 @@ for (const code of ['123456', 'ABCDEF', 'abcdef', 'aBcDeF', 'LOGIN77', 'ÈTÉ+20
 }
 authenticationMessages.push(
   {text: '123456 is your verification code, valid for 10 minutes.'},
-  {text: 'ABCDEF is your verification code and expires in 10 minutes.'},
+  {text: '"ABCDEF" is your verification code and expires in 10 minutes.'},
   {subject: 'Sign in to Acme', text: '123456 is your code.'},
-  {subject: 'Reimposta la password', text: 'ABCDEF è il tuo codice.'}
+  {subject: 'Reimposta la password', text: '"ABCDEF" è il tuo codice.'}
 );
 for (const label of ['code', 'passcode', 'coupon code', 'promo code', 'discount code', 'codice', 'codice sconto']) {
   authenticationMessages.push(
@@ -85,7 +85,7 @@ for (const label of ['code', 'passcode', 'coupon code', 'promo code', 'discount 
 for (const [verb, purpose] of [['Enter', 'to sign in'], ['Use', 'for verifying your account'], ['Inserisci', 'per accedere']]) {
   authenticationMessages.push({text: 'Acme: ' + verb + ' ABCDEF ' + purpose + '.'});
 }
-for (const code of ['123456', 'aBcDeF']) {
+for (const code of ['123456', '"aBcDeF"']) {
   authenticationMessages.push(
     {text: 'Acme: Your security passcode is ' + code},
     {text: 'Acme: ' + code + ' is your one-time passcode.'},
@@ -173,7 +173,7 @@ const ordinaryMessages = [
 // Cross-boundary roles, not just the reported spellings: same literal/label
 // presented as actual issuance, an example, descriptive prose or a locator.
 for (const noun of ['code', 'passcode']) {
-  for (const code of ['123456', 'ABCDEF', 'abcdef', 'aBcDeF', 'MiXeD77']) {
+  for (const code of ['123456', '"ABCDEF"', '"abcdef"', '"aBcDeF"', 'MiXeD77']) {
     authenticationMessages.push(
       {subject: 'Your verification ' + noun, text: 'Hello Acme,\nYour ' + noun + ' is ' + code},
       {html: '<h1>Your verification ' + noun + '</h1><p>' + code + '</p>'},
@@ -191,7 +191,7 @@ for (const noun of ['code', 'passcode']) {
 }
 // R8: representation-local frames and the related label/completion boundaries.
 for (const noun of ['code', 'passcode', 'PIN']) {
-  for (const code of ['123456', 'aBcDeF']) {
+  for (const code of ['123456', '"aBcDeF"']) {
     const label = 'Your login ' + noun;
     authenticationMessages.push(
       {text: 'Acme: ' + label + ' is ' + code},
@@ -335,7 +335,7 @@ ordinaryMessages.push(
   {text: 'Learn how to use your verification code 123456. Brand coupon code SAVE20'},
   {text: 'We never ask you to enter your verification code 123456. Brand coupon code SAVE20'}
 );
-authenticationMessages.push({text: 'Your verification code is HERE'});
+authenticationMessages.push({text: 'Your verification code is "HERE"'});
 for (const purpose of ['access your account', 'access the profile', 'verify your account', 'verify your identity',
   'verify your email', 'verify your phone number', 'verificare la tua identità']) {
   authenticationMessages.push(
@@ -374,14 +374,14 @@ for (const qualifier of ['email confirmation', 'e-mail confirmation', 'MFA']) {
     const label = qualifier + ' ' + noun;
     authenticationMessages.push(
       {text: 'Acme: Your ' + label + ' is 123456'},
-      {text: 'Acme: aBcDeF is your ' + label + '.'},
+      {text: 'Acme: "aBcDeF" is your ' + label + '.'},
       {subject: 'Your ' + label, text: '123456'},
       {html: '<h1>Your ' + label + '</h1><p>123456 expires in 10 minutes.</p>'},
       {text: 'Use your ' + label + ':\n123456'},
       {text: 'Your ' + label + ' is 123456. Brand coupon code SAVE20'},
       {text: 'Your ' + label + ' is "123 456".'},
       {text: 'This is not a ' + label + ': SAVE20; your ' + label + ' is 123456'},
-      {text: 'Example: Your ' + label + ' is 123456.\nYour ' + label + ' is aBcDeF'}
+      {text: 'Example: Your ' + label + ' is 123456.\nYour ' + label + ' is "aBcDeF"'}
     );
     ordinaryMessages.push(
       {text: 'Your ' + label + ' is confidential. Brand coupon code SAVE20'},
@@ -404,7 +404,7 @@ for (const label of ['verification code', 'MFA code', 'email confirmation code',
     ordinaryMessages.push({subject: 'Your verification code', text: prefix + label + ' 123456? Brand coupon code SAVE20'});
     authenticationMessages.push({text: prefix + label + ' 123456? Your verification code is 654321'});
   }
-  for (const value of ['123456', 'aBcDeF', '"123 456"', 'ABC+12!']) {
+  for (const value of ['123456', '"aBcDeF"', '"123 456"', 'ABC+12!']) {
     authenticationMessages.push({text: 'Use ' + value + ' as your ' + label + '. Brand coupon code SAVE20'});
   }
   ordinaryMessages.push(
@@ -437,7 +437,7 @@ for (const locator of ['help.acme.example/article/12345', '//help.acme.example/a
 }
 for (const label of ['verification code', 'account access code', 'account access PIN']) {
   for (const purpose of ['to sign in', 'for signing in', 'to verify your account']) {
-    for (const value of ['123456', 'aBcDeF', '"123 456"']) {
+    for (const value of ['123456', '"aBcDeF"', '"123 456"']) {
       authenticationMessages.push(
         {text: 'Use the ' + label + ' ' + purpose + ': ' + value},
         {text: 'Use the ' + label + ' ' + purpose + ':' + value},
@@ -464,7 +464,7 @@ ordinaryMessages.push(
 );
 for (const label of ['Your verification code', 'OTP', 'Your account access PIN']) {
   for (const delimiter of [':', '=']) {
-    for (const value of ['123456', 'aBcDeF', '"123 456"', 'ABC:77!']) {
+    for (const value of ['123456', '"aBcDeF"', '"123 456"', 'ABC:77!']) {
       authenticationMessages.push({text: label + delimiter + value + '. Brand coupon code SAVE20'});
     }
     ordinaryMessages.push(
@@ -509,7 +509,7 @@ for (const label of ['verification code', 'MFA code', 'account access PIN']) {
   authenticationMessages.push(
     {text: 'Your ' + label + ' will be 123456. Brand coupon code SAVE20'},
     {html: '<h1>Your ' + label + ' will be</h1><p>123456</p>'},
-    {text: 'Your ' + label + ' to verify your email will be aBcDeF'}
+    {text: 'Your ' + label + ' to verify your email will be "aBcDeF"'}
   );
   ordinaryMessages.push(
     {text: 'Your ' + label + ' will be confidential. Brand coupon code SAVE20'},
@@ -563,8 +563,8 @@ for (const location of ['here', 'below', 'above']) {
 }
 ordinaryMessages.push({text: 'If 123456 will be your verification code for MFA, contact support. Brand coupon code SAVE20'});
 authenticationMessages.push(
-  {text: 'Your verification code is HERE'},
-  {text: 'Your verification code will be HERE'},
+  {text: 'Your verification code is "HERE"'},
+  {text: 'Your verification code will be "HERE"'},
   {text: '123456 will be your verification code for MFA'},
   {text: 'If 123456 will be your verification code for MFA, your verification code is 654321'}
 );
@@ -572,7 +572,7 @@ for (const label of ['one-time password', 'one time password', 'onetime password
   authenticationMessages.push(
     {text: 'Your ' + label + ' is 123456'},
     {text: 'Your ' + label + '=123456. Brand coupon code SAVE20'},
-    {html: '<h1>Your ' + label + '</h1><p>aBcDeF</p>'},
+    {html: '<h1>Your ' + label + '</h1><p>"aBcDeF"</p>'},
     {text: '123456 is your ' + label},
     {subject: 'Your ' + label, text: 'Your code is 123456'}
   );
@@ -592,7 +592,7 @@ for (const label of ['2FA code', 'two-factor code', 'two factor PIN', 'multi-fac
     {text: 'Your ' + label + ':123456'},
     {text: 'Use 123456 as your ' + label},
     {text: 'Example: Your ' + label + ' is 123456. Your ' + label + ' is 654321'},
-    {html: '<h1>Your ' + label + '</h1><p>aBcDeF</p>'},
+    {html: '<h1>Your ' + label + '</h1><p>"aBcDeF"</p>'},
     {text: '123456 is your ' + label},
     {subject: 'Your ' + label, text: 'Your code is 123456'}
   );
@@ -626,7 +626,7 @@ for (const label of ['account recovery code', 'account-recovery code', 'account 
     {text: 'Your ' + label + '=123456'},
     {text: '123456 is your ' + label},
     {text: 'Use 123456 as your ' + label},
-    {subject: 'Your ' + label, text: 'Your code is aBcDeF'},
+    {subject: 'Your ' + label, text: 'Your code is "aBcDeF"'},
     {html: '<h1>Your ' + label + ':</h1><p>123456</p>'},
     {text: 'Example: Your ' + label + ' is 123456. Your ' + label + ' is 654321'}
   );
@@ -677,5 +677,61 @@ for (const marker of ['Example 1:', 'Sample 2:', 'Documentation says', 'Document
 for (const issuer of ['Sample 123 Bank', 'Documentation 2 Services']) {
   authenticationMessages.push({text: issuer + ': Your verification code is 123456'});
   ordinaryMessages.push({text: issuer + ': Example 1: Your verification code is 123456. Brand coupon code SAVE20'});
+}
+// R20: bare words are ambiguous regardless of spelling or capitalization.
+for (const value of ['incorrect', 'wrong', 'missing', 'unrecognized', 'abcdef', 'aBcDeF', 'HERE', 'ÈTÉ']) {
+  for (const suffix of ['', '.', '!']) ordinaryMessages.push(
+    {text: 'Your verification code is ' + value + suffix + '\nBrand coupon code SAVE20'},
+    {text: 'Brand: ' + value + suffix + ' is your verification code. Brand coupon code SAVE20'},
+    {subject: 'Your verification code', text: 'Your code is ' + value + suffix + '\nBrand coupon code SAVE20'}
+  );
+  for (const issued of ['Your verification code: ' + value, 'Your verification code is "' + value + '"',
+    'Use code ' + value + ' to sign in', '"' + value + '" is your verification code']) {
+    authenticationMessages.push({text: issued});
+  }
+  authenticationMessages.push({html: '<h1>Your verification code:</h1><p>' + value + '</p>'});
+  for (const [open, close] of [['"', '"'], ["'", "'"], ['<', '>']]) {
+    for (const suffix of ['.', '!', '?']) {
+      authenticationMessages.push({text: 'Your verification code is ' + open + value + close + suffix + ' Brand coupon code SAVE20'});
+      ordinaryMessages.push({text: 'Example: Your verification code is ' + open + value + close + suffix + ' Brand coupon code SAVE20'});
+    }
+    ordinaryMessages.push(
+      {text: 'Your verification code is ' + open + value + '. Brand coupon code SAVE20'},
+      {text: 'Your verification code is ' + value + close + '. Brand coupon code SAVE20'}
+    );
+  }
+}
+for (const purpose of ['To sign in', 'To verify your account', 'For MFA', 'Per accedere']) {
+  authenticationMessages.push({text: purpose + ', use code 123456. Brand coupon code SAVE20'});
+  ordinaryMessages.push(
+    {text: 'Example: ' + purpose + ', use code 123456. Brand coupon code SAVE20'},
+    {text: 'You said: ' + purpose + ', use code 123456. Brand coupon code SAVE20'},
+    {text: purpose + ', do not use code 123456. Brand coupon code SAVE20'},
+    {text: purpose + ', use code Brand coupon code SAVE20'}
+  );
+  for (const issuer of ['', 'Acme Inc.: ', 'Example Co.: ']) for (const determiner of ['', 'this ']) {
+    authenticationMessages.push({text: issuer + purpose + ', use ' + determiner + 'code 123456. Brand coupon code SAVE20'});
+    ordinaryMessages.push(
+      {text: issuer + purpose + '. Use ' + determiner + 'code SAVE20. Brand coupon code SAVE20'},
+      {text: issuer + purpose + ', do not use ' + determiner + 'code 123456. Brand coupon code SAVE20'},
+      {text: 'You said: ' + issuer + purpose + ', use ' + determiner + 'code 123456. Brand coupon code SAVE20'},
+      {text: 'Example: ' + issuer + purpose + ', use ' + determiner + 'code 123456. Brand coupon code SAVE20'}
+    );
+  }
+  authenticationMessages.push({text: 'Welcome back. Acme Inc.: ' + purpose + ', use this code 123456. Brand coupon code SAVE20'});
+}
+ordinaryMessages.push({text: 'To verify your account discount, use code SAVE20. Brand coupon code SAVE20'});
+for (const tense of ['has been', 'was']) {
+  authenticationMessages.push(
+    {text: 'A verification code ' + tense + ' sent to you: 123456. Brand coupon code SAVE20'},
+    {text: 'Your verification code ' + tense + ' sent to you:\n"aBcDeF"'},
+    {html: '<h1>A verification code ' + tense + ' sent to you:</h1><p>123456</p>'}
+  );
+  ordinaryMessages.push(
+    {text: 'A verification code ' + tense + ' sent to you. Brand coupon code SAVE20'},
+    {text: 'A verification code ' + tense + ' sent to you:\nBrand coupon code SAVE20'},
+    {text: 'Example: A verification code ' + tense + ' sent to you: 123456. Brand coupon code SAVE20'},
+    {text: 'Your verification code ' + tense + ' not sent to you: 123456. Brand coupon code SAVE20'}
+  );
 }
 module.exports = {authenticationMessages, ordinaryMessages};
