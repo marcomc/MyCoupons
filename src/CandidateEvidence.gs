@@ -84,7 +84,18 @@ function authenticationMessage_(source) {
   let example = false;
   const subject = source.sourceSpans.find(function (span) { return span.kind === 'subject'; });
   const subjectPurpose = Boolean(subject && authenticationSubject_(subject.text));
+  const subjectHeading = Boolean(subject && !authenticationDiscussion_(subject.text) && authenticationHeading_(subject.text.trim()));
+  const subjectExample = Boolean(subject && (authenticationExampleHeading_(subject.text.trim()) ||
+    authenticationHeading_(subject.text.trim()) && authenticationDiscussion_(subject.text)));
+  let representation;
   for (const sourceSpan of source.sourceSpans) {
+    if (sourceSpan.kind !== representation) {
+      // Plain text and HTML are independent alternatives. Only explicit subject
+      // associations seed each body; transient body frames never cross between them.
+      heading = sourceSpan.kind !== 'subject' && subjectHeading;
+      example = sourceSpan.kind !== 'subject' && subjectExample;
+      representation = sourceSpan.kind;
+    }
     const span = sourceSpan.text;
     let offset = 0;
     for (const line of span.split('\n')) {
@@ -99,7 +110,7 @@ function authenticationMessage_(source) {
       }
       const tokens = /\S+/gu;
       let match;
-      while ((match = tokens.exec(line))) {
+      while (!codeHeading && !exampleHeading && (match = tokens.exec(line))) {
         const code = codeLexemes_(match[0])[0];
         if (!authenticationLiteral_(code)) continue;
         const wrapped = code !== match[0];
@@ -134,12 +145,15 @@ function authenticationLiteral_(token) {
     !/^(?:OTP|CODE|PASSCODE|PIN|XXX+|CODE_HERE)[.!?,;:]*$/iu.test(token);
 }
 function authenticationLabelPattern_() {
-  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp)\\s+(?:code|passcode)|' +
+  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp)\\s+(?:code|passcode|pin)|' +
     'passcode|otp|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso|reimpostazione(?:\\s+password)?))';
+}
+function authenticationLabelQualifier_() {
+  return '(?:\\s+(?:is|è|e[’\x27]|monouso|below|shown\\s+below|riportato\\s+sotto|seguente))*';
 }
 function authenticationHeading_(text) {
   return new RegExp('^(?:[\\p{L}\\p{N} ._-]{1,60}:\\s*)?(?:(?:your|il\\s+tuo|tuo)\\s+)?' +
-    authenticationLabelPattern_() + '(?:\\s+monouso)?\\s*[:=]?$','iu').test(text);
+    authenticationLabelPattern_() + authenticationLabelQualifier_() + '\\s*[:=]?$','iu').test(text);
 }
 function authenticationSubject_(text) {
   // Only an explicit authentication request supplies message-level purpose.
@@ -155,6 +169,7 @@ function authenticationSubject_(text) {
 }
 function authenticationValueTail_(text) {
   return authenticationPurposeTail_(text) ||
+    /^[^\S\n]*(?:[,;][^\S\n]*)?(?:(?:and|e)\s+)?(?:(?:should|must)\s+not\s+be\s+shared|(?:do\s+not|never)\s+share|(?:must|should)\s+be\s+kept\s+secret|non\s+(?:deve\s+essere\s+condiviso|condividerlo)|deve\s+rimanere\s+segreto)(?![\p{L}\p{N}\p{M}_])/iu.test(text) ||
     /^\s*(?:for\s+(?:(?:your|the)\s+)?(?:account|order|purchase)|per\s+(?:(?:il\s+tuo|il|la\s+tua|la)\s+)?(?:account|ordine|acquisto))\b/iu.test(text) ||
     /^[^\S\n]*(?:$|\n|[.!?](?:\s|$)|(?:(?:[,;]|and|e)\s*)?(?:expires?|is\s+valid|valid\s+(?:for|until)|scad(?:e|rà)|(?:è\s+)?valid[oa]\s+(?:per|fino))(?![\p{L}\p{N}\p{M}_]))/iu.test(text);
 }
@@ -169,7 +184,7 @@ function authenticationConfirmationPattern_() {
     'conferma(?:re)?\\s+(?:(?:la\\s+tua|il\\s+tuo|la|il)\\s+)?(?:e-?mail|account|identità))';
 }
 function authenticationCodeNoun_() {
-  return '(?:(?:(?:coupon|promo(?:tional)?|discount)\\s+)?(?:code|passcode)|codice(?:\\s+sconto)?)';
+  return '(?:(?:(?:coupon|promo(?:tional)?|discount)\\s+)?(?:code|passcode|pin)|codice(?:\\s+sconto)?)';
 }
 function authenticationDiscussionClause_(text) {
   // A reference to another example is not an example of this issuance. Keep
@@ -195,7 +210,7 @@ function authenticationIssuance_(before, after) {
   before = before.slice(Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'),
     before.lastIndexOf('?'), before.lastIndexOf('\n')) + 1);
   const label = authenticationLabelPattern_();
-  const qualifier = '(?:\\s+(?:is|è|e[’\x27]|monouso|below|shown\\s+below|riportato\\s+sotto|seguente))*';
+  const qualifier = authenticationLabelQualifier_();
   const precedingLabel = new RegExp('\\b' + label + qualifier + '\\s*[:=]?\\s*$', 'iu').exec(before);
   // In "value is your verification code ..." the label belongs to the value
   // before it; its following descriptive words cannot become another value.
@@ -207,11 +222,11 @@ function authenticationIssuance_(before, after) {
   const issuingLabel = Boolean(precedingLabel && !reversed && !promotional);
   const followingPrefix = '^\\s+(?:is|è|e[’\x27])\\s+(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?';
   const followingLabel = new RegExp(followingPrefix + label + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
-  const followingGeneric = new RegExp(followingPrefix + '(?:code|passcode|codice)(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
+  const followingGeneric = new RegExp(followingPrefix + '(?:code|passcode|pin|codice)(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
   const following = followingLabel || followingGeneric;
   const continuation = following ? after.slice(following[0].length) : after;
   const completeValue = authenticationValueTail_(continuation);
-  const generic = /(?:^|\s|:)(?:(?:your|the|il\s+tuo|il|tuo)\s+)?(?:code|passcode|codice)\s*(?:(?:is|è|e[’'])\s*[:=]?\s+|[:=]\s*)$/iu.exec(before);
+  const generic = /(?:^|\s|:)(?:(?:your|the|il\s+tuo|il|tuo)\s+)?(?:code|passcode|pin|codice)\s*(?:(?:is|è|e[’'])\s*[:=]?\s+|[:=]\s*)$/iu.exec(before);
   const genericIssued = Boolean(generic && !/\b(?:coupon|promo(?:tional)?|discount|sconto|use|enter|type|usa|inserisci|digita)\s*$/iu.test(before.slice(0, generic.index)));
   const noun = authenticationCodeNoun_();
   const introduced = new RegExp('\\b' + noun + '\\s*(?:is\\s*)?[:=]?\\s*$', 'iu').test(before);

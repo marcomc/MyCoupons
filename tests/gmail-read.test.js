@@ -44,16 +44,21 @@ test('canonical authentication admission precedes all image acquisition and reta
   let images = 0;
   ctx.acquireMessageImages_ = () => { images++; return {images: [], incomplete: false}; };
   for (const source of authenticationMessages.concat(ordinaryMessages)) {
-    const raw = {id: 'abc123', internalDate: '0', payload: {mimeType: source.html ? 'text/html' : 'text/plain',
-      headers: [{name: 'Subject', value: source.subject || ''}], body: body(source.html || source.text || '')}};
-    const before = images;
-    const canonical = ctx.canonicalGmailMessage_(raw);
-    const excluded = authenticationMessages.includes(source);
-    assert.equal(images - before, excluded ? 0 : 1, JSON.stringify(source));
-    assert.equal(canonical.subject, source.subject || '');
-    assert.equal(canonical.text, source.html ? '' : source.text || '');
-    assert.equal(canonical.html, source.html || '');
-    assert.equal(ctx.authenticationMessage_(ctx.candidateSource_(canonical)), excluded);
+    const parts = [['text', 'text/plain'], ['html', 'text/html']]
+      .filter(([key]) => typeof source[key] === 'string')
+      .map(([key, mimeType]) => ({mimeType, body: body(source[key])}));
+    for (const ordered of parts.length > 1 ? [parts, parts.slice().reverse()] : [parts]) {
+      const raw = {id: 'abc123', internalDate: '0', payload: {mimeType: 'multipart/alternative',
+        headers: [{name: 'Subject', value: source.subject || ''}], parts: ordered}};
+      const before = images;
+      const canonical = ctx.canonicalGmailMessage_(raw);
+      const excluded = authenticationMessages.includes(source);
+      assert.equal(images - before, excluded ? 0 : 1, JSON.stringify(source));
+      assert.equal(canonical.subject, source.subject || '');
+      assert.equal(canonical.text, source.text || '');
+      assert.equal(canonical.html, source.html || '');
+      assert.equal(ctx.authenticationMessage_(ctx.candidateSource_(canonical)), excluded);
+    }
   }
 });
 

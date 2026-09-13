@@ -188,4 +188,62 @@ for (const noun of ['code', 'passcode']) {
     ordinaryMessages.push({text: 'Verification ' + noun + ' ' + value + ' is described in our documentation. Brand coupon code SAVE20'});
   }
 }
+// R8: representation-local frames and the related label/completion boundaries.
+for (const noun of ['code', 'passcode', 'PIN']) {
+  for (const code of ['123456', 'aBcDeF']) {
+    const label = 'Your login ' + noun;
+    authenticationMessages.push(
+      {text: 'Acme: ' + label + ' is ' + code},
+      {text: 'Acme: ' + code + ' is your login ' + noun + '.'},
+      {subject: 'Sign in to Acme', text: 'Your ' + noun + ' is ' + code},
+      {subject: 'Sign in to Acme', text: code + ' is your ' + noun + '.'},
+      {text: 'Acme: use ' + noun + ' ' + code + ' to sign in.'},
+      {text: 'Acme: verify your account using ' + noun + ' ' + code},
+      {text: label + ' is\n' + code},
+      {html: '<h1>' + label + ' is:</h1><p>' + code + '</p>'},
+      {subject: label + ' is', text: code},
+      {text: label + ' is ' + code + ' and should not be shared.'},
+      {text: code + ' is your login ' + noun + ', do not share it.'},
+      {html: '<h1>' + label + '</h1><p>' + code + ' must not be shared.</p>'}
+    );
+    ordinaryMessages.push(
+      {text: 'For example, ' + label + ' is ' + code + ' and should not be shared. Brand coupon code SAVE20'},
+      {text: label + ' is\nrequired before checkout. Brand coupon code SAVE20'},
+      {html: '<h1>' + label + ' is:</h1><p>described in documentation.</p><p>Brand coupon code SAVE20</p>'}
+    );
+  }
+}
+for (const tail of [' and must be kept secret.', '; never share it.', ' e non deve essere condiviso.', ' e non condividerlo.', ' e deve rimanere segreto.']) {
+  authenticationMessages.push({text: 'Il tuo codice di verifica è 123456' + tail});
+}
+for (const heading of ['Your verification code', 'Your verification code is', 'Example:', 'Documentation example:']) {
+  authenticationMessages.push({text: heading, html: '<p>Your verification code is 123456</p>'});
+  ordinaryMessages.push({text: heading, html: '<p>SAVE20.</p><p>Brand coupon code SAVE20</p>'});
+}
+for (const text of [undefined, '', 'Unrelated greeting.', 'Your verification code\nUnrelated greeting.']) {
+  authenticationMessages.push({text, html: '<h1>Your verification code is</h1><p>123456</p>'});
+  ordinaryMessages.push({text, html: '<p>SAVE20.</p><p>Brand coupon code SAVE20</p>'});
+}
+authenticationMessages.push(
+  {subject: 'Your verification code', text: 'Unrelated greeting.', html: '<p>123456</p>'},
+  {subject: 'Example: Your verification code', text: 'Brand coupon code SAVE20', html: '<p>Unrelated greeting.</p><p>Your verification code is 123456</p>'},
+  {text: 'Your verification code is\n123456', html: '<p>Example:</p>'},
+  {text: 'Il tuo codice di verifica è:\n123456'},
+  {html: '<h1>Il tuo codice di verifica è</h1><p>123456</p>'}
+);
+ordinaryMessages.push(
+  {subject: 'Example: Your verification code', text: 'Unrelated greeting.', html: '<p>Your verification code is 123456</p><p>Brand coupon code SAVE20</p>'},
+  {text: 'SAVE20.\nBrand coupon code SAVE20', html: '<h1>Your verification code</h1>'},
+  {text: 'SAVE20.\nBrand coupon code SAVE20', html: '<h1>Example:</h1>'},
+  {text: 'Your verification code is\nUnrelated greeting.\nSAVE20.\nBrand coupon code SAVE20'},
+  {html: '<h1>Your verification code is</h1><p>Unrelated greeting.</p><p>SAVE20.</p><p>Brand coupon code SAVE20</p>'},
+  {text: 'Your verification code is 2FA and is described in documentation. Brand coupon code SAVE20'},
+  {text: 'Your verification code is 2FA and represents a login mechanism. Brand coupon code SAVE20'},
+  {text: 'Brand: Your product PIN is 123456. Brand coupon code SAVE20'},
+  {text: 'Brand: Address PIN is 123456. Brand coupon code SAVE20'},
+  {text: 'Brand: coupon PIN SAVE20 for your order. Brand coupon code SAVE20'},
+  {text: 'Your login PIN is ready. Brand coupon code SAVE20'},
+  {text: 'Your login PIN is help123@example.com. Brand coupon code SAVE20'},
+  {text: 'Your login PIN is https://help.example/123. Brand coupon code SAVE20'}
+);
 module.exports = {authenticationMessages, ordinaryMessages};

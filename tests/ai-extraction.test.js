@@ -71,6 +71,29 @@ for (const [name, message, code, quote] of [
   });
 }
 
+for (const [name, message, excluded] of [
+  ['qualified-pin', {text: 'Acme: Your login PIN is 123456'}, true],
+  ['representation-heading', {text: 'Your verification code', html: '<p>SAVE20.</p><p>Brand coupon code SAVE20</p>'}, false],
+  ['advisory', {text: 'Acme: Your verification code is 123456 and should not be shared.'}, true],
+  ['copula-heading', {subject: 'Acme', text: 'Your verification code is\n123456'}, true],
+  ['representation-example', {subject: 'Acme', text: 'Example:', html: '<p>Your verification code is 123456</p>'}, true]
+]) {
+  test('R8 authentication admission at actual extraction consumer: ' + name, () => {
+    const {ctx} = harness();
+    let calls = 0;
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      return aiResponse({merchant: excluded ? 'Acme' : 'Brand', code: excluded ? '123456' : 'SAVE20',
+        evidence: {merchant: {quote: excluded ? 'Acme' : 'Brand'}, code: {quote: excluded ? '123456' : 'Brand coupon code SAVE20'}}});
+    };
+    const outcome = ctx.extractCouponOutcome_({incomplete: false, ...message});
+    assert.equal(outcome.excludedReason, excluded ? 'authentication_code_message' : undefined);
+    assert.equal(calls, excluded ? 0 : 1);
+    assert.equal(outcome.archiveAllowed, !excluded);
+    assert.equal(outcome.candidates.length, excluded ? 0 : 1);
+  });
+}
+
 test('authentication issuance excludes the entire message before model and both candidate producers', () => {
   const {ctx} = harness();
   const {authenticationMessages, ordinaryMessages} = require('./authentication-fixtures');
