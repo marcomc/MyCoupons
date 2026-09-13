@@ -734,4 +734,26 @@ for (const tense of ['has been', 'was']) {
     {text: 'Your verification code ' + tense + ' not sent to you: 123456. Brand coupon code SAVE20'}
   );
 }
+for (const target of ['account', 'identity']) for (const noun of ['code', 'passcode', 'PIN']) {
+  for (const separator of [' ', '-']) {
+    const label = target + separator + 'confirmation ' + noun;
+    authenticationMessages.push(
+      {text: 'Your ' + label + ' is 123456. Brand coupon code SAVE20'},
+      {text: '123456 is your ' + label},
+      {subject: 'Your ' + label, text: 'Your code is 123456'},
+      {html: '<h1>Your ' + label + ':</h1><p>123456</p>'},
+      {text: 'Example: Your ' + label + ' is 123456. Your ' + label + ' is 654321'}
+    );
+    ordinaryMessages.push(
+      {text: 'Example: Your ' + label + ' is 123456. Brand coupon code SAVE20'},
+      {text: 'You said your ' + label + ' is 123456. Brand coupon code SAVE20'},
+      {text: 'This is not your ' + label + ': 123456. Brand coupon code SAVE20'},
+      {text: 'Your ' + label + ' is missing. Brand coupon code SAVE20'}
+    );
+  }
+}
+ordinaryMessages.push(
+  {text: 'Your confirmation code is 123456. Brand coupon code SAVE20'},
+  {text: 'Your order confirmation code is 123456. Brand coupon code SAVE20'}
+);
 module.exports = {authenticationMessages, ordinaryMessages};

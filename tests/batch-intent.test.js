@@ -92,6 +92,201 @@ function interruptedAuthenticationBatch(written) {
   return f;
 }
 
+test('R21 direct historical Confirm inspects image authentication before promotion without Retry', () => {
+  const {png} = require('./mime-fixtures');
+  const f = fixture(); f.run();
+  const rows = JSON.stringify([f.coupon.rows, f.coupon.notes]);
+  const payload = JSON.stringify(f.saved().batchIntent);
+  f.ctx.getReviewMessage_ = () => ({...f.message, images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-auth'}]});
+  let calls = 0;
+  f.ctx.callGeminiModel_ = () => { calls++; return {text: JSON.stringify({candidates: [], authentication: {quote: '', image: 0}})}; };
+  f.action(2, 'Confirm');
+  assert.equal(f.saved().outcome, 'authentication_code_message');
+  assert.equal(calls, 1); assert.equal(f.mutations.length, 0);
+  assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rows);
+  assert.equal(JSON.stringify(f.saved().batchIntent), payload);
+});
+
+test('R21 valid non-auth image admission preserves edited manual facts and confirms normally', () => {
+  const {png} = require('./mime-fixtures');
+  const f = fixture(); f.run(); f.coupon.rows[1][16] = '';
+  const facts = JSON.stringify(f.coupon.rows.slice(1).map(row => row.slice(0, 17)));
+  const payload = JSON.stringify(f.saved().batchIntent);
+  f.ctx.getReviewMessage_ = () => ({...f.message, images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-offer'}]});
+  let calls = 0;
+  f.ctx.callGeminiModel_ = () => { calls++; return modelResponse([]); };
+  f.action(2, 'Confirm'); f.action(3, 'Confirm');
+  assert.equal(calls, 3); assert.equal(f.saved().status, 'confirmed'); assert.equal(f.mutations.length, 2);
+  assert.equal(JSON.stringify(f.coupon.rows.slice(1).map(row => row.slice(0, 17))), facts);
+  assert.equal(JSON.stringify(f.saved().batchIntent), payload);
+});
+
+test('R21 incomplete or invalid image admission cannot promote historical rows', () => {
+  const {png} = require('./mime-fixtures');
+  for (const mode of ['source-incomplete', 'missing-images', 'unsupported-html', 'prompt-truncated', 'model-failure',
+    'malformed', 'invalid-proof', 'invalidated', 'invalid-image', 'sparse-images']) {
+    const f = fixture(); f.run();
+    const facts = JSON.stringify([f.coupon.rows.slice(1).map(row => row.slice(0, 17)), f.coupon.notes]);
+    const payload = JSON.stringify(f.saved().batchIntent);
+    const message = {...f.message, images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-offer'}]};
+    if (mode === 'source-incomplete') message.incomplete = true;
+    if (mode === 'missing-images') { message.images = []; message.html = '<img src="https://images.example/coupon.png">'; }
+    if (mode === 'unsupported-html') message.html = '<svg></svg>';
+    if (mode === 'prompt-truncated') message.text += ' x'.repeat(35000);
+    if (mode === 'invalid-image') message.images[0].bytes = [1, 2, 3];
+    if (mode === 'sparse-images') message.images = Array(1);
+    f.ctx.getReviewMessage_ = () => message;
+    f.ctx.callGeminiModel_ = () => {
+      if (mode === 'model-failure') throw new Error('synthetic model failure');
+      if (mode === 'malformed') return {text: '{"authentication":null}'};
+      if (mode === 'invalid-proof') return {text: JSON.stringify({candidates: [], authentication: {quote: '', image: 9}})};
+      if (mode === 'invalidated') return modelResponse([candidate('UNSUPPORTED99', {merchant: 'Unknown', notes: ''})]);
+      return assert.fail('incomplete or invalid images must not reach model');
+    };
+    f.action(2, 'Confirm');
+    assert.equal(f.coupon.rows[1][17], 'Needs review', mode); assert.equal(f.mutations.length, 0, mode);
+    assert.equal(f.saved().outcome, 'review', mode);
+    assert.equal(JSON.stringify([f.coupon.rows.slice(1).map(row => row.slice(0, 17)), f.coupon.notes]), facts, mode);
+    assert.equal(JSON.stringify(f.saved().batchIntent), payload, mode);
+  }
+});
+
+test('R21 refreshed finalization blocks changed image admission and preserves positive exclusion across restart', () => {
+  const {png} = require('./mime-fixtures');
+  for (const mode of ['auth', 'incomplete', 'failure']) {
+    const f = fixture(); f.run();
+    const facts = JSON.stringify(f.coupon.rows.slice(1).map(row => row.slice(0, 17)));
+    const payload = JSON.stringify(f.saved().batchIntent);
+    let reads = 0, calls = 0;
+    f.ctx.getReviewMessage_ = () => {
+      reads++;
+      return {...f.message, incomplete: mode === 'incomplete' && reads === 3,
+        images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-' + reads}]};
+    };
+    f.ctx.callGeminiModel_ = () => {
+      calls++;
+      if (calls === 3 && mode === 'failure') throw new Error('synthetic final model failure');
+      return {text: JSON.stringify({candidates: [], authentication: calls === 3 && mode === 'auth' ? {quote: '', image: 0} : null})};
+    };
+    f.action(2, 'Confirm'); f.action(3, 'Confirm');
+    assert.equal(f.mutations.length, 0, mode);
+    assert.equal(f.saved().outcome, mode === 'auth' ? 'authentication_code_message' : 'review', mode);
+    assert.equal(f.coupon.rows[1][17], 'Needs review'); assert.equal(f.coupon.rows[2][17], 'Needs review');
+    assert.equal(JSON.stringify(f.coupon.rows.slice(1).map(row => row.slice(0, 17))), facts);
+    assert.equal(JSON.stringify(f.saved().batchIntent), payload);
+    f.boot();
+    if (mode === 'auth') {
+      f.ctx.Gmail.Users.Messages.get = () => assert.fail('durable exclusion must not fetch');
+      assert.equal(f.action(2, 'Confirm').excludedReason, 'authentication_code_message');
+      f.action(2, 'Ignore'); assert.equal(f.saved().outcome, 'authentication_code_message');
+      assert.equal(f.action(3, 'Confirm').excludedReason, 'authentication_code_message');
+    }
+  }
+});
+
+test('R21 direct and final image-exclusion checkpoint failures never grant Gmail authority', () => {
+  const {png} = require('./mime-fixtures');
+  for (const final of [false, true]) for (const responseLoss of [false, true]) {
+    const f = fixture(); f.run();
+    const payload = JSON.stringify(f.saved().batchIntent);
+    f.ctx.getReviewMessage_ = () => ({...f.message, images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-auth'}]});
+    let calls = 0;
+    f.ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: [],
+      authentication: ++calls >= (final ? 3 : 1) ? {quote: '', image: 0} : null})});
+    const save = f.ctx.saveMessageState_;
+    f.ctx.saveMessageState_ = (sheet, state) => {
+      if (state.outcome === 'authentication_code_message') {
+        if (responseLoss) save(sheet, state);
+        throw new Error('synthetic checkpoint failure');
+      }
+      return save(sheet, state);
+    };
+    if (final) f.action(2, 'Confirm');
+    assert.throws(() => f.action(final ? 3 : 2, 'Confirm'));
+    assert.equal(f.mutations.length, 0);
+    assert.equal(JSON.stringify(f.saved().batchIntent), payload);
+    f.boot();
+    assert.equal(f.saved().outcome === 'authentication_code_message', responseLoss);
+    if (responseLoss) {
+      f.ctx.Gmail.Users.Messages.get = () => assert.fail('response-loss exclusion remains durable');
+      assert.equal(f.action(2, 'Confirm').excludedReason, 'authentication_code_message');
+    }
+  }
+});
+
+test('R21 replay finalization retains refreshed image exclusion in both archive-intent paths', () => {
+  const {png} = require('./mime-fixtures');
+  for (const fastPath of [false, true]) {
+    const f = fixture();
+    f.state.extractCouponOutcome = () => ({candidates: [candidate('Save+20', {review: false})], archiveAllowed: true});
+    f.ctx.finalizeImportedMessage_ = () => f.ctx.fail_('MAIL');
+    assert.equal(f.run().messages[0].status, 'failed');
+    const saved = f.saved(); saved.outcome = fastPath ? 'archive' : 'review';
+    f.ctx.saveMessageState_(f.journal, saved);
+    const payload = JSON.stringify(saved.batchIntent);
+    const facts = JSON.stringify(f.coupon.rows.slice(1).map(row => row.slice(0, 17)));
+    f.boot();
+    f.state.extractCouponOutcome = () => assert.fail('retained replay must not replace candidate payload');
+    f.ctx.getReviewMessage_ = () => ({...f.message, images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-auth'}]});
+    f.ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: [], authentication: {quote: '', image: 0}})});
+    assert.equal(f.run().messages[0].excludedReason, 'authentication_code_message');
+    assert.equal(f.saved().outcome, 'authentication_code_message'); assert.equal(f.mutations.length, 0);
+    assert.equal(JSON.stringify(f.saved().batchIntent), payload);
+    assert.equal(JSON.stringify(f.coupon.rows.slice(1).map(row => row.slice(0, 17))), facts);
+    f.boot(); assert.equal(f.run().messages[0].excludedReason, 'authentication_code_message');
+  }
+});
+
+test('R21 partial v3 replay admits images before any missing row and recovers after rejected admission', () => {
+  const {png} = require('./mime-fixtures');
+  for (const written of [0, 1]) for (const mode of ['auth', 'incomplete', 'invalid-proof', 'model-failure', 'ordinary']) {
+    const f = fixture();
+    const append = f.ctx.appendCouponRow_; let count = 0;
+    f.ctx.appendCouponRow_ = (...args) => { if (count++ === written) f.ctx.fail_('WRITE'); return append(...args); };
+    assert.equal(f.run().messages[0].status, 'failed');
+    const state = f.saved(); state.labelApplied = true; f.ctx.saveMessageState_(f.journal, state);
+    const rows = JSON.stringify([f.coupon.rows, f.coupon.notes]);
+    const payload = JSON.stringify(state.batchIntent);
+    const bindings = JSON.stringify([state.candidateKeys, state.rowNumbers, state.dedupeKeys, state.candidateStates]);
+    f.boot();
+    f.state.extractCouponOutcome = () => assert.fail('partial replay must not replace retained candidates');
+    f.state.messages = [{...f.message, incomplete: mode === 'incomplete',
+      images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-replay'}]}];
+    let calls = 0;
+    f.ctx.callGeminiModel_ = () => {
+      calls++;
+      if (mode === 'model-failure') throw new Error('synthetic replay model failure');
+      return {text: JSON.stringify({candidates: [], authentication: mode === 'ordinary' ? null : {quote: '', image: mode === 'invalid-proof' ? 9 : 0}})};
+    };
+    if (mode === 'ordinary') {
+      assert.equal(f.run().messages[0].status, 'review'); assert.equal(f.coupon.rows.length, 3);
+    } else {
+      if (mode === 'auth') assert.equal(f.run().messages[0].excludedReason, 'authentication_code_message');
+      else assert.throws(f.run);
+      assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rows, mode + written);
+      const saved = f.saved();
+      assert.equal(JSON.stringify([saved.candidateKeys, saved.rowNumbers, saved.dedupeKeys, saved.candidateStates]), bindings);
+    }
+    assert.equal(calls, mode === 'incomplete' ? 0 : 1); assert.equal(f.mutations.length, 0);
+    assert.equal(JSON.stringify(f.saved().batchIntent), payload);
+    assert.equal(f.saved().labelApplied, true); assert.equal(f.saved().archived, false);
+    f.boot();
+    f.state.extractCouponOutcome = () => assert.fail('restart must use retained candidates');
+    if (mode === 'auth') {
+      f.ctx.callGeminiModel_ = () => assert.fail('known exclusion must not call model');
+      assert.equal(f.run().messages[0].excludedReason, 'authentication_code_message');
+      assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rows);
+    } else if (mode !== 'ordinary') {
+      f.state.messages = [{...f.message, images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-replay'}]}];
+      f.ctx.callGeminiModel_ = () => modelResponse([]);
+      assert.equal(f.run().messages[0].status, 'review'); assert.equal(f.coupon.rows.length, 3);
+      assert.equal(JSON.stringify(f.saved().batchIntent), payload);
+      assert.equal(f.saved().labelApplied, true); assert.equal(f.saved().archived, false);
+    }
+    assert.equal(f.mutations.length, 0);
+  }
+});
+
 test('R20 Retry persists image authentication across Ignore, restart and Confirm', () => {
   const {png} = require('./mime-fixtures');
   const f = fixture(); f.run();
@@ -314,7 +509,7 @@ test('R19 finalization re-read cannot grant Gmail authority when authentication 
   };
   f.action(3, 'Confirm');
   assert.equal(reads, 2); assert.equal(f.mutations.length, 0);
-  assert.equal(f.saved().status, 'review');
+  assert.equal(f.saved().status, 'ignored'); assert.equal(f.saved().outcome, 'authentication_code_message');
   assert.deepEqual(f.coupon.rows.slice(1).map(row => row[17]), ['Needs review', 'Needs review']);
 });
 
@@ -747,7 +942,7 @@ function recoveredMimeFixture(mode, form, source = mimeFixture.text) {
   return f;
 }
 
-test('recovered MIME requires review through real extraction, AI retry and replay but permits explicit evidenced Confirm', () => {
+test('recovered MIME remains review-only through extraction, Retry, replay and incomplete-admission Confirm', () => {
   for (const mode of ['mismatch', 'files']) {
     for (const form of mimeFixture.forms) {
       const f = recoveredMimeFixture(mode, form);
@@ -767,12 +962,11 @@ test('recovered MIME requires review through real extraction, AI retry and repla
       assert.equal(f.run().messages[0].status, 'review');
       assert.equal(JSON.stringify(f.saved().batchIntent), intent);
       assert.equal(f.coupon.rows[1][17], 'Needs review'); assert.equal(f.mutations.length, 0);
-      // Explicit review preserves the agreed product flow after full evidence
-      // and immutable candidate-batch validation.
+      // R21 requires complete admission coverage even for explicit factual review.
       f.action(2, 'Confirm');
-      assert.equal(f.saved().status, 'confirmed'); assert.equal(f.mutations.length, 2);
-      assert.deepEqual(f.mutations.map(value => JSON.parse(JSON.stringify(value))),
-        [{addLabelIds: ['coupon-label']}, {removeLabelIds: ['INBOX']}]);
+      assert.equal(f.saved().status, 'review'); assert.equal(f.mutations.length, 0);
+      assert.equal(f.coupon.rows[1][17], 'Needs review');
+      assert.equal(JSON.stringify(f.saved().batchIntent), intent);
     }
   }
 });
@@ -806,7 +1000,7 @@ test('recovered MIME Confirm rejects unevidenced fields and Ignore leaves Gmail 
   }
 });
 
-test('recovered MIME partial batches cannot finalize missing candidates or a mixed Confirm and Ignore', () => {
+test('recovered MIME partial batches cannot append or finalize while admission coverage is incomplete', () => {
   for (const mode of ['mismatch', 'files']) {
     for (const form of ['rest', 'signed']) {
       for (const action of ['Confirm', 'Ignore', 'Retry with AI']) {
@@ -827,14 +1021,11 @@ test('recovered MIME partial batches cannot finalize missing candidates or a mix
         f.boot(); f.ctx.extractCouponOutcome_ = () => assert.fail('no incomplete-batch extraction');
         f.action(2, action); assert.equal(f.mutations.length, 0);
         assert.throws(() => f.ctx.finalizeImportedMessage_(f.state, f.saved()), /STATE/);
+        const retained = JSON.stringify([f.coupon.rows, f.coupon.notes, f.journal.rows]);
         fail = false; f.boot(); f.state.extractCouponOutcome = () => assert.fail('no replay extraction');
-        assert.equal(f.run().messages[0].status, 'review');
-        assert.equal(f.coupon.rows.length, 3); assert.equal(f.mutations.length, 0);
-        f.action(3, 'Confirm');
-        assert.equal(f.mutations.length, action === 'Confirm' ? 2 : 0);
-        if (action === 'Retry with AI') {
-          f.action(2, 'Confirm'); assert.equal(f.mutations.length, 2);
-        }
+        assert.throws(f.run, /REVIEW/);
+        assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes, f.journal.rows]), retained);
+        assert.equal(f.coupon.rows.length, 2); assert.equal(f.mutations.length, 0);
       }
     }
   }

@@ -16,7 +16,13 @@
   immutable payloads, existing rows and mail acknowledgements without reviving
   excluded partial batches during scanner recovery or Retry.
   Apply the same exclusion before manual Confirm promotion and finalization;
-  ordinary edited/incomplete coupon evidence remains manually reviewable.
+  ordinary edited/uncertain coupon facts remain manually reviewable after valid
+  non-authentication admission. Check image/model admission on direct historical
+  Confirm and refreshed finalization; fail closed on incomplete coverage or invalid
+  admission without replacing edited facts or retained payloads. Preserve exclusion
+  through finalization recovery and include account/identity confirmation labels.
+  Require the same strict admission before pending v3 replay appends; incomplete
+  coverage and image/model failures preserve existing rows and pending payloads.
   Persist validated Retry image exclusions across Ignore and restart. Replace
   adjective lists with explicit assignment presentation for ambiguous all-letter
   values; preserve digit-bearing/mixed identities, governing preposed purposes
@@ -45,8 +51,8 @@
 - Recover usable MIME text with inconsistent declared byte sizes without trimming
   or rewriting the source, and omit unsupported file attachments from body
   extraction without fetching documents. Preserve incomplete coverage through
-  extraction, empty outcomes, AI retry, and batch replay; retain explicit
-  evidence-validated Confirm and strict image/byte validation.
+  extraction, empty outcomes, AI retry, and batch replay; retain strict image/byte
+  validation. Confirm also requires complete authentication-admission coverage.
 
 - Canonicalize padded Apps Script base64url image output before Gemini request
   validation, preserving signed and unsigned source bytes. Count every decoded

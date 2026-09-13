@@ -58,15 +58,19 @@ function processCouponMessage_(state, message) {
   if (existing && completeCandidateBatch_(existing) && existing.status === 'review') {
     return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
   }
-  // An older extractor may have staged authentication mail. Recheck readable
-  // source before either pending-row replay or the archive-intent fast path.
-  if (existing && existing.version === 3 && authenticationMessage_(candidateSource_(message))) {
-    return checkpointAuthenticationExclusion_(state.journalSheet, existing);
+  // An older extractor may have staged authentication mail. Strict admission
+  // precedes every pending-row write; complete batches recheck fresh images at
+  // finalization. Neither path replaces immutable retained candidate facts.
+  if (existing && existing.version === 3) {
+    const excluded = completeCandidateBatch_(existing) ? authenticationMessage_(candidateSource_(message)) :
+      reviewAuthenticationAdmission_(message);
+    if (excluded) return checkpointAuthenticationExclusion_(state.journalSheet, existing);
   }
   if (existing && completeCandidateBatch_(existing) && existing.outcome === 'archive' && existing.candidateStates &&
       existing.candidateStates.length && existing.candidateStates.every(function (item) { return item.status === 'confirmed'; })) {
     reconcileCandidateRows_(state.couponSheet, existing);
-    if (!refreshAndValidateReviewRows_(existing, state.couponSheet, state.config)) {
+    if (!refreshAndValidateReviewRows_(existing, state.couponSheet, state.config, state.journalSheet)) {
+      if (authenticationExcludedState_(existing)) return authenticationExcludedResult_(existing);
       restoreReviewRows_(existing, state.couponSheet);
       existing.status = 'review'; existing.outcome = 'review'; existing.updatedAt = new Date().toISOString();
       saveMessageState_(state.journalSheet, existing);
@@ -190,7 +194,8 @@ function processCouponMessage_(state, message) {
     });
     journal.outcome = messageOutcome_(persistedStatuses);
     if (resumingBatch && journal.outcome === 'archive' &&
-        !refreshAndValidateReviewRows_(journal, state.couponSheet, state.config)) {
+        !refreshAndValidateReviewRows_(journal, state.couponSheet, state.config, state.journalSheet)) {
+      if (authenticationExcludedState_(journal)) return authenticationExcludedResult_(journal);
       restoreReviewRows_(journal, state.couponSheet);
       journal.outcome = 'review';
     }
@@ -203,6 +208,7 @@ function processCouponMessage_(state, message) {
   } catch (e) {
     // The durable batch remains authoritative, including payloads whose rows
     // were never written. Do not overwrite reviewed rows during recovery.
+    if (authenticationExcludedState_(journal)) return checkpointAuthenticationExclusion_(state.journalSheet, journal);
     journal.status = 'failed'; journal.retryCount++; journal.failureStage = journal.failureStage || 'write';
     journal.lastError = errorCode_(e); journal.updatedAt = new Date().toISOString();
     saveMessageState_(state.journalSheet, journal);

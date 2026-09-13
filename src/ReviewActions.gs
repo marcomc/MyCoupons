@@ -59,11 +59,30 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   if (action === EN.actions.retry_ai) return retryReviewCandidate_(sheet, rowNumber, state, candidate[0], message, journalSheet, c);
   // Manual evidence review does not override entire-message authentication
   // exclusion. Check before promoting any row or granting Gmail authority.
-  if (authenticationMessage_(candidateSource_(message))) return checkpointAuthenticationExclusion_(journalSheet, state);
+  let excluded;
+  try { excluded = reviewAuthenticationAdmission_(message); } catch (e) { return reviewFailure_(sheet, rowNumber, errorCode_(e)); }
+  if (excluded) return checkpointAuthenticationExclusion_(journalSheet, state);
   if (!validateReviewRow_(row, message, displayRow, candidate[0].imageEvidence, formulas, c, key, legacyTechnicalNotes)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   setReviewStatus_(sheet, rowNumber, EN.statuses.confirmed, '');
   candidate[0].status = 'confirmed';
   completeReviewMessage_(state, sheet, journalSheet, c);
+}
+
+function reviewAuthenticationAdmission_(message) {
+  const source = candidateSource_(message);
+  if (authenticationMessage_(source)) return true;
+  // Manual factual edits cannot account for source/image content never inspected.
+  if (source.incomplete) fail_('REVIEW');
+  if (!source.images.length) return false;
+  const prompt = candidatePrompt_(message);
+  if (prompt.truncated) fail_('REVIEW');
+  validateAIAuthenticationImages_(source);
+  // Validate the entire envelope, but never replace edited facts with its offers
+  // or use extraction archiveAllowed as manual authorization.
+  const outcome = requestAICandidateOutcome_(message, source, prompt);
+  if (outcome.excludedReason === 'authentication_code_message') return true;
+  if (outcome.invalidated) fail_('AI');
+  return false;
 }
 
 function getReviewMessage_(messageId) {
@@ -258,9 +277,9 @@ function completeReviewMessage_(state, sheet, journalSheet, c) {
   state.status = 'processing'; state.failureStage = 'mail';
   try { saveMessageState_(journalSheet, state); } catch (e) { restoreReviewRows_(state, sheet); throw e; }
   try {
-    if (!refreshAndValidateReviewRows_(state, sheet, c)) { restoreReviewRows_(state, sheet); state.status = 'review'; state.outcome = 'review'; saveMessageState_(journalSheet, state); return; }
+    if (!refreshAndValidateReviewRows_(state, sheet, c, journalSheet)) return restoreReviewAdmission_(state, sheet, journalSheet);
   } catch (e) {
-    restoreReviewRows_(state, sheet); state.status = 'review'; state.outcome = 'review'; state.lastError = errorCode_(e); saveMessageState_(journalSheet, state); return;
+    return restoreReviewAdmission_(state, sheet, journalSheet, e);
   }
   try {
     if (!state.labelApplied) {
@@ -303,10 +322,24 @@ function restoreReviewRows_(state, sheet) {
   });
 }
 
-function refreshAndValidateReviewRows_(state, sheet, c) {
+function restoreReviewAdmission_(state, sheet, journalSheet, error) {
+  restoreReviewRows_(state, sheet);
+  if (!authenticationExcludedState_(state)) {
+    state.status = 'review'; state.outcome = 'review';
+    if (error) state.lastError = errorCode_(error);
+  }
+  saveMessageState_(journalSheet, state);
+  return authenticationExcludedState_(state) ? authenticationExcludedResult_(state) : undefined;
+}
+
+function refreshAndValidateReviewRows_(state, sheet, c, journalSheet) {
   if (!completeCandidateBatch_(state)) return false;
+  if (authenticationExcludedState_(state)) return false;
   const message = getReviewMessage_(state.messageId);
-  if (authenticationExcludedState_(state) || authenticationMessage_(candidateSource_(message))) return false;
+  if (reviewAuthenticationAdmission_(message)) {
+    checkpointAuthenticationExclusion_(journalSheet, state);
+    return false;
+  }
   const complete = state.candidateStates.every(function (item) {
     const index = state.candidateKeys.indexOf(item.key);
     if (index < 0) return false;

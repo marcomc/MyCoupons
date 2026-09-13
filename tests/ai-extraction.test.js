@@ -441,6 +441,15 @@ test('R19 issuer names do not turn clear authentication issuance into an example
   assert.equal(outcome.archiveAllowed, false);
 });
 
+test('R21 account and identity confirmation labels exclude mixed mail before the model', () => {
+  const {ctx} = harness();
+  ctx.callGeminiModel_ = () => aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}});
+  for (const target of ['account', 'identity']) {
+    const message = {text: 'Your ' + target + ' confirmation code is 123456. Brand coupon code SAVE20', incomplete: false};
+    assert.equal(ctx.extractCouponOutcome_(message).excludedReason, 'authentication_code_message');
+  }
+});
+
 for (const text of ['To sign in, use code 123456. Brand coupon code SAVE20',
   'Your verification code is "aBcDeF". Brand coupon code SAVE20',
   'To sign in, use this code 123456. Brand coupon code SAVE20',

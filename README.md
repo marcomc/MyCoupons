@@ -97,8 +97,8 @@ The example configuration contains product defaults only.
   excluded from body text/HTML; unsupported documents retain incomplete coverage
   and are never fetched or parsed. Supported image attachments remain independently
   acquired. Incomplete sources require review through initial extraction, AI retry,
-  and batch replay, including empty results. Explicit Confirm remains available
-  after validating all factual fields and the complete persisted candidate batch.
+  and batch replay, including empty results. Confirm requires complete source
+  admission coverage as well as valid factual fields and the persisted candidate batch.
   Empty multipart byte arrays remain valid containers. Utilities
   receive signed bytes, while image signatures and dimensions use unsigned
   octets. The REST representation and byte counts follow the
@@ -126,10 +126,13 @@ The example configuration contains product defaults only.
   acknowledgements stay retryable without duplicate rows.
 - Before writing any coupon row, persist and verify the entire extraction batch
   (at most 12 candidates). Its payload remains immutable; row/mail checkpoints
-  update only the metadata cell. Interrupted imports replay pending payloads
-  without another model call, preserve reviewed rows, and cannot archive until
+  update only the metadata cell. Interrupted imports replay retained candidates
+  without replacing their facts, preserve reviewed rows, and cannot archive until
   every intended candidate is durably bound. New rows recovered after an
-  interruption require review.
+  interruption require review. Before any pending v3 row is appended, strict
+  authentication admission checks complete source coverage and, when present,
+  images through the model. Failed admission preserves the pending payload and
+  existing rows for recovery; positive authentication durably excludes the batch.
 - Legacy `awaiting_extraction` records are recovered through full extraction. A
   complete, structurally valid empty model list becomes a non-offer checkpoint
   with no Gmail archive authority. Empty results caused by incomplete coverage or
@@ -227,11 +230,15 @@ The example configuration contains product defaults only.
   complete. The scanner and Retry respect that checkpoint after restart.
   Retry also persists validated image-only exclusion; Ignore may change its row
   disposition but cannot erase the exclusion or re-enable later Confirm.
-  No historical rows are removed. Confirm also checks readable-source
-  authentication before promoting a row, including historical complete batches.
+  No historical rows are removed. Confirm checks authentication before promoting
+  a row and again on refreshed source before Gmail finalization, including historical
+  batches. Complete image-bearing source uses the shared validated model response;
+  only admission is consumed, never replacement offer facts. Incomplete source or
+  image coverage, truncated model input, invalid admission and model/image failures
+  block Confirm. The final reread may require a second model call.
   A persisted authentication exclusion blocks Confirm and Retry. Manual review
-  can still authorize edited or incomplete coupon evidence, but cannot override
-  this whole-message exclusion or resume an excluded incomplete remainder.
+  can still authorize edited or uncertain coupon facts after valid non-auth admission,
+  but cannot override exclusion or resume an excluded incomplete remainder.
   Deterministic candidates currently require review. Tokens end at whitespace;
   one matching pair of outer ASCII quotes or angle brackets may wrap a token.
   Internal punctuation is never silently removed. Introducers require whitespace

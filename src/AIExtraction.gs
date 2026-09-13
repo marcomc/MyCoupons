@@ -69,6 +69,11 @@ function validateAIAuthentication_(authentication, source) {
   }
   if (!Number.isInteger(authentication.image) || authentication.image < 0 ||
       authentication.image >= source.images.length || source.images.length > MC.maxImages) fail_('AI');
+  validateAIAuthenticationImages_(source);
+}
+
+function validateAIAuthenticationImages_(source) {
+  if (source.images.length > MC.maxImages) fail_('AI');
   let total = 0;
   for (let index = 0; index < source.images.length; index++) {
     const item = Object.getOwnPropertyDescriptor(source.images, index);
@@ -257,11 +262,7 @@ function extractCouponOutcome_(message, hooks) {
   const excluded = authenticationExclusion_(source);
   if (excluded) return excluded;
   const prompt = candidatePrompt_(message);
-  const images = source.images.map(function (image) {
-    if (!image || typeof image.mimeType !== 'string' || !Array.isArray(image.bytes)) fail_('AI');
-    return {mimeType: image.mimeType, data: canonicalBase64Url_(Utilities.base64EncodeWebSafe(image.bytes))};
-  });
-  const aiOutcome = parseAICandidateOutcome_(callGeminiModel_({text: prompt.text, images: images}, hooks), message);
+  const aiOutcome = requestAICandidateOutcome_(message, source, prompt, hooks);
   if (aiOutcome.excludedReason === 'authentication_code_message') return aiOutcome;
   // Consolidate exact model duplicates before sparse deterministic enrichment
   // adds copied source notes that could make an identical proposal look new.
@@ -289,6 +290,14 @@ function extractCouponOutcome_(message, hooks) {
     empty: result.length === 0, modelEmpty: aiOutcome.modelEmpty, invalidated: aiOutcome.invalidated,
     verifiedNonOffer: complete && result.length === 0 && aiOutcome.modelEmpty,
     archiveAllowed: autoConfirmed};
+}
+
+function requestAICandidateOutcome_(message, source, prompt, hooks) {
+  const images = source.images.map(function (image) {
+    if (!image || typeof image.mimeType !== 'string' || !Array.isArray(image.bytes)) fail_('AI');
+    return {mimeType: image.mimeType, data: canonicalBase64Url_(Utilities.base64EncodeWebSafe(image.bytes))};
+  });
+  return parseAICandidateOutcome_(callGeminiModel_({text: prompt.text, images: images}, hooks), message);
 }
 
 function candidateAutomaticallyConfirmed_(candidate) {
