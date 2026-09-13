@@ -532,6 +532,29 @@ test('later mailbox scans replay an incomplete batch even if a review status was
   assert.equal(f.ctx.completeCandidateBatch_(f.ctx.getMessageState_(f.state.journalSheet, 'a')), true);
 });
 
+test('R16 excluded partial batches are not retried or fetched from retained pending IDs', () => {
+  const f = fixture(0);
+  const pending = f.ctx.newMessageState_('abc123'); pending.status = 'processing'; pending.candidateStates = [];
+  f.ctx.saveMessageState_(f.state.journalSheet, pending);
+  f.ctx.createBatchIntent_(pending, {candidates: [{merchant: '', website: '', code: 'SAVE20', discountType: '',
+    discountValue: '', minimumSpend: '', validOn: '', exclusions: '', expiry: '', usageLimits: '', currency: '',
+    notes: '', confidence: 'high', review: true, imageEvidence: {}}], archiveAllowed: false});
+  f.ctx.saveMessageState_(f.state.journalSheet, pending);
+  f.ctx.checkpointAuthenticationExclusion_(f.state.journalSheet, pending);
+  assert.equal(f.ctx.completeCandidateBatch_(pending), false);
+  const process = f.ctx.mailboxProcessMessage_;
+  f.ctx.mailboxProcessMessage_ = () => assert.fail('excluded partial must not enter retry selection');
+  f.ctx.runScheduledImport();
+  assert.equal(f.fetched.length, 0);
+  f.ctx.mailboxProcessMessage_ = process;
+  const scan = JSON.parse(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE);
+  scan.pendingIds = ['abc123']; scan.complete = false;
+  f.properties.MYCOUPONS_MAILBOX_SCAN_STATE = JSON.stringify(scan);
+  f.ctx.runScheduledImport();
+  assert.equal(f.fetched.length, 0); assert.equal(f.state.couponSheet.rows.length, 1);
+  assert.deepEqual(JSON.parse(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE).pendingIds, []);
+});
+
 test('a retained pending ID honors extraction backoff after the deadline interrupts page advancement', () => {
   const f = fixture(1); let extracted = 0;
   f.state.extractCouponOutcome = () => {

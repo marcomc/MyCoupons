@@ -216,8 +216,12 @@ The example configuration contains product defaults only.
   Exclusion returns `excludedReason: authentication_code_message`, not verified
   absence of offers. It records an `ignored` journal checkpoint with that reason
   but creates no coupon batch/rows and does not label, archive, or delete Gmail.
-  Retry leaves existing rows unchanged; historical retained batches and explicit
-  manual review authority are not retroactively migrated.
+  Interrupted v3 batches recheck readable-source authentication before pending
+  row replay or Gmail finalization. Exclusion preserves their immutable payload,
+  existing rows and acknowledged mail flags; it does not mark a partial batch
+  complete. The scanner and Retry respect that checkpoint after restart.
+  No historical rows are removed. Explicit manual review authority is unchanged;
+  confirming a retained row cannot resume an excluded, incomplete remainder.
   Deterministic candidates currently require review. Tokens end at whitespace;
   one matching pair of outer ASCII quotes or angle brackets may wrap a token.
   Internal punctuation is never silently removed. Introducers require whitespace

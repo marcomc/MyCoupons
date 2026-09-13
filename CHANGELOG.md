@@ -11,7 +11,10 @@
   Share the source-derived gate with deterministic extraction and Retry; record
   policy exclusion separately from verified offer absence, without coupon rows
   or Gmail mutations. Preserve ordinary login-adjacent promotions, exact Unicode
-  code identities, and existing manual-review/retained-batch authority.
+  code identities, and explicit manual-review authority. Recheck readable-source
+  authentication before interrupted v3 row replay or Gmail finalization, retaining
+  immutable payloads, existing rows and mail acknowledgements without reviving
+  excluded partial batches during scanner recovery or Retry.
   Associate subject/body issuance, labels in either direction, alphabetic
   values, and heading/instruction/value layouts without relaxing factual quote
   boundaries. Keep verification actions tied to authentication targets and

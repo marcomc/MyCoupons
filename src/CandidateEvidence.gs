@@ -177,7 +177,7 @@ function authenticationLiteral_(token) {
 }
 function authenticationLabelPattern_() {
   return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp|e-?mail\\s+confirmation|mfa|account\\s+access)\\s+(?:code|passcode|pin)|' +
-    'passcode|otp|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso|reimpostazione(?:\\s+password)?))';
+    'one[ -]?time\\s+password|passcode|otp|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso|reimpostazione(?:\\s+password)?))';
 }
 function authenticationLabelQualifier_() {
   return '(?:\\s+(?:to|for|per)\\s+' + authenticationActionPattern_(true) + ')?' +

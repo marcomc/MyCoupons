@@ -172,6 +172,7 @@ function reviewFailure_(sheet, rowNumber, code) {
 }
 
 function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, journalSheet, c) {
+  if (authenticationExcludedState_(state)) return authenticationExcludedResult_(state);
   if (!completeCandidateBatch_(state)) { keepIncompleteBatch_(state, journalSheet); return; }
   let extraction;
   try { extraction = extractCouponOutcome_(message); } catch (e) { return reviewFailure_(sheet, rowNumber, errorCode_(e)); }

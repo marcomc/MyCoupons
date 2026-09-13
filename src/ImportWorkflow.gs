@@ -41,6 +41,7 @@ function runImportWorkflowInSession_(state) {
 function processCouponMessage_(state, message) {
   if (!message || typeof message.id !== 'string' || !validGmailApiId_(message.id)) fail_('MAIL');
   const existing = getMessageState_(state.journalSheet, message.id);
+  if (authenticationExcludedState_(existing)) return authenticationExcludedResult_(existing);
   if (legacyMailReviewBatch_(existing)) {
     reconcileCandidateRows_(state.couponSheet, existing);
     existing.status = 'review'; existing.failureStage = ''; existing.lastError = ''; existing.nextRetryAt = '';
@@ -56,6 +57,11 @@ function processCouponMessage_(state, message) {
   }
   if (existing && completeCandidateBatch_(existing) && existing.status === 'review') {
     return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
+  }
+  // An older extractor may have staged authentication mail. Recheck readable
+  // source before either pending-row replay or the archive-intent fast path.
+  if (existing && existing.version === 3 && authenticationMessage_(candidateSource_(message))) {
+    return checkpointAuthenticationExclusion_(state.journalSheet, existing);
   }
   if (existing && completeCandidateBatch_(existing) && existing.outcome === 'archive' && existing.candidateStates &&
       existing.candidateStates.length && existing.candidateStates.every(function (item) { return item.status === 'confirmed'; })) {
@@ -91,10 +97,7 @@ function processCouponMessage_(state, message) {
     if (extraction.excludedReason === 'authentication_code_message') {
       // Policy exclusion can include an offer: it is not verified offer absence.
       // No batch/row reconciliation or Gmail finalization is authorized here.
-      journal.outcome = extraction.excludedReason; journal.status = 'ignored';
-      journal.failureStage = ''; journal.nextRetryAt = '';
-      journal.updatedAt = new Date().toISOString(); saveMessageState_(state.journalSheet, journal);
-      return {messageId: message.id, status: 'ignored', rows: [], excludedReason: extraction.excludedReason};
+      return checkpointAuthenticationExclusion_(state.journalSheet, journal);
     }
     if (extraction.verifiedNonOffer) {
       if (journal.candidateStates.length) {
@@ -205,6 +208,23 @@ function processCouponMessage_(state, message) {
     saveMessageState_(state.journalSheet, journal);
     return {messageId: message.id, status: 'failed', rows: journal.rowNumbers.slice(), error: journal.lastError};
   }
+}
+
+function authenticationExcludedState_(journal) {
+  return !!journal && journal.status === 'ignored' && journal.outcome === 'authentication_code_message';
+}
+
+function authenticationExcludedResult_(journal) {
+  return {messageId: journal.messageId, status: 'ignored', rows: [], excludedReason: 'authentication_code_message'};
+}
+
+function checkpointAuthenticationExclusion_(sheet, journal) {
+  // Update metadata only. Retain incomplete payloads, row bindings and already
+  // acknowledged mail flags; exclusion neither completes nor rolls back a batch.
+  journal.outcome = 'authentication_code_message'; journal.status = 'ignored';
+  journal.failureStage = ''; journal.nextRetryAt = ''; journal.lastError = '';
+  journal.updatedAt = new Date().toISOString(); saveMessageState_(sheet, journal);
+  return authenticationExcludedResult_(journal);
 }
 
 function awaitingMessageExtraction_(journal) {

@@ -75,6 +75,121 @@ function modelResponse(proposals) {
   })})};
 }
 
+function interruptedAuthenticationBatch(written) {
+  const f = fixture();
+  setSource(f, f.message.text + '\nYour verification code is 123456');
+  // Simulate the pre-policy extractor and an interruption at each checkpoint.
+  f.ctx.authenticationMessage_ = () => false;
+  f.state.extractCouponOutcome = () => ({candidates: [candidate('Save+20', {review: false}),
+    candidate('SAVE+30', {review: false})], archiveAllowed: true});
+  const append = f.ctx.appendCouponRow_; let count = 0;
+  f.ctx.appendCouponRow_ = (...args) => {
+    if (count++ === written) f.ctx.fail_('WRITE');
+    return append(...args);
+  };
+  f.ctx.finalizeImportedMessage_ = () => f.ctx.fail_('MAIL');
+  assert.equal(f.run().messages[0].status, 'failed');
+  return f;
+}
+
+test('R16 readable authentication stops partial and mail-stage v3 replay without changing retained payload or rows', () => {
+  for (const written of [0, 1, 2]) {
+    for (const labelApplied of [false, true]) {
+      const f = interruptedAuthenticationBatch(written);
+      const prior = f.saved(); prior.labelApplied = labelApplied;
+      f.ctx.saveMessageState_(f.journal, prior);
+      const immutable = JSON.stringify(prior.batchIntent);
+      const bindings = JSON.stringify([prior.candidateKeys, prior.dedupeKeys, prior.rowNumbers, prior.candidateStates]);
+      const rows = JSON.stringify([f.coupon.rows, f.coupon.notes]);
+      const payload = JSON.stringify(f.journal.rows[1].slice(2));
+      f.boot();
+      f.state.extractCouponOutcome = () => assert.fail('replay must not re-extract');
+      f.ctx.reconcileCandidateRows_ = () => assert.fail('excluded replay must not reconcile');
+      f.ctx.appendCouponRow_ = () => assert.fail('excluded replay must not append');
+      f.ctx.finalizeImportedMessage_ = () => assert.fail('excluded replay must not finalize');
+      const result = f.run();
+      assert.equal(result.messages[0].status, 'ignored');
+      assert.equal(result.messages[0].excludedReason, 'authentication_code_message');
+      const saved = f.saved();
+      assert.equal(saved.version, 3); assert.equal(saved.outcome, 'authentication_code_message');
+      assert.equal(JSON.stringify(saved.batchIntent), immutable);
+      assert.equal(JSON.stringify([saved.candidateKeys, saved.dedupeKeys, saved.rowNumbers, saved.candidateStates]), bindings);
+      assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rows);
+      assert.equal(JSON.stringify(f.journal.rows[1].slice(2)), payload);
+      assert.equal(saved.labelApplied, labelApplied); assert.equal(saved.archived, false);
+      assert.equal(f.ctx.completeCandidateBatch_(saved), written === 2);
+      assert.equal(f.mutations.length, 0); assert.equal(result.imported, 0); assert.equal(result.review, 0);
+      f.boot();
+      const checkpoint = JSON.stringify(f.journal.rows);
+      f.ctx.candidateSource_ = () => assert.fail('persisted exclusion must not rescan');
+      assert.equal(f.run().messages[0].status, 'ignored');
+      assert.equal(JSON.stringify(f.journal.rows), checkpoint);
+      f.ctx.Gmail.Users.Messages.get = () => assert.fail('persisted exclusion must not fetch');
+      assert.equal(f.ctx.mailboxProcessMessage_(f.state, {}, f.raw.id, false,
+        () => assert.fail('persisted exclusion must not invoke callback'), {}), true);
+      if (written) {
+        const retry = f.ctx.retryReviewCandidate_(f.coupon, 2, f.saved(), f.saved().candidateStates[0],
+          f.message, f.journal, f.config);
+        assert.equal(retry.excludedReason, 'authentication_code_message');
+        assert.equal(JSON.stringify(f.journal.rows), checkpoint);
+      }
+    }
+  }
+});
+
+test('R16 exclusion checkpoint failure and response loss cannot authorize replay side effects', () => {
+  for (const written of [0, 1, 2]) {
+    for (const mode of ['not-written', 'set-then-throw', 'readback-mismatch']) {
+      const f = interruptedAuthenticationBatch(written); f.boot();
+      const rows = JSON.stringify([f.coupon.rows, f.coupon.notes]);
+      const payload = JSON.stringify(f.journal.rows[1].slice(2));
+      const getRange = f.journal.getRange;
+      f.journal.getRange = (...args) => {
+        const range = getRange(...args); let mismatch = false;
+        return {...range, getValues: () => mismatch ? [['abc123', 'mismatch']] : range.getValues(), setValues: values => {
+          if (args[1] === 1 && JSON.parse(values[0][1]).outcome === 'authentication_code_message') {
+            if (mode === 'not-written') throw new Error('write failed');
+            range.setValues(values);
+            if (mode === 'set-then-throw') throw new Error('response lost');
+            mismatch = true; return;
+          }
+          range.setValues(values);
+        }};
+      };
+      assert.throws(f.run);
+      assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rows);
+      assert.equal(JSON.stringify(f.journal.rows[1].slice(2)), payload);
+      assert.equal(f.mutations.length, 0);
+      f.journal.getRange = getRange; f.boot();
+      assert.equal(f.run().messages[0].status, 'ignored');
+      assert.equal(f.saved().outcome, 'authentication_code_message');
+      assert.equal(JSON.stringify([f.coupon.rows, f.coupon.notes]), rows);
+      assert.equal(f.mutations.length, 0);
+    }
+  }
+});
+
+test('R16 malformed replay source fails closed and explicit manual dispositions retain their authority', () => {
+  for (const written of [1, 2]) {
+    const f = interruptedAuthenticationBatch(written); f.boot();
+    const journal = JSON.stringify(f.journal.rows); const rows = JSON.stringify(f.coupon.rows);
+    f.state.messages[0].text = {};
+    assert.throws(f.run, /AI/);
+    assert.equal(JSON.stringify(f.journal.rows), journal); assert.equal(JSON.stringify(f.coupon.rows), rows);
+    f.boot(); assert.equal(f.run().messages[0].status, 'ignored');
+    f.action(2, 'Confirm');
+    assert.equal(f.saved().candidateStates[0].status, 'confirmed');
+    if (written === 1) {
+      assert.equal(f.saved().outcome, 'authentication_code_message');
+      assert.equal(f.ctx.completeCandidateBatch_(f.saved()), false);
+      assert.equal(f.mutations.length, 0);
+      assert.equal(f.run().messages[0].status, 'ignored');
+    } else {
+      assert.equal(f.saved().status, 'confirmed'); assert.equal(f.mutations.length, 2);
+    }
+  }
+});
+
 test('real extraction keeps deterministic Notes and code-count losses in review through import and AI retry', () => {
   for (const mode of ['notes', 'code-count']) {
     const f = fixture();

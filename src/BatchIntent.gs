@@ -63,8 +63,12 @@ function createBatchIntent_(journal, extraction) {
 }
 
 function keepIncompleteBatch_(state, journalSheet) {
-  state.status = 'processing'; state.outcome = 'review';
-  state.failureStage = state.version === 3 ? 'write' : 'legacy_batch';
+  // A manual disposition can update an existing row without reviving automatic
+  // replay of the excluded remainder. The immutable batch stays incomplete.
+  if (!authenticationExcludedState_(state)) {
+    state.status = 'processing'; state.outcome = 'review';
+    state.failureStage = state.version === 3 ? 'write' : 'legacy_batch';
+  }
   state.updatedAt = new Date().toISOString();
   saveMessageState_(journalSheet, state);
 }

@@ -568,4 +568,21 @@ authenticationMessages.push(
   {text: '123456 will be your verification code for MFA'},
   {text: 'If 123456 will be your verification code for MFA, your verification code is 654321'}
 );
+for (const label of ['one-time password', 'one time password', 'onetime password']) {
+  authenticationMessages.push(
+    {text: 'Your ' + label + ' is 123456'},
+    {text: 'Your ' + label + '=123456. Brand coupon code SAVE20'},
+    {html: '<h1>Your ' + label + '</h1><p>aBcDeF</p>'},
+    {text: '123456 is your ' + label},
+    {subject: 'Your ' + label, text: 'Your code is 123456'}
+  );
+  ordinaryMessages.push(
+    {text: 'Your ' + label + ' is confidential. Brand coupon code SAVE20'},
+    {text: 'Your ' + label + ' is not 123456. Brand coupon code SAVE20'},
+    {text: 'Example: Your ' + label + ' is 123456. Brand coupon code SAVE20'},
+    {text: 'Is your ' + label + ' 123456? Brand coupon code SAVE20'},
+    {text: 'Your ' + label + ' manager is available. Brand coupon code SAVE20'}
+  );
+}
+ordinaryMessages.push({text: 'Your password is 123456. Brand coupon code SAVE20'});
 module.exports = {authenticationMessages, ordinaryMessages};
