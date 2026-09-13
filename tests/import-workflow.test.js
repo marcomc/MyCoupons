@@ -61,6 +61,70 @@ test('real admission checkpoints excluded mail without candidate staging, coupon
   }
 });
 
+test('image authentication excludes before staging and is a no-op for Retry', () => {
+  const {png} = require('./mime-fixtures');
+  const {wireCandidate} = require('./ai-wire-fixtures');
+  for (const incomplete of [false, true]) {
+    const {ctx, config} = harness();
+    const message = {id: 'abc123', receivedAtMs: 0, subject: '', sender: '',
+      link: 'https://mail.google.com/mail/#all/abc123', text: 'Brand coupon code SAVE20', incomplete,
+      images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-auth-image'}]};
+    const raw = {...confirmedCandidate(), website: '', code: 'SAVE20', discountType: '', discountValue: '',
+      currency: '', notes: '', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}};
+    delete raw.imageEvidence;
+    ctx.callGeminiModel_ = () => ({text: JSON.stringify({
+      authentication: {quote: '', image: 0}, candidates: [wireCandidate(raw)]
+    })});
+    ctx.Gmail.Users.Messages = {modify: () => assert.fail('image exclusion cannot mutate Gmail')};
+    const state = {config, couponSheet: sheet([HEADERS]), journalSheet: sheet([JOURNAL]), messages: [message]};
+    const create = ctx.createBatchIntent_; const append = ctx.appendCouponRow_;
+    ctx.createBatchIntent_ = () => assert.fail('image exclusion cannot stage');
+    ctx.appendCouponRow_ = () => assert.fail('image exclusion cannot append');
+    const result = ctx.runImportWorkflow_(state);
+    assert.equal(result.messages[0].excludedReason, 'authentication_code_message');
+    assert.equal(result.messages[0].status, 'ignored');
+    assert.equal(state.couponSheet.getLastRow(), 1);
+    const saved = ctx.getMessageState_(state.journalSheet, message.id);
+    assert.equal(saved.outcome, 'authentication_code_message');
+    assert.equal(saved.batchIntent, undefined);
+    assert.equal(saved.archived, false); assert.equal(saved.labelApplied, false);
+    ctx.createBatchIntent_ = create; ctx.appendCouponRow_ = append;
+    const retryState = stateWithExtraction(ctx, {config, couponSheet: sheet([HEADERS]),
+      journalSheet: sheet([JOURNAL]), messages: [{...message, images: [], incomplete: false}]});
+    ctx.runImportWorkflow_(retryState);
+    const journal = ctx.getMessageState_(retryState.journalSheet, message.id);
+    const before = JSON.stringify({rows: retryState.couponSheet._values, notes: retryState.couponSheet._notes,
+      journal: retryState.journalSheet._values});
+    const retried = ctx.retryReviewCandidate_(retryState.couponSheet, 2, journal, journal.candidateStates[0],
+      message, retryState.journalSheet, config);
+    assert.equal(retried.excludedReason, 'authentication_code_message');
+    assert.equal(JSON.stringify({rows: retryState.couponSheet._values, notes: retryState.couponSheet._notes,
+      journal: retryState.journalSheet._values}), before);
+  }
+});
+
+test('invalid model authentication proof cannot stage coupons or mutate Gmail', () => {
+  const {png} = require('./mime-fixtures');
+  for (const authentication of [{quote: '', image: 1}, {quote: 'Brand coupon code SAVE20', image: null}, true]) {
+    const {ctx, config} = harness();
+    ctx.callGeminiModel_ = () => ({text: JSON.stringify({authentication, candidates: []})});
+    ctx.createBatchIntent_ = () => assert.fail('invalid proof cannot stage');
+    ctx.appendCouponRow_ = () => assert.fail('invalid proof cannot append');
+    ctx.Gmail.Users.Messages = {modify: () => assert.fail('invalid proof cannot mutate Gmail')};
+    const state = {config, couponSheet: sheet([HEADERS]), journalSheet: sheet([JOURNAL]), messages: [{
+      id: 'abc123', receivedAtMs: 0, subject: '', sender: '', link: 'https://mail.google.com/mail/#all/abc123',
+      text: 'Brand coupon code SAVE20', incomplete: false, images: [{mimeType: 'image/png', bytes: png}]
+    }]};
+    const result = ctx.runImportWorkflow_(state);
+    assert.equal(result.messages[0].status, 'failed');
+    assert.equal(result.imported, 0); assert.equal(result.review, 0);
+    assert.equal(state.couponSheet.getLastRow(), 1);
+    const journal = ctx.getMessageState_(state.journalSheet, 'abc123');
+    assert.equal(journal.batchIntent, undefined);
+    assert.equal(journal.archived, false); assert.equal(journal.labelApplied, false);
+  }
+});
+
 test('R4 promotion passes real extraction, staging and confirmation with no auth keyword blacklist', () => {
   const {ctx, config} = harness(); config.labelId = 'coupon-label';
   const {wireCandidate} = require('./ai-wire-fixtures');
@@ -69,7 +133,7 @@ test('R4 promotion passes real extraction, staging and confirmation with no auth
   const raw = {...confirmedCandidate(), website: '', discountType: '', discountValue: '', currency: '', notes: '',
     code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: text}}};
   delete raw.imageEvidence;
-  ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: [wireCandidate(raw)]})});
+  ctx.callGeminiModel_ = () => ({text: JSON.stringify({authentication: null, candidates: [wireCandidate(raw)]})});
   let mutations = 0;
   ctx.Gmail.Users.Messages = {modify: body => {
     mutations++;
@@ -93,7 +157,7 @@ test('concept-only authentication discussion does not suppress grounded review c
       discountType: '', discountValue: '', currency: '', notes: '', review: true,
       evidence: {code: {quote: 'SAVE20'}}};
     delete raw.imageEvidence;
-    ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: [wireCandidate(raw)]})});
+    ctx.callGeminiModel_ = () => ({text: JSON.stringify({authentication: null, candidates: [wireCandidate(raw)]})});
     ctx.Gmail.Users.Messages = {modify: () => assert.fail('review cannot mutate Gmail')};
     const state = {config, couponSheet: sheet([HEADERS]), journalSheet: sheet([JOURNAL]), messages: [{
       id: 'abc123', receivedAtMs: 0, subject: '', sender: '', link: 'https://mail.google.com/mail/#all/abc123',

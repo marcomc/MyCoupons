@@ -30,11 +30,8 @@ const authenticationMessages = [
   {text: 'Il tuo codice di verifica monouso è 123456'},
   {text: 'Security code: 123456'},
   {text: 'Your OTP is 123456'},
-  {text: 'Acme: use code LOGIN77 to verify your order.'},
   {text: 'Acme: enter code LOGIN77 to reset your password.'},
   {text: 'Acme: use code LOGIN77 to sign in.'},
-  {text: 'Acme: use code SAVE to verify your order.'},
-  {text: 'Acme: use code LOGIN77 to verify your cart at checkout.'},
   {text: 'Acme: verify your account using code LOGIN77.'},
   {text: 'Brand: coupon code SAVE20 to reset your password for 20% off.'},
   {text: 'Brand: one-time code SAVE20 for your order.'},
@@ -99,6 +96,10 @@ for (const code of ['123456', 'aBcDeF']) {
 }
 
 const ordinaryMessages = [
+  // R10 explicitly limits generic verification verbs to authentication objects.
+  {text: 'Acme: use code LOGIN77 to verify your order. Brand coupon code SAVE20'},
+  {text: 'Acme: use code SAVE to verify your order. Brand coupon code SAVE20'},
+  {text: 'Acme: use code LOGIN77 to verify your cart at checkout. Brand coupon code SAVE20'},
   {text: 'Brand: discount passcode SAVE20. Brand coupon code SAVE20'},
   {text: 'Brand: coupon passcode SAVE20 for your order. Brand coupon code SAVE20'},
   {text: 'Your verification code is ready. Brand coupon code SAVE20'},
@@ -335,4 +336,37 @@ ordinaryMessages.push(
   {text: 'We never ask you to enter your verification code 123456. Brand coupon code SAVE20'}
 );
 authenticationMessages.push({text: 'Your verification code is HERE'});
+for (const purpose of ['access your account', 'access the profile', 'verify your account', 'verify your identity',
+  'verify your email', 'verify your phone number', 'verificare la tua identità']) {
+  authenticationMessages.push(
+    {text: 'Acme: Use code 123456 to ' + purpose},
+    {text: 'Acme: ' + purpose + ' using code 123456'},
+    {subject: purpose, text: 'Your code is 123456'}
+  );
+}
+for (const purpose of ['access the shop', 'access your discount', 'verify your order', 'verify your cart',
+  'verify the 20% discount is applied at checkout', 'verificare lo sconto']) {
+  ordinaryMessages.push({text: 'Brand: Use code SAVE20 to ' + purpose + '. Brand coupon code SAVE20'});
+}
+for (const word of ['confidential', 'private', 'secret', 'temporary', 'unique', 'riservato', 'segreto']) {
+  ordinaryMessages.push({text: 'Your verification code is ' + word + '. Brand coupon code SAVE20'});
+}
+for (const label of ['verification code', 'security passcode', 'login PIN']) {
+  ordinaryMessages.push({text: 'This is not a ' + label + ': SAVE20. Brand coupon code SAVE20'});
+  authenticationMessages.push({text: 'This is not a ' + label + ': SAVE20; your verification code is 123456'});
+}
+ordinaryMessages.push({text: 'Questo non è un codice di verifica: SAVE20. Brand coupon code SAVE20'});
+for (const subject of ['Sign in to Acme', 'Your verification code']) {
+  for (const label of ['verification code', 'security passcode', 'login PIN']) {
+    ordinaryMessages.push({subject, text: 'This is not a ' + label + ': SAVE20. Brand coupon code SAVE20'});
+    authenticationMessages.push({subject, text: 'This is not a ' + label + ': SAVE20; your verification code is 123456'});
+  }
+}
+for (const purpose of ['verify your account discount is applied at checkout', 'verify your email discount',
+  'access your account discount', 'verificare la tua identità promozionale']) {
+  ordinaryMessages.push({text: 'Brand: Use code SAVE20 to ' + purpose + '. Brand coupon code SAVE20'});
+}
+for (const purpose of ['verify your account', 'access your account', 'verificare la tua identità']) {
+  authenticationMessages.push({text: 'Acme: Use code 123456 to ' + purpose + ' and continue to checkout.'});
+}
 module.exports = {authenticationMessages, ordinaryMessages};

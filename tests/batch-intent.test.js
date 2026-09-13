@@ -67,7 +67,7 @@ function setSource(f, text) {
 }
 
 function modelResponse(proposals) {
-  return {text: JSON.stringify({candidates: proposals.map(proposal => {
+  return {text: JSON.stringify({authentication: null, candidates: proposals.map(proposal => {
     const result = {...proposal}; delete result.imageEvidence;
     result.evidence = Object.fromEntries(Object.entries(result).filter(([key, value]) =>
       typeof value === 'string' && value && key !== 'confidence').map(([key, value]) => [key, {quote: value}]));
@@ -483,7 +483,7 @@ test('real extraction persists duplicated coded proposals once and distinct URL 
       proposal.evidence = Object.fromEntries(Object.entries(proposal).filter(([key, value]) =>
         typeof value === 'string' && value && key !== 'confidence').map(([key, value]) => [key, {quote: value}]));
     });
-    f.ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: proposals.map(wireCandidate)})});
+    f.ctx.callGeminiModel_ = () => ({text: JSON.stringify({authentication: null, candidates: proposals.map(wireCandidate)})});
     assert.equal(f.run().messages[0].status, 'confirmed');
     const expected = mode === 'duplicate-code' ? 1 : 2;
     assert.equal(f.coupon.rows.length, expected + 1);
@@ -604,7 +604,7 @@ test('malformed typed responses leave initial imports and AI retries without cou
       if (mode === 'missing-evidence') proposals[0].notes = {value: 'Members only', quote: '', image: null};
       if (mode === 'array-evidence') proposals[0].code.quote = ['Save+20'];
       if (mode === 'excess-offers') while (proposals.length < 13) proposals.push(proposals[0]);
-      return {text: JSON.stringify({candidates: proposals})};
+      return {text: JSON.stringify({authentication: null, candidates: proposals})};
     };
     const initial = fixture(); delete initial.state.extractCouponOutcome;
     initial.ctx.callGeminiModel_ = badResponse;

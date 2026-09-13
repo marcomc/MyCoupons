@@ -150,7 +150,7 @@ test('synthetic Advanced Gmail full message reaches canonicalization, evidenced 
   const outcome = ctx.extractCouponOutcome_(message, {fetch: (_, request) => {
     calls++;
     assert.match(JSON.stringify(request), new RegExp(Buffer.from(png).toString('base64url')));
-    return {status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})};
+    return {status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates: []})}]}}]})};
   }});
   assert.equal(calls, 1);
   assert.equal(outcome.candidates[0].code, 'ÉTÉ+20');
@@ -168,7 +168,7 @@ test('padded Apps Script image encoding canonicalizes every remainder before Gem
       const outcome = ctx.extractCouponOutcome_({text: 'Brand coupon code SAVE20', incomplete: false,
         images: [{mimeType: 'image/png', bytes: imageBytes, sourceId: 'image'}]}, {fetch: (_, options) => {
           request = JSON.parse(options.payload);
-          return {status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})};
+          return {status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates: []})}]}}]})};
         }});
       const data = request.contents[0].parts[1].inlineData.data;
       assert.equal(data, expected);

@@ -14,7 +14,7 @@ test('AI prompt is bounded and strict response parsing normalizes evidence', () 
     confidence: 'high', review: false,
     evidence: {merchant: {quote: 'Brand offers 20% off with SAVE20'}, code: {quote: 'Brand offers 20% off with SAVE20'},
       discountType: {quote: 'Brand offers 20% off with SAVE20'}, discountValue: {quote: 'Brand offers 20% off with SAVE20'}}};
-  const result = ctx.parseAICandidates_({text: JSON.stringify({candidates: [wireCandidate(candidate)]})}, message);
+  const result = ctx.parseAICandidates_({text: JSON.stringify({authentication: null, candidates: [wireCandidate(candidate)]})}, message);
   assert.equal(result[0].code, 'SAVE20');
   assert.equal(result[0].review, false);
 });
@@ -25,7 +25,7 @@ test('truncated prompt coverage and candidate identity remain fail-closed', () =
   assert.equal(prompt.truncated, true);
   properties.GEMINI_API_KEY = 'test-key';
   const outcome = ctx.extractCouponOutcome_({text: 'X'.repeat(70000), incomplete: false}, {fetch: () => ({status: 200,
-    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})})});
+    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates: []})}]}}]})})});
   assert.equal(outcome.status, 'incomplete'); assert.equal(outcome.archiveAllowed, false); assert.equal(outcome.verifiedNonOffer, false);
   const left = {merchant: 'Brand', website: '', code: 'X|Y', discountType: '', discountValue: '', minimumSpend: '', validOn: '', exclusions: '', expiry: '', usageLimits: '', currency: '', notes: ''};
   const right = {merchant: 'Brand', website: '', code: 'X', discountType: '|Y', discountValue: '', minimumSpend: '', validOn: '', exclusions: '', expiry: '', usageLimits: '', currency: '', notes: ''};
@@ -114,6 +114,26 @@ for (const [name, text, code] of [
   });
 }
 
+for (const [name, text, code, excluded] of [
+  ['account-access', 'Brand: Use code 123456 to access your account', '123456', true],
+  ['descriptive-predicate', 'Your verification code is confidential. Brand coupon code SAVE20', 'SAVE20', false],
+  ['verification-object', 'Brand: Use code SAVE20 to verify the 20% discount is applied at checkout.', 'SAVE20', false],
+  ['negated-label', 'This is not a verification code: SAVE20. Brand coupon code SAVE20', 'SAVE20', false]
+]) {
+  test('R10 authentication admission at actual extraction consumer: ' + name, () => {
+    const {ctx} = harness();
+    let calls = 0;
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      return aiResponse({code, evidence: {merchant: {quote: 'Brand'}, code: {quote: code}}});
+    };
+    const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+    assert.equal(outcome.excludedReason, excluded ? 'authentication_code_message' : undefined);
+    assert.equal(calls, excluded ? 0 : 1);
+    assert.equal(outcome.archiveAllowed, !excluded);
+  });
+}
+
 test('grouped authentication recognition is bounded and cannot normalize coupon identities', () => {
   const {ctx} = harness();
   for (const separator of [' ', '\u00a0', '\u202f']) {
@@ -194,7 +214,7 @@ test('authentication admission preserves full token punctuation and ignores mode
 test('code purpose takes precedence over incidental offer words and preserves associated promotions', () => {
   const {ctx} = harness();
   const cases = [
-    ['Brand: use code SAVE20 to verify your discount purchase.', false],
+    ['Brand: use code SAVE20 to verify your discount purchase.', true],
     ['Brand: use code SAVE20 to reset your password for 20% off.', false],
     ['Brand: use code SAVE20 to sign-in at checkout.', false],
     ['Brand: one-time code SAVE20 for your order.', false],
@@ -277,14 +297,14 @@ test('message scanner keeps line, literal and discussion inspection work linear'
 test('AI extraction rejects fenced or unknown responses before transport', () => {
   const {ctx} = harness();
   assert.throws(() => ctx.parseAICandidates_({text: "```json{}"}, {text: 'x'}), /AI/);
-  assert.throws(() => ctx.parseAICandidates_({text: JSON.stringify({candidates: [{unknown: 1}]})}, {text: 'x'}), /AI/);
+  assert.throws(() => ctx.parseAICandidates_({text: JSON.stringify({authentication: null, candidates: [{unknown: 1}]})}, {text: 'x'}), /AI/);
 });
 
 function aiResponse(overrides = {}) {
   const candidate = Object.assign(Object.fromEntries(['merchant','website','code','discountType','discountValue','minimumSpend','validOn','exclusions','expiry','usageLimits','currency','notes'].map(k => [k, ''])), {
     merchant: 'Brand', code: 'AI20', confidence: 'high', review: false, evidence: {merchant: {quote: 'Brand'}, code: {quote: 'AI20'}}
   }, overrides);
-  return {text: JSON.stringify({candidates: [wireCandidate(candidate)]})};
+  return {text: JSON.stringify({authentication: null, candidates: [wireCandidate(candidate)]})};
 }
 
 test('shared field identities preserve typed zero, exact codes and URL suffixes across all key consumers', () => {
@@ -322,7 +342,7 @@ test('deterministic unique-code clipping distinguishes twelve, thirteen and repe
     const {ctx} = harness();
     const codes = Array.from({length: count}, (_, i) => 'SAVE' + i);
     const text = 'Brand ' + codes.map(code => 'coupon code ' + code).join(' ') + (duplicate ? ' coupon code SAVE0' : '');
-    ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: codes.slice(0, 12).map(code =>
+    ctx.callGeminiModel_ = () => ({text: JSON.stringify({authentication: null, candidates: codes.slice(0, 12).map(code =>
       JSON.parse(aiResponse({code, evidence: {merchant: {quote: 'Brand'}, code: {quote: code}}}).text).candidates[0])})});
     const message = {text, incomplete: false};
     assert.equal(ctx.deterministicCandidates_(message).length, 12);
@@ -339,7 +359,7 @@ test('end-to-end extraction accepts bounded prompt and preserves deterministic c
   properties.GEMINI_API_KEY = 'test-key';
   let request;
   const result = ctx.extractCouponCandidates_({text: 'Coupon code SAVE20 ' + 'x'.repeat(59900), incomplete: false}, {
-    fetch: (_, options) => { request = JSON.parse(options.payload); return {status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})};}
+    fetch: (_, options) => { request = JSON.parse(options.payload); return {status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates: []})}]}}]})};}
   });
   assert.ok(request.contents[0].parts[0].text.length <= 60000);
   assert.equal(result[0].code, 'SAVE20');
@@ -352,7 +372,7 @@ test('extraction consolidates a sparse deterministic code with its evidenced AI 
     evidence: {merchant: {quote: 'Brand coupon code SAVE20'}, code: {quote: 'Brand coupon code SAVE20'}}
   });
   const result = ctx.extractCouponCandidates_({text: 'Brand coupon code SAVE20', incomplete: false}, {
-    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: [wireCandidate(candidate)]})}]}}]})})
+    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates: [wireCandidate(candidate)]})}]}}]})})
   });
   assert.deepEqual(Array.from(result, item => [item.merchant, item.code, item.review]), [['Brand', 'SAVE20', false]]);
   assert.notEqual(ctx.candidateMergeKey_({code: 'AbC123'}), ctx.candidateMergeKey_({code: 'abc123'}));
@@ -365,7 +385,7 @@ test('distinct described offers sharing a code stay separate and empty extractio
     evidence: {merchant: {quote: merchant + ' SAVE20'}, code: {quote: merchant + ' SAVE20'}}
   });
   const outcome = ctx.extractCouponOutcome_({text: 'First SAVE20 Second SAVE20', incomplete: false}, {
-    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})})
+    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates: []})}]}}]})})
   });
   assert.deepEqual(Array.from(outcome.candidates), []);
   assert.equal(outcome.status, 'complete');
@@ -375,7 +395,7 @@ test('distinct described offers sharing a code stay separate and empty extractio
   assert.equal(ctx.sameCouponOffer_(ctx.normalizeCandidate_(make('First'), {text: 'First SAVE20', incomplete: false}),
     ctx.normalizeCandidate_(make('Second'), {text: 'Second SAVE20', incomplete: false})), false);
   assert.equal(ctx.extractCouponOutcome_({text: '', incomplete: true}, {
-    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})})
+    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates: []})}]}}]})})
   }).status, 'incomplete');
 });
 
@@ -387,7 +407,7 @@ test('code-less offers with different grounded conditions stay separate', () => 
       discountValue: {quote: 'Brand 20% ' + validOn}, validOn: {quote: 'Brand 20% ' + validOn}}
   });
   const result = ctx.extractCouponCandidates_({text: 'Brand 20% Monday Brand 20% Tuesday', incomplete: false}, {
-    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: [wireCandidate(candidate('Monday')), wireCandidate(candidate('Tuesday'))]})}]}}]})})
+    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates: [wireCandidate(candidate('Monday')), wireCandidate(candidate('Tuesday'))]})}]}}]})})
   });
   assert.deepEqual(Array.from(result, item => item.validOn), ['Monday', 'Tuesday']);
 });
@@ -402,7 +422,7 @@ test('URL identity preserves path, query, fragment and percent-escape spelling t
     evidence: {merchant: {quote: 'Brand'}, website: {quote: website}}}).text).candidates[0]);
   const message = {id: 'abc123', link: ctx.gmailLink_('abc123'), text: 'Brand ' + urls.join(' '), incomplete: false};
   const outcome = ctx.extractCouponOutcome_(message, {fetch: () => ({status: 200,
-    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates})}]}}]})})});
+    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates})}]}}]})})});
   assert.deepEqual(Array.from(outcome.candidates, c => c.website), urls);
   assert.equal(new Set(outcome.candidates.map(c => ctx.candidateDedupeKey_(message, c))).size, urls.length);
   const state = ctx.newMessageState_('abc123'); state.candidateStates = [];
@@ -420,7 +440,7 @@ test('exact coded AI duplicates collapse before sparse source-note enrichment wi
     const proposal = JSON.parse(aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}).text).candidates[0];
     const message = {id: 'abc123', text: explicitCode ? 'Brand coupon code SAVE20' : 'Brand SAVE20', incomplete: false};
     const outcome = ctx.extractCouponOutcome_(message, {fetch: () => ({status: 200,
-      body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: [{...proposal, review: needsReview}, proposal]})}]}}]})})});
+      body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates: [{...proposal, review: needsReview}, proposal]})}]}}]})})});
     assert.equal(outcome.candidates.length, 1);
     assert.equal(outcome.candidates[0].code, 'SAVE20');
     assert.equal(outcome.archiveAllowed, !needsReview);
@@ -443,7 +463,7 @@ test('sparse deterministic codes enrich distinct same-code AI offers without col
   const make = validOn => JSON.parse(aiResponse({code: 'SAVE20', validOn,
     evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}, validOn: {quote: validOn}}}).text).candidates[0];
   const outcome = ctx.extractCouponOutcome_({id: 'abc123', text: 'Brand coupon code SAVE20 Monday Tuesday', incomplete: false}, {
-    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: [make('Monday'), make('Tuesday'), make('Monday')]})}]}}]})})
+    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates: [make('Monday'), make('Tuesday'), make('Monday')]})}]}}]})})
   });
   assert.deepEqual(Array.from(outcome.candidates, c => c.validOn), ['Monday', 'Tuesday']);
   const state = ctx.newMessageState_('abc123'); state.candidateStates = [];
@@ -455,7 +475,7 @@ test('end-to-end extraction propagates transport failure and drops blank proposa
   assert.throws(() => ctx.extractCouponCandidates_({text: 'offer', incomplete: false}, {fetch: () => ({status: 503, body: ''})}), /Gemini request failed/);
   const {ctx: ctx2, properties: props2} = harness(); props2.GEMINI_API_KEY = 'test-key';
   const fields = ['merchant','website','code','discountType','discountValue','minimumSpend','validOn','exclusions','expiry','usageLimits','currency','notes'];
-  const result = ctx2.extractCouponCandidates_({text: 'offer', incomplete: false}, {fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: [wireCandidate(Object.assign(Object.fromEntries(fields.map(k => [k, ''])), {confidence: 'low', review: true, evidence: {}}))]})}]}}]})})});
+  const result = ctx2.extractCouponCandidates_({text: 'offer', incomplete: false}, {fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates: [wireCandidate(Object.assign(Object.fromEntries(fields.map(k => [k, ''])), {confidence: 'low', review: true, evidence: {}}))]})}]}}]})})});
   assert.equal(result.length, 0);
 });
 
@@ -475,7 +495,7 @@ test('image-only incomplete extraction remains review-required', () => {
     evidence: {merchant: {image: 0}, code: {image: 0}}
   });
   const result = ctx.extractCouponCandidates_({text: '', images: [image], incomplete: true}, {
-    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: [wireCandidate(candidate)]})}]}}]})})
+    fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({authentication: null, candidates: [wireCandidate(candidate)]})}]}}]})})
   });
   assert.equal(result.length, 1);
   assert.equal(result[0].review, true);

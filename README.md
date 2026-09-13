@@ -195,14 +195,24 @@ The example configuration contains product defaults only.
   only explicit subject associations seed both alternatives independently.
   This admission decision can combine those supported message-level signals;
   factual coupon quotes still cannot cross original source spans.
+  Generic verification verbs require an authentication target such as an account,
+  identity, email, or phone; checking a discount, order, or checkout state is not
+  sufficient. Explicit authentication labels still take precedence over incidental
+  purchase wording.
   This is a bounded text recognizer, not universal language understanding:
   recognition requires a concrete 3–40-code-point value with an issuance
   relation, independently of letter case. Ordinary predicates such as REQUIRED and
   NECESSARIO, example/documentation frames, and explicit placeholder forms
   are not guessed as issued values. URL and email references are not code values.
-  Unsupported wording,
-  image-only evidence, and incomplete coverage retain normal extraction/review
-  rules. Code punctuation and Unicode identity are never rewritten.
+  If text does not decide admission, the model also checks inspected images.
+  Its response requires `authentication: null` or `{quote, image}` alongside
+  `candidates`. Valid image authentication excludes the whole message before
+  deterministic merging or staging, including mixed promotions and incomplete
+  messages. Image references require valid supplied descriptors; malformed or
+  unsupported proof fails closed. Text-only proof must also satisfy the shared
+  source-derived policy. A null signal supplies no extra completion, offer-absence,
+  or archival authority. Ordinary image offers retain their existing review rules.
+  Code punctuation and Unicode identity are never rewritten.
   Exclusion returns `excludedReason: authentication_code_message`, not verified
   absence of offers. It records an `ignored` journal checkpoint with that reason
   but creates no coupon batch/rows and does not label, archive, or delete Gmail.
