@@ -49,6 +49,28 @@ test('subject is independent factual evidence while sender remains metadata only
   assert.equal(ctx.normalizeCandidate_(senderOnly, {subject: 'Coupon code SAVE20', sender: 'Brand', incomplete: false}).merchant, '');
 });
 
+for (const [name, message, code, quote] of [
+  ['subject-purpose', {subject: 'Sign in to Acme', text: 'Your code is 123456'}, '123456'],
+  ['alphabetic', {text: 'Acme: Your verification code is ABCDEF'}, 'ABCDEF'],
+  ['heading-expiry', {subject: 'Acme', html: '<h1>Your verification code</h1><p>123456 expires in 10 minutes</p>'},
+    '123456', '123456 expires in 10 minutes'],
+  ['trailing-label', {text: 'Acme: 123456 is your verification code.'}, '123456']
+]) {
+  test('R5 authentication exclusion at actual extraction consumer: ' + name, () => {
+    const {ctx} = harness();
+    let calls = 0;
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      return aiResponse({merchant: 'Acme', code, evidence: {merchant: {quote: 'Acme'}, code: {quote: quote || message.text}}});
+    };
+    const outcome = ctx.extractCouponOutcome_({incomplete: false, ...message});
+    assert.equal(outcome.excludedReason, 'authentication_code_message');
+    assert.equal(calls, 0);
+    assert.equal(outcome.archiveAllowed, false);
+    assert.deepEqual(Array.from(outcome.candidates), []);
+  });
+}
+
 test('authentication issuance excludes the entire message before model and both candidate producers', () => {
   const {ctx} = harness();
   const {authenticationMessages, ordinaryMessages} = require('./authentication-fixtures');
@@ -159,10 +181,10 @@ test('message classification uses bounded context work for repeated literals and
     'Brand: use code LOGIN77 for a discount.\n'.repeat(8000), 'x'.repeat(100000) + '\n' + 'LOGIN77 '.repeat(8000)]) {
     let units = 0;
     let calls = 0;
-    ctx.authenticationInstruction_ = function (before, after, code) {
+    ctx.authenticationInstruction_ = function (before, after, code, frame) {
       units += before.length + after.length;
       calls++;
-      return original(before, after, code);
+      return original(before, after, code, frame);
     };
     assert.equal(ctx.authenticationMessage_(ctx.candidateSource_({text, incomplete: false})), false);
     assert.equal(calls, 8000);

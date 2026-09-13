@@ -10,6 +10,9 @@
   policy exclusion separately from verified offer absence, without coupon rows
   or Gmail mutations. Preserve ordinary login-adjacent promotions, exact Unicode
   code identities, and existing manual-review/retained-batch authority.
+  Associate subject/body issuance, labels in either direction, alphabetic
+  values, and heading/value blocks with expiry text without relaxing factual
+  quote boundaries.
   Weak generic Italian/English code introductions remain AI-only; explicit
   coupon/promo/discount introductions remain deterministic for admitted messages.
 

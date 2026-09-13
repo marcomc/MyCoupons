@@ -182,14 +182,16 @@ The example configuration contains product defaults only.
   direct AI/deterministic extraction and Retry. Ordinary login requirements and
   generic discussion of verification codes do not exclude a promotion.
   Supported English/Italian evidence includes explicit verification/security/OTP
-  labels, code-use instructions for verification/sign-in/password reset, and a
-  verification heading with a code on a separate line, sentence, or rendered
-  block. This admission decision can combine those message-level signals;
+  labels before or after their values, code-use instructions for verification,
+  sign-in or password reset, an explicit authentication subject plus generic
+  code issuance in the body, and a verification heading with a leading
+  code on a separate line, sentence, or rendered block (including expiry text).
+  This admission decision can combine those message-level signals;
   factual coupon quotes still cannot cross original source spans.
   This is a bounded text recognizer, not universal language understanding:
-  label/heading recognition requires a concrete 3–40-code-point value containing
-  digits; all-letter uppercase values additionally require a direct
-  authentication-use instruction. Ordinary prose and explicit placeholder forms
+  recognition requires a concrete 3–40-code-point value containing digits or
+  an all-uppercase alphabetic value. Ordinary predicates such as REQUIRED and
+  NECESSARIO, example/documentation frames, and explicit placeholder forms
   are not guessed as issued values. Unsupported wording,
   image-only evidence, and incomplete coverage retain normal extraction/review
   rules. Code punctuation and Unicode identity are never rewritten.

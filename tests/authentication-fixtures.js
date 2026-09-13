@@ -1,5 +1,9 @@
 // Synthetic admission fixtures. Mixed messages are policy tests, not observed mail.
 const authenticationMessages = [
+  {subject: 'Sign in to Acme', text: 'Your code is 123456'},
+  {text: 'Acme: Your verification code is ABCDEF'},
+  {subject: 'Acme', html: '<h1>Your verification code</h1><p>123456 expires in 10 minutes</p>'},
+  {text: 'Acme: 123456 is your verification code.'},
   {text: 'Acme verification code below: LOGIN77'},
   {text: 'Acme verification code shown below: LOGIN77'},
   {text: 'Your verification code is 123456'},
@@ -31,7 +35,50 @@ const authenticationMessages = [
   {subject: 'Your verification code', html: '<p>123456</p><p>Brand coupon code SAVE20</p><img src="https://images.example/offer.png">'}
 ];
 
+// Small synthetic cross-product of the R5 association dimensions. All consumers
+// share these cases; no example here is represented as observed private mail.
+for (const code of ['123456', 'ABCDEF', 'LOGIN77', 'ÈTÉ+20!']) {
+  for (const locale of [
+    {subject: 'Sign in to Acme', label: 'your verification code', generic: 'Your code is ',
+      copula: ' is ', expiry: ' expires in 10 minutes'},
+    {subject: 'Reimposta la password', label: 'il tuo codice di verifica', generic: 'Il tuo codice è ',
+      copula: ' è ', expiry: ' scadrà fra 10 minuti'}
+  ]) {
+    for (const continuation of ['', locale.expiry]) {
+      authenticationMessages.push(
+        {subject: locale.subject, text: locale.generic + code + continuation},
+        {text: 'Acme: ' + locale.label + locale.copula + code + continuation},
+        {text: 'Acme: ' + code + locale.copula + locale.label + continuation + '.'},
+        {subject: locale.subject, text: locale.generic.trimEnd() + ': ' + code + continuation},
+        {subject: locale.label, text: code + continuation},
+        {html: '<h1>' + locale.label + '</h1><p>' + code + continuation + '</p>'}
+      );
+    }
+  }
+}
+authenticationMessages.push(
+  {text: '123456 is your verification code, valid for 10 minutes.'},
+  {text: 'ABCDEF is your verification code and expires in 10 minutes.'},
+  {subject: 'Sign in to Acme', text: '123456 is your code.'},
+  {subject: 'Reimposta la password', text: 'ABCDEF è il tuo codice.'}
+);
+
 const ordinaryMessages = [
+  {subject: 'Sign in to save', text: 'Your code is SAVE20'},
+  {text: 'Your verification code is SENT separately. Brand coupon code SAVE20'},
+  {text: 'Your verification code is ABCDEF (example). Brand coupon code SAVE20'},
+  {text: 'ABCDEF is your verification code (example). Brand coupon code SAVE20'},
+  {html: '<h1>Your verification code</h1><p>ABCDEF (example)</p><p>Brand coupon code SAVE20</p>'},
+  {subject: 'Sign in to Acme', text: 'Brand: use code SAVE20 to get 20% off'},
+  {subject: 'Sign in to Acme', text: 'Example: Your code is 123456. Brand coupon code SAVE20'},
+  {subject: 'Login for discounts', text: 'Brand: Your code is SAVE20 for 20% off'},
+  {subject: 'Sign in to Acme for discounts', text: 'Brand: Your code is SAVE20'},
+  {subject: 'Sign in to Acme', text: 'Brand: coupon code is SAVE20'},
+  {text: 'Example: ABCDEF is your verification code. Brand coupon code SAVE20'},
+  {html: '<h1>Your verification code</h1><p>is required before checkout.</p><p>123456 orders use Brand coupon code SAVE20</p>'},
+  {subject: 'Sign in to Acme', html: '<h2>Example</h2><p>Your code is ABCDEF</p><p>Brand coupon code SAVE20</p>'},
+  {text: 'REQUIRED is your verification code status. Brand coupon code SAVE20'},
+  {html: '<h1>Your verification code</h1><p>REQUIRED before checkout</p><p>Brand coupon code SAVE20</p>'},
   {text: 'Brand: Log in to your account and use code SAVE20 to get 20% off'},
   {text: 'Brand: verification code is required before checkout. Coupon code SAVE20'},
   {text: 'Your verification code is REQUIRED before checkout. Coupon code SAVE20'},

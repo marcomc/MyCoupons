@@ -116,10 +116,13 @@ test('Retry exclusion is a no-op for an existing immutable review batch', () => 
   const before = JSON.stringify({rows: coupon._values, notes: coupon._notes, journal: journalSheet._values});
   ctx.callGeminiModel_ = () => assert.fail('Retry auth exclusion must precede model');
   ctx.Gmail.Users.Messages = {modify: () => assert.fail('Retry exclusion must not mutate Gmail')};
-  const outcome = ctx.retryReviewCandidate_(coupon, 2, journal, journal.candidateStates[0],
-    {...message, text: 'Your verification code is 123456'}, journalSheet, config);
-  assert.equal(outcome.excludedReason, 'authentication_code_message');
-  assert.equal(JSON.stringify({rows: coupon._values, notes: coupon._notes, journal: journalSheet._values}), before);
+  const {authenticationMessages} = require('./authentication-fixtures');
+  for (const source of authenticationMessages) {
+    const outcome = ctx.retryReviewCandidate_(coupon, 2, journal, journal.candidateStates[0],
+      {...message, text: '', ...source}, journalSheet, config);
+    assert.equal(outcome.excludedReason, 'authentication_code_message', JSON.stringify(source));
+    assert.equal(JSON.stringify({rows: coupon._values, notes: coupon._notes, journal: journalSheet._values}), before);
+  }
 });
 
 function deterministicOutcome(ctx, message) {
