@@ -618,4 +618,33 @@ for (const predicate of ['used', 'USED']) {
   }
 }
 ordinaryMessages.push({text: 'Your 2FA is available. Brand coupon code SAVE20'});
+for (const label of ['account recovery code', 'account-recovery code', 'account recovery PIN',
+  'account-recovery PIN', 'account recovery passcode', 'account-recovery passcode']) {
+  authenticationMessages.push(
+    {text: 'Your ' + label + ' is 123456. Brand coupon code SAVE20'},
+    {text: 'Your ' + label + ' will be 123456'},
+    {text: 'Your ' + label + '=123456'},
+    {text: '123456 is your ' + label},
+    {text: 'Use 123456 as your ' + label},
+    {subject: 'Your ' + label, text: 'Your code is aBcDeF'},
+    {html: '<h1>Your ' + label + ':</h1><p>123456</p>'},
+    {text: 'Example: Your ' + label + ' is 123456. Your ' + label + ' is 654321'}
+  );
+  ordinaryMessages.push(
+    {text: 'Your ' + label + ' is confidential. Brand coupon code SAVE20'},
+    {text: 'Your ' + label + ' is used to verify your account. Brand coupon code SAVE20'},
+    {text: 'Your ' + label + ' is not 123456. Brand coupon code SAVE20'},
+    {text: 'Example: Your ' + label + ' is 123456. Brand coupon code SAVE20'},
+    {text: 'You said that your ' + label + ' is 123456. Brand coupon code SAVE20'},
+    {text: 'Is your ' + label + ' 123456? Brand coupon code SAVE20'},
+    {text: 'If your ' + label + ' is 123456, contact support. Brand coupon code SAVE20'},
+    {text: 'Your ' + label + ' manager is available. Brand coupon code SAVE20'},
+    {text: 'Your ' + label + ' is help.brand.example/a. Brand coupon code SAVE20'}
+  );
+}
+ordinaryMessages.push(
+  {text: 'Your account recovery is available. Brand coupon code SAVE20'},
+  {text: 'Your recovery code is 123456. Brand coupon code SAVE20'},
+  {text: 'Read about account recovery. Use code SAVE20 to save 20%.'}
+);
 module.exports = {authenticationMessages, ordinaryMessages};

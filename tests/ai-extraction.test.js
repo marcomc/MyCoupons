@@ -420,6 +420,19 @@ test('R17 actual consumer recognizes 2FA and two-factor labels before model extr
   }
 });
 
+test('R18 account-recovery issuance excludes before a grounded mistaken coupon proposal', () => {
+  const {ctx} = harness(); let calls = 0;
+  const text = 'Your account recovery code is 123456. Brand coupon code SAVE20';
+  ctx.callGeminiModel_ = () => {
+    calls++;
+    return aiResponse({code: '123456.', evidence: {merchant: {quote: 'Brand'}, code: {quote: text}}});
+  };
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0); assert.equal(outcome.archiveAllowed, false);
+  assert.deepEqual(Array.from(outcome.candidates), []);
+});
+
 function aiResponse(overrides = {}) {
   const candidate = Object.assign(Object.fromEntries(['merchant','website','code','discountType','discountValue','minimumSpend','validOn','exclusions','expiry','usageLimits','currency','notes'].map(k => [k, ''])), {
     merchant: 'Brand', code: 'AI20', confidence: 'high', review: false, evidence: {merchant: {quote: 'Brand'}, code: {quote: 'AI20'}}
