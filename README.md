@@ -178,9 +178,14 @@ The example configuration contains product defaults only.
   forms are left to evidence-gated AI rather than a proximity heuristic; this
   avoids treating authentication tokens as coupons without excluding mixed
   account-and-offer messages.
-  Candidate projection also rejects a proposed code whose complete sourced
-  sentence is authentication-only, so an AI response cannot turn a login or
-  verification code into a review row or archive authority.
+  Candidate projection rejects supported authentication-purpose instructions
+  (verification, password reset, or a code used to sign in). Ordinary login
+  remains compatible with an associated coupon, discount, or checkout action.
+  Quotes select exact source occurrences; an ambiguous quote covering an
+  authentication occurrence cannot borrow another coupon's context. Code bytes
+  are excluded from context matching, so `SAVE` cannot supply its own offer
+  evidence. This is a bounded English/Italian recognizer, not a complete natural
+  language classifier; unfamiliar wording retains the existing grounded-AI checks.
   Deterministic candidates currently require review. Tokens end at whitespace;
   one matching pair of outer ASCII quotes or angle brackets may wrap a token.
   Internal punctuation is never silently removed. Introducers require whitespace

@@ -80,22 +80,68 @@ function authenticationCodeOnly_(code, evidence, source) {
   const codeEvidence = ownValue_(evidence, 'code');
   const quote = codeEvidence && ownValue_(codeEvidence, 'quote');
   if (typeof quote !== 'string' || !quote) return false;
-  let codeOccurrence = false;
-  let authenticationOnly = false;
-  source.evidenceSpans.forEach(function (span) {
-    groundedFieldOccurrences_('code', code, quote, span).forEach(function (occurrence) {
-      codeOccurrence = true;
-      const before = span.slice(0, occurrence.start);
-      const sentenceStart = Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'), before.lastIndexOf('?'), before.lastIndexOf('\n')) + 1;
-      const sentenceTail = span.slice(occurrence.start);
-      const sentenceEndMatch = /[.!?\n]/u.exec(sentenceTail);
-      const sentence = span.slice(sentenceStart, occurrence.start + (sentenceEndMatch ? sentenceEndMatch.index + 1 : sentenceTail.length));
-      const authentication = /(?:\b(?:account|authentication|login|log in|one[ -]?time|otp|verify|verification)\b|\b(?:accesso|account|autenticazione|monouso|verifica|verificare)\b)/iu.test(sentence);
-      const offer = /(?:\b(?:coupon|promo(?:tional|zione|zionale)?|sconto|offerta|risparmia|salva|discount|offer|save|sale|apply|checkout|cart|purchase|order|applica|carrello|acquisto)\b|\p{Nd}\s*%)/iu.test(sentence);
-      if (authentication && !offer) authenticationOnly = true;
+  return source.evidenceSpans.some(function (span) {
+    const selected = groundedFieldOccurrences_('code', code, quote, span);
+    if (!selected.length) return false;
+    const positions = new Set(selected.map(function (occurrence) { return occurrence.start; }));
+    const mentions = codeContextMentions_(span, code);
+    return mentions.some(function (mention, index) {
+      if (!positions.has(mention.start)) return false;
+      const beforeStart = index ? mentions[index - 1].end : 0;
+      const afterEnd = index + 1 < mentions.length ? mentions[index + 1].start : span.length;
+      const context = codePurposeContext_(span.slice(beforeStart, mention.start), span.slice(mention.end, afterEnd));
+      return context.authPurpose || context.accessContext && !context.offerUse;
     });
   });
-  return codeOccurrence && authenticationOnly;
+}
+function codeContextMentions_(span, code) {
+  // Other introduced codes are context boundaries, never synthesized offers.
+  const mentions = [];
+  const tokens = /\S+/gu;
+  let pending = '';
+  let match;
+  while ((match = tokens.exec(span))) {
+    const token = codeLexemes_(match[0])[0];
+    const wrapped = token !== match[0];
+    const modifier = pending && (/^(?:is|[:=])$/iu.test(token) || pending === 'codice' && /^sconto[:=]?$/iu.test(token));
+    if (token === code || pending && !modifier) {
+      mentions.push({start: match.index + (wrapped ? 1 : 0), end: match.index + match[0].length - (wrapped ? 1 : 0)});
+    }
+    pending = /^(?:code|codice)[:=]?$/iu.test(token) ? token.toLowerCase().replace(/[:=]$/u, '') : modifier ? pending : '';
+  }
+  return mentions;
+}
+function codePurposeContext_(before, after) {
+  // Each gap is visited at most twice. Code bytes (including punctuation) are
+  // outside these fragments; quotes select occurrences, not sentence boundaries.
+  const wrapper = before.charAt(before.length - 1);
+  if ((wrapper === '"' && after.charAt(0) === '"') || (wrapper === "'" && after.charAt(0) === "'") ||
+    (wrapper === '<' && after.charAt(0) === '>')) { before = before.slice(0, -1); after = after.slice(1); }
+  before = before.slice(Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'), before.lastIndexOf('?'), before.lastIndexOf('\n')) + 1);
+  const stop = /[.!?\n]/u.exec(after);
+  if (stop) after = after.slice(0, stop.index);
+  const authWords = /\b(?:verify|verification|authenticate|authentication|otp|one[ -]?time|password|reset|log[ -]?in|sign[ -]?in|verifica|verificare|autenticazione|monouso|reimposta|ripristina|accesso)\b/iu;
+  const authLabel = /\b(?:verification|authentication|otp|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in)\s+code\s*[:=]?\s*$/iu.test(before) ||
+    /\bcodice\s+(?:di\s+)?(?:verifica|autenticazione|accesso|monouso)\s*[:=]?\s*$/iu.test(before);
+  const authUsingCode = /\b(?:using|with|con|usando)\s+(?:(?:the|il)\s+)?(?:code|codice)\s*[:=]?\s*$/iu.test(before) && lastCodeActionIsAuth_(before);
+  const authPurpose = authLabel || authUsingCode || /^\s*(?:(?:to|for|per)\s+)?(?:verify|authenticate|reset|log[ -]?in|sign[ -]?in|verificare|reimpostare|accedere)\b/iu.test(after);
+  const accessContext = authWords.test(before) || authWords.test(after) || /\baccount\b/iu.test(before) || /\baccount\b/iu.test(after);
+  const couponLabel = /\b(?:coupon\s+code|promo(?:tional)?\s+code|discount\s+code|codice\s+sconto)\s*[:=]?\s*(?:is\s+)?$/iu.test(before);
+  const useCode = /\b(?:apply|use|applica|usa)\s+(?:(?:the|il)\s+)?(?:code|codice)\s*[:=]?\s*$/iu.test(before);
+  const checkout = /^\s*(?:(?:at|in|al|nel)\s+)?(?:(?:the|your|il|tuo)\s+)?(?:checkout|cart|carrello)\b/iu.test(after);
+  const discountWords = /(?:\p{Nd}\s*%|\b(?:discount|sconto|off|risparmia)\b)/iu;
+  const discountAfter = /^\s*(?:for|per|gives|gets|after\s+(?:log[ -]?in|sign[ -]?in)\s+for)\b/iu.test(after) && discountWords.test(after);
+  const discountBefore = /\b(?:with|using|con|usando)\s+(?:(?:the|il)\s+)?(?:code|codice)\s*[:=]?\s*$/iu.test(before) && discountWords.test(before);
+  const promotionBefore = /\b(?:promo|promotion|promozione|offerta)\b/iu.test(before);
+  return {authPurpose: authPurpose, accessContext: accessContext,
+    offerUse: couponLabel || useCode && (checkout || discountAfter || promotionBefore) || discountBefore};
+}
+function lastCodeActionIsAuth_(text) {
+  const actions = /\b(?:(verify|authenticate|reset|log[ -]?in|sign[ -]?in|verifica|verificare|reimposta|ripristina|accedi|accedere)|(?:get|receive|save|apply|redeem|ottieni|risparmia|applica))\b/giu;
+  let auth = false;
+  let match;
+  while ((match = actions.exec(text))) auth = Boolean(match[1]);
+  return auth;
 }
 function rawOccurrences_(value, source, normalized) {
   if (!wellFormedUtf16_(value) || !wellFormedUtf16_(source)) return [];
