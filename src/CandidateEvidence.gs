@@ -129,6 +129,8 @@ function authenticationLiteral_(token) {
   // words remain with normal extraction rather than becoming a guessed code.
   const length = Array.from(token).length;
   return length >= 3 && length <= 40 && /[\p{L}\p{N}\p{M}]/u.test(token) &&
+    !/^(?:[a-z][a-z\d+.-]*:\/\/|www\.)\S+$/iu.test(token) &&
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token) &&
     (/\p{Nd}/u.test(token) || /\p{Lu}/u.test(token) && !/\p{Ll}/u.test(token)) &&
     !/^(?:OTP|CODE|PIN|XXX+|CODE_HERE)[.!?,;:]*$/u.test(token);
 }
@@ -144,6 +146,7 @@ function authenticationSubject_(text) {
   // Only an explicit authentication request supplies message-level purpose.
   // Promotional login subjects and ordinary account discussion do not.
   if (text.length > 240 || authenticationDiscussion_(text)) return false;
+  if (authenticationHeading_(text.trim())) return true;
   return (
     /^(?:sign[ -]?in|log[ -]?in)(?:\s+to\s+[\p{L}\p{N} ._-]+)?[.!]?$/iu.test(text.trim()) ||
     /^(?:(?:reset|verify|authenticate)\s+(?:(?:your|the)\s+)?(?:password|account|identity)|(?:reimposta|verifica)\s+(?:(?:la|il|il\s+tuo|la\s+tua)\s+)?(?:password|account|identità)|accedi(?:\s+al\s+tuo\s+account)?)[.!]?$/iu.test(text.trim())
@@ -151,7 +154,25 @@ function authenticationSubject_(text) {
     !/\bto\s+(?:save|get|receive|redeem|shop|claim|earn)\b/iu.test(text);
 }
 function authenticationValueTail_(text) {
-  return /^[^\S\n]*(?:$|\n|[.!?](?:\s|$)|(?:(?:[,;]|and|e)\s*)?(?:expires?|is\s+valid|valid\s+(?:for|until)|scad(?:e|rà)|(?:è\s+)?valid[oa]\s+(?:per|fino))(?![\p{L}\p{N}\p{M}_]))/iu.test(text);
+  return authenticationPurposeTail_(text) ||
+    /^[^\S\n]*(?:$|\n|[.!?](?:\s|$)|(?:(?:[,;]|and|e)\s*)?(?:expires?|is\s+valid|valid\s+(?:for|until)|scad(?:e|rà)|(?:è\s+)?valid[oa]\s+(?:per|fino))(?![\p{L}\p{N}\p{M}_]))/iu.test(text);
+}
+function authenticationPurposeTail_(text) {
+  return new RegExp('^\\s*(?:(?:to|for|per)\\s+)?' + authenticationActionPattern_() + '\\b', 'iu').test(text);
+}
+function authenticationActionPattern_() {
+  return '(?:verif(?:y|ying)|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|verifica(?:re)?|reimposta(?:re)?|ripristina|acced(?:i|ere))';
+}
+function authenticationCodeNoun_() {
+  return '(?:(?:(?:coupon|promo(?:tional)?|discount)\\s+)?code|codice(?:\\s+sconto)?)';
+}
+function authenticationDiscussionClause_(text) {
+  // A reference to another example is not an example of this issuance. Keep
+  // explicit "For example," and "Example;" clauses intact rather than treating
+  // every comma/semicolon as a reset of the discussion state.
+  const reference = /\b(?:unlike\s+(?:the\s+)?(?:example|sample|documentation)(?:\s+(?:above|below))?|(?:read|see|consult)\s+(?:the\s+)?(?:example|sample|documentation)\s+above)\s*[,;]\s*/iu.exec(text);
+  return reference ? authenticationDiscussion_(text.slice(0, reference.index)) ||
+    authenticationDiscussion_(text.slice(reference.index + reference[0].length)) : authenticationDiscussion_(text);
 }
 function authenticationExampleSuffix_(text) {
   // A qualifier directly attached to this value/label is not an independent
@@ -179,19 +200,20 @@ function authenticationIssuance_(before, after) {
   const completeValue = authenticationValueTail_(continuation);
   const generic = /(?:^|\s|:)(?:(?:your|the|il\s+tuo|il|tuo)\s+)?(?:code|codice)\s*(?:(?:is|è|e[’'])\s*[:=]?\s+|[:=]\s*)$/iu.exec(before);
   const genericIssued = Boolean(generic && !/\b(?:coupon|promo(?:tional)?|discount|sconto|use|enter|type|usa|inserisci|digita)\s*$/iu.test(before.slice(0, generic.index)));
-  const introduced = /\b(?:code|codice(?:\s+sconto)?)\s*(?:is\s*)?[:=]?\s*$/iu.test(before);
-  const imperative = /\b(?:use|enter|type|usa|inserisci|digita)\s+(?:(?:the|your|il|il\s+tuo)\s+)?(?:code|codice)\s*[:=]?\s*$/iu.test(before);
-  const purposeAfter = /^\s*(?:(?:to|for|per)\s+)?(?:verify|authenticate|reset|log[ -]?in|sign[ -]?in|verificare|reimpostare|accedere)\b/iu.test(after);
-  const usingCode = /\b(?:using|with|con|usando)\s+(?:(?:the|il)\s+)?(?:code|codice)\s*[:=]?\s*$/iu.test(before);
-  const actions = /\b(?:(verify|authenticate|reset|log[ -]?in|sign[ -]?in|verifica|verificare|reimposta|ripristina|accedi|accedere)|(?:get|receive|save|apply|redeem|use|ottieni|risparmia|applica|usa))\b/giu;
+  const noun = authenticationCodeNoun_();
+  const introduced = new RegExp('\\b' + noun + '\\s*(?:is\\s*)?[:=]?\\s*$', 'iu').test(before);
+  const imperative = new RegExp('\\b(?:use|enter|type|usa|inserisci|digita)\\s+(?:(?:(?:the|your|il|il\\s+tuo)\\s+)?' + noun + '\\s*[:=]?\\s*)?$', 'iu').test(before);
+  const purposeAfter = authenticationPurposeTail_(after);
+  const usingCode = new RegExp('\\b(?:using|with|con|usando)\\s+(?:(?:the|il)\\s+)?' + noun + '\\s*[:=]?\\s*$', 'iu').test(before);
+  const actions = new RegExp('\\b(?:(' + authenticationActionPattern_() + ')|(?:get|receive|save|apply|redeem|use|ottieni|risparmia|applica|usa))\\b', 'giu');
   let authAction = false;
   let action;
   while ((action = actions.exec(before))) authAction = Boolean(action[1]);
   return {explicit: issuingLabel || Boolean(followingLabel && completeValue),
     generic: genericIssued || Boolean(followingGeneric && completeValue),
-    direct: introduced && purposeAfter || usingCode && authAction,
+    direct: (introduced || imperative) && purposeAfter || usingCode && authAction,
     imperative: imperative, sentenceValue: sentenceValue, valueTail: completeValue,
-    discussion: authenticationDiscussion_(before) || authenticationExampleSuffix_(continuation)};
+    discussion: authenticationDiscussionClause_(before) || authenticationExampleSuffix_(continuation)};
 }
 function authenticationInstruction_(before, after, code, frame) {
   const relation = authenticationIssuance_(before, after);

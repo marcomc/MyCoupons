@@ -192,7 +192,8 @@ The example configuration contains product defaults only.
   recognition requires a concrete 3–40-code-point value containing digits or
   an all-uppercase alphabetic value. Ordinary predicates such as REQUIRED and
   NECESSARIO, example/documentation frames, and explicit placeholder forms
-  are not guessed as issued values. Unsupported wording,
+  are not guessed as issued values. URL and email references are not code values.
+  Unsupported wording,
   image-only evidence, and incomplete coverage retain normal extraction/review
   rules. Code punctuation and Unicode identity are never rewritten.
   Exclusion returns `excludedReason: authentication_code_message`, not verified

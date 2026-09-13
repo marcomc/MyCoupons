@@ -4,6 +4,13 @@ const authenticationMessages = [
   {text: 'Acme: Your verification code is ABCDEF'},
   {subject: 'Acme', html: '<h1>Your verification code</h1><p>123456 expires in 10 minutes</p>'},
   {text: 'Acme: 123456 is your verification code.'},
+  {text: 'Acme: verify your account using coupon code SAVE20.'},
+  {text: 'Acme: 123456 is your verification code for signing in.'},
+  {text: 'Acme: Enter 123456 to sign in.'},
+  {subject: 'Your verification code', text: 'Hello Acme,\nYour code is 123456'},
+  {text: 'Acme: Unlike the example above, your verification code is 123456.'},
+  {text: 'Acme: Read the example above; your verification code is 123456.'},
+  {text: 'Acme: Unlike the example below, your verification code is 123456.'},
   {text: 'Acme verification code below: LOGIN77'},
   {text: 'Acme verification code shown below: LOGIN77'},
   {text: 'Your verification code is 123456'},
@@ -62,8 +69,30 @@ authenticationMessages.push(
   {subject: 'Sign in to Acme', text: '123456 is your code.'},
   {subject: 'Reimposta la password', text: 'ABCDEF è il tuo codice.'}
 );
+for (const label of ['code', 'coupon code', 'promo code', 'discount code', 'codice', 'codice sconto']) {
+  authenticationMessages.push(
+    {text: 'Acme: verify your account using ' + label + ' LOGIN77.'},
+    {text: 'Acme: sign into your account with ' + label + ' LOGIN77.'},
+    {text: 'Acme: use ' + label + ' LOGIN77 to sign in.'}
+  );
+}
+for (const [verb, purpose] of [['Enter', 'to sign in'], ['Use', 'for verifying your account'], ['Inserisci', 'per accedere']]) {
+  authenticationMessages.push({text: 'Acme: ' + verb + ' ABCDEF ' + purpose + '.'});
+}
 
 const ordinaryMessages = [
+  {text: 'To troubleshoot, read the example below; your verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'See the example below, your verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'Consult the example below; your verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'Troubleshoot your verification code: https://help.acme.example/article/12345. Brand coupon code SAVE20'},
+  {text: 'Troubleshoot your verification code: help123@acme.example. Brand coupon code SAVE20'},
+  {text: 'For example, your verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'Example; your verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'Brand: use SAVE20 to save on your order.'},
+  {text: 'Brand: log in and redeem coupon code SAVE20 at checkout.'},
+  {text: 'Brand: After login, get 20% off using coupon code SAVE20'},
+  {subject: 'Your verification code', text: 'Hello Acme,\n123456 orders used coupon code SAVE20'},
+  {subject: 'Your verification code', text: 'Hello Acme,\nBrand coupon code SAVE20'},
   {subject: 'Sign in to save', text: 'Your code is SAVE20'},
   {text: 'Your verification code is SENT separately. Brand coupon code SAVE20'},
   {text: 'Your verification code is ABCDEF (example). Brand coupon code SAVE20'},
