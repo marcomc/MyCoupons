@@ -4,6 +4,21 @@
 
 ### Fixed
 
+- Exclude messages clearly issuing authentication codes before coupon staging,
+  including messages that also contain offers. Readable text is checked before
+  image acquisition or AI extraction; validated model evidence from inspected
+  images also excludes the entire message before deterministic merging.
+  Share the source-derived gate with deterministic extraction and Retry; record
+  policy exclusion separately from verified offer absence, without coupon rows
+  or Gmail mutations. Preserve ordinary login-adjacent promotions, exact Unicode
+  code identities, and existing manual-review/retained-batch authority.
+  Associate subject/body issuance, labels in either direction, alphabetic
+  values, and heading/instruction/value layouts without relaxing factual quote
+  boundaries. Keep verification actions tied to authentication targets and
+  preserve negated labels and descriptive predicates as ordinary discussion.
+  Weak generic Italian/English code introductions remain AI-only; explicit
+  coupon/promo/discount introductions remain deterministic for admitted messages.
+
 - Bind Gemini extraction values to typed evidence in a shared JSON response
   schema on both backends. Validate the complete response before projection,
   retain source-grounding and review authority, reject excess offers and

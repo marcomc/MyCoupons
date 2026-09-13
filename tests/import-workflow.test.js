@@ -35,6 +35,160 @@ const HEADERS = ['Email date', 'Brand / merchant', 'Website', 'Coupon code', 'Di
   'Priority', 'Category', 'Currency', 'Estimated value', 'Used date', 'Last checked', 'Action needed', 'Days to expiry'];
 const JOURNAL = ['Message ID', 'State JSON'];
 
+test('real admission checkpoints excluded mail without candidate staging, coupon rows or Gmail mutation', () => {
+  const {authenticationMessages} = require('./authentication-fixtures');
+  for (const source of authenticationMessages) {
+    const {ctx, config} = harness();
+    const message = {id: 'abc123', receivedAtMs: 0, subject: '', sender: '',
+      link: 'https://mail.google.com/mail/#all/abc123', incomplete: false, ...source};
+    ctx.callGeminiModel_ = () => assert.fail('excluded source cannot call model');
+    ctx.createBatchIntent_ = () => assert.fail('excluded source cannot stage a candidate batch');
+    ctx.appendCouponRow_ = () => assert.fail('excluded source cannot create coupon rows');
+    ctx.Gmail.Users.Messages = {modify: () => assert.fail('excluded source cannot mutate Gmail')};
+    const state = {config, couponSheet: sheet([HEADERS]), journalSheet: sheet([JOURNAL]), messages: [message]};
+    const result = ctx.runImportWorkflow_(state);
+    assert.equal(result.messages[0].status, 'ignored', JSON.stringify(source));
+    assert.equal(result.messages[0].excludedReason, 'authentication_code_message');
+    assert.equal(result.imported, 0); assert.equal(result.review, 0);
+    const saved = ctx.getMessageState_(state.journalSheet, message.id);
+    assert.equal(saved.status, 'ignored'); assert.equal(saved.outcome, 'authentication_code_message');
+    assert.equal(saved.archived, false); assert.equal(saved.labelApplied, false);
+    assert.equal(saved.batchIntent, undefined);
+    assert.deepEqual(Array.from(saved.candidateKeys), []);
+    assert.equal(state.couponSheet.getLastRow(), 1);
+    ctx.extractCouponOutcome_ = () => assert.fail('terminal exclusion must not re-extract');
+    assert.equal(ctx.runImportWorkflow_(state).messages[0].status, 'ignored');
+  }
+});
+
+test('image authentication excludes before staging and is a no-op for Retry', () => {
+  const {png} = require('./mime-fixtures');
+  const {wireCandidate} = require('./ai-wire-fixtures');
+  for (const incomplete of [false, true]) {
+    const {ctx, config} = harness();
+    const message = {id: 'abc123', receivedAtMs: 0, subject: '', sender: '',
+      link: 'https://mail.google.com/mail/#all/abc123', text: 'Brand coupon code SAVE20', incomplete,
+      images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-auth-image'}]};
+    const raw = {...confirmedCandidate(), website: '', code: 'SAVE20', discountType: '', discountValue: '',
+      currency: '', notes: '', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}};
+    delete raw.imageEvidence;
+    ctx.callGeminiModel_ = () => ({text: JSON.stringify({
+      authentication: {quote: '', image: 0}, candidates: [wireCandidate(raw)]
+    })});
+    ctx.Gmail.Users.Messages = {modify: () => assert.fail('image exclusion cannot mutate Gmail')};
+    const state = {config, couponSheet: sheet([HEADERS]), journalSheet: sheet([JOURNAL]), messages: [message]};
+    const create = ctx.createBatchIntent_; const append = ctx.appendCouponRow_;
+    ctx.createBatchIntent_ = () => assert.fail('image exclusion cannot stage');
+    ctx.appendCouponRow_ = () => assert.fail('image exclusion cannot append');
+    const result = ctx.runImportWorkflow_(state);
+    assert.equal(result.messages[0].excludedReason, 'authentication_code_message');
+    assert.equal(result.messages[0].status, 'ignored');
+    assert.equal(state.couponSheet.getLastRow(), 1);
+    const saved = ctx.getMessageState_(state.journalSheet, message.id);
+    assert.equal(saved.outcome, 'authentication_code_message');
+    assert.equal(saved.batchIntent, undefined);
+    assert.equal(saved.archived, false); assert.equal(saved.labelApplied, false);
+    ctx.createBatchIntent_ = create; ctx.appendCouponRow_ = append;
+    const retryState = stateWithExtraction(ctx, {config, couponSheet: sheet([HEADERS]),
+      journalSheet: sheet([JOURNAL]), messages: [{...message, images: [], incomplete: false}]});
+    ctx.runImportWorkflow_(retryState);
+    const journal = ctx.getMessageState_(retryState.journalSheet, message.id);
+    const before = JSON.stringify({rows: retryState.couponSheet._values, notes: retryState.couponSheet._notes,
+      journal: retryState.journalSheet._values});
+    const retried = ctx.retryReviewCandidate_(retryState.couponSheet, 2, journal, journal.candidateStates[0],
+      message, retryState.journalSheet, config);
+    assert.equal(retried.excludedReason, 'authentication_code_message');
+    assert.equal(JSON.stringify({rows: retryState.couponSheet._values, notes: retryState.couponSheet._notes,
+      journal: retryState.journalSheet._values}), before);
+  }
+});
+
+test('invalid model authentication proof cannot stage coupons or mutate Gmail', () => {
+  const {png} = require('./mime-fixtures');
+  for (const authentication of [{quote: '', image: 1}, {quote: 'Brand coupon code SAVE20', image: null}, true]) {
+    const {ctx, config} = harness();
+    ctx.callGeminiModel_ = () => ({text: JSON.stringify({authentication, candidates: []})});
+    ctx.createBatchIntent_ = () => assert.fail('invalid proof cannot stage');
+    ctx.appendCouponRow_ = () => assert.fail('invalid proof cannot append');
+    ctx.Gmail.Users.Messages = {modify: () => assert.fail('invalid proof cannot mutate Gmail')};
+    const state = {config, couponSheet: sheet([HEADERS]), journalSheet: sheet([JOURNAL]), messages: [{
+      id: 'abc123', receivedAtMs: 0, subject: '', sender: '', link: 'https://mail.google.com/mail/#all/abc123',
+      text: 'Brand coupon code SAVE20', incomplete: false, images: [{mimeType: 'image/png', bytes: png}]
+    }]};
+    const result = ctx.runImportWorkflow_(state);
+    assert.equal(result.messages[0].status, 'failed');
+    assert.equal(result.imported, 0); assert.equal(result.review, 0);
+    assert.equal(state.couponSheet.getLastRow(), 1);
+    const journal = ctx.getMessageState_(state.journalSheet, 'abc123');
+    assert.equal(journal.batchIntent, undefined);
+    assert.equal(journal.archived, false); assert.equal(journal.labelApplied, false);
+  }
+});
+
+test('R4 promotion passes real extraction, staging and confirmation with no auth keyword blacklist', () => {
+  const {ctx, config} = harness(); config.labelId = 'coupon-label';
+  const {wireCandidate} = require('./ai-wire-fixtures');
+  const text = 'Brand: Log in to your account and use code SAVE20 to get 20% off';
+  // Use the existing complete fixture shape, with only independently grounded facts.
+  const raw = {...confirmedCandidate(), website: '', discountType: '', discountValue: '', currency: '', notes: '',
+    code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: text}}};
+  delete raw.imageEvidence;
+  ctx.callGeminiModel_ = () => ({text: JSON.stringify({authentication: null, candidates: [wireCandidate(raw)]})});
+  let mutations = 0;
+  ctx.Gmail.Users.Messages = {modify: body => {
+    mutations++;
+    return {id: 'abc123', labelIds: body.addLabelIds ? ['INBOX', 'coupon-label'] : ['coupon-label']};
+  }};
+  const state = {config, couponSheet: sheet([HEADERS]), journalSheet: sheet([JOURNAL]), messages: [{
+    id: 'abc123', receivedAtMs: 0, subject: '', sender: '', link: 'https://mail.google.com/mail/#all/abc123',
+    text, incomplete: false
+  }]};
+  assert.equal(ctx.runImportWorkflow_(state).messages[0].status, 'confirmed');
+  assert.equal(state.couponSheet._values[1][3], 'SAVE20');
+  assert.equal(mutations, 2);
+});
+
+test('concept-only authentication discussion does not suppress grounded review candidates', () => {
+  const {ordinaryMessages} = require('./authentication-fixtures');
+  const {wireCandidate} = require('./ai-wire-fixtures');
+  for (const source of ordinaryMessages) {
+    const {ctx, config} = harness();
+    const raw = {...confirmedCandidate(), merchant: '', website: '', code: 'SAVE20',
+      discountType: '', discountValue: '', currency: '', notes: '', review: true,
+      evidence: {code: {quote: 'SAVE20'}}};
+    delete raw.imageEvidence;
+    ctx.callGeminiModel_ = () => ({text: JSON.stringify({authentication: null, candidates: [wireCandidate(raw)]})});
+    ctx.Gmail.Users.Messages = {modify: () => assert.fail('review cannot mutate Gmail')};
+    const state = {config, couponSheet: sheet([HEADERS]), journalSheet: sheet([JOURNAL]), messages: [{
+      id: 'abc123', receivedAtMs: 0, subject: '', sender: '', link: 'https://mail.google.com/mail/#all/abc123',
+      incomplete: false, ...source
+    }]};
+    assert.equal(ctx.runImportWorkflow_(state).messages[0].status, 'review', JSON.stringify(source));
+    assert.equal(state.couponSheet._values[1][3], 'SAVE20');
+    assert.equal(state.couponSheet._values[1][17], 'Needs review');
+  }
+});
+
+test('Retry exclusion is a no-op for an existing immutable review batch', () => {
+  const {ctx, config} = harness();
+  const message = {id: 'abc123', receivedAtMs: 0, subject: '', sender: '',
+    link: 'https://mail.google.com/mail/#all/abc123', text: 'Brand coupon code SAVE20', incomplete: false};
+  const coupon = sheet([HEADERS]); const journalSheet = sheet([JOURNAL]);
+  const state = stateWithExtraction(ctx, {config, couponSheet: coupon, journalSheet, messages: [message]});
+  ctx.runImportWorkflow_(state);
+  const journal = ctx.getMessageState_(journalSheet, message.id);
+  const before = JSON.stringify({rows: coupon._values, notes: coupon._notes, journal: journalSheet._values});
+  ctx.callGeminiModel_ = () => assert.fail('Retry auth exclusion must precede model');
+  ctx.Gmail.Users.Messages = {modify: () => assert.fail('Retry exclusion must not mutate Gmail')};
+  const {authenticationMessages} = require('./authentication-fixtures');
+  for (const source of authenticationMessages) {
+    const outcome = ctx.retryReviewCandidate_(coupon, 2, journal, journal.candidateStates[0],
+      {...message, text: '', ...source}, journalSheet, config);
+    assert.equal(outcome.excludedReason, 'authentication_code_message', JSON.stringify(source));
+    assert.equal(JSON.stringify({rows: coupon._values, notes: coupon._notes, journal: journalSheet._values}), before);
+  }
+});
+
 function deterministicOutcome(ctx, message) {
   const candidates = ctx.deterministicCandidates_(message).map(candidate => ({merchant: '', website: '', code: candidate.code,
     discountType: '', discountValue: '', minimumSpend: '', validOn: '', exclusions: '', expiry: '', usageLimits: '',

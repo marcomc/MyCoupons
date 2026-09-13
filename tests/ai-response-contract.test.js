@@ -7,11 +7,85 @@ const fields = ['merchant', 'website', 'code', 'discountType', 'discountValue', 
 const fact = (value, quote = value, image = null) => ({value, quote, image});
 const candidate = () => ({...Object.fromEntries(fields.map(k => [k, null])),
   merchant: fact('Brand'), code: fact('Save+Ü20'), confidence: 'high', review: false});
-const response = candidates => ({text: JSON.stringify({candidates})});
+const response = candidates => ({text: JSON.stringify({authentication: null, candidates})});
 const provider = text => ({status: 200, body: JSON.stringify({candidates: [
   {finishReason: 'STOP', content: {parts: [{text}]}}
 ]})});
 const message = {text: 'Brand Save+Ü20 Members only', incomplete: false};
+
+test('image authentication evidence excludes the whole message before deterministic merging', () => {
+  const {ctx} = harness();
+  const {png} = require('./mime-fixtures');
+  const source = {...message, text: 'Brand coupon code Save+Ü20',
+    images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-auth-image'}]};
+  const authentication = {quote: 'Your verification code is 123456', image: 0};
+  for (const candidates of [[], [candidate()]]) {
+    const raw = {text: JSON.stringify({authentication, candidates})};
+    const parsed = ctx.parseAICandidateOutcome_(raw, source);
+    assert.equal(parsed.excludedReason, 'authentication_code_message');
+    assert.equal(parsed.archiveAllowed, false);
+    assert.equal(parsed.verifiedNonOffer, false);
+    assert.equal(parsed.modelEmpty, false);
+    ctx.callGeminiModel_ = request => { assert.equal(request.images.length, 1); return raw; };
+    ctx.deterministicCandidateOutcome_ = () => assert.fail('authentication exclusion must precede deterministic merging');
+    const outcome = ctx.extractCouponOutcome_(source);
+    assert.equal(outcome.excludedReason, 'authentication_code_message');
+    assert.equal(outcome.candidates.length, 0);
+    assert.equal(outcome.archiveAllowed, false);
+    assert.equal(outcome.verifiedNonOffer, false);
+  }
+});
+
+test('authentication response field is mandatory even for an empty candidate response', () => {
+  const {ctx} = harness();
+  assert.throws(() => ctx.parseAICandidateOutcome_({text: '{"candidates":[]}'}, message), /AI/);
+});
+
+test('authentication proof validates the entire response and actual image descriptors without invoking accessors', () => {
+  const {ctx} = harness();
+  const {png} = require('./mime-fixtures');
+  const image = () => ({mimeType: 'image/png', bytes: png.slice(), sourceId: 'synthetic-auth-image'});
+  const source = () => ({...message, images: [image()]});
+  const raw = authentication => ({text: JSON.stringify({authentication, candidates: [candidate()]})});
+  for (const authentication of [true, 'authentication', [], {}, {quote: '', image: 0, extra: true},
+    {quote: [], image: 0}, {quote: '\ud800', image: 0}, {quote: 'x'.repeat(2001), image: 0},
+    {quote: '', image: '0'}, {quote: '', image: -1}, {quote: '', image: 0.5}, {quote: '', image: 1},
+    {quote: '', image: null}, {quote: 'Invented authentication', image: null}, {quote: 'Brand', image: null}]) {
+    assert.throws(() => ctx.parseAICandidateOutcome_(raw(authentication), source()), /AI/);
+  }
+  for (const text of [
+    '{"authentication":null,"authentication":{"quote":"","image":0},"candidates":[]}',
+    '{"authentication":{"quote":"","quote":"other","image":0},"candidates":[]}',
+    '{"authentication":{"quote":"","image":0,"image":1},"candidates":[]}'
+  ]) assert.throws(() => ctx.parseAICandidateOutcome_({text}, source()), /AI/);
+  let projections = 0;
+  ctx.projectAIWireCandidate_ = () => { projections++; assert.fail('excluded or invalid responses cannot project candidates'); };
+  const bad = candidate(); bad.extra = true;
+  assert.throws(() => ctx.parseAICandidateOutcome_({text: JSON.stringify({
+    authentication: {quote: '', image: 0}, candidates: [candidate(), bad]
+  })}, source()), /AI/);
+  assert.equal(projections, 0);
+  let accessors = 0;
+  const accessor = () => { accessors++; return png; };
+  const imageGetter = Object.defineProperty({}, 'mimeType', {get: accessor});
+  const bytesGetter = Object.defineProperty({mimeType: 'image/png'}, 'bytes', {get: accessor});
+  const indexGetter = Object.defineProperty([], 0, {get: accessor});
+  const byteGetter = png.slice(); Object.defineProperty(byteGetter, 0, {get: accessor});
+  for (const images of [[], [{}], [{mimeType: 'image/png'}], [{mimeType: 'text/plain', bytes: png}],
+    [{mimeType: 'image/png', bytes: []}], [{mimeType: 'image/png', bytes: [1, 2, 3]}],
+    [{mimeType: 'image/png', bytes: [300]}], [{mimeType: 'image/png', bytes: Array(24)}],
+    [imageGetter], [bytesGetter], indexGetter, [{mimeType: 'image/png', bytes: byteGetter}],
+    Array(1), Array.from({length: 7}, image)]) {
+    assert.throws(() => ctx.parseAICandidateOutcome_(raw({quote: '', image: 0}), {...message, images}), /AI/);
+  }
+  assert.equal(accessors, 0);
+  for (const incomplete of [false, true]) {
+    const result = ctx.parseAICandidateOutcome_(raw({quote: '', image: 0}), {...source(), incomplete});
+    assert.equal(result.excludedReason, 'authentication_code_message');
+    assert.equal(result.status, incomplete ? 'incomplete' : 'complete');
+    assert.equal(result.archiveAllowed, false); assert.equal(result.verifiedNonOffer, false);
+  }
+});
 
 test('both configured backends send identical typed JSON generation contracts', () => {
   for (const fallback of [false, true]) {
@@ -31,7 +105,9 @@ test('both configured backends send identical typed JSON generation contracts', 
     assert.equal(generation.responseMimeType, 'application/json');
     const schema = generation.responseJsonSchema;
     assert.equal(schema.additionalProperties, false);
-    assert.deepEqual(schema.required, ['candidates']);
+    assert.deepEqual(schema.required, ['candidates', 'authentication']);
+    assert.deepEqual(schema.properties.authentication.required, ['quote', 'image']);
+    assert.equal(schema.properties.authentication.additionalProperties, false);
     assert.equal(schema.properties.candidates.maxItems, undefined);
     const offer = schema.properties.candidates.items;
     assert.deepEqual(offer.required, [...fields, 'confidence', 'review']);

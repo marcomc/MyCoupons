@@ -173,6 +173,51 @@ The example configuration contains product defaults only.
 - Detect explicitly introduced coupon codes from independent subject, plain-text,
   and rendered-HTML spans, and retain source text as notes. Sender is provenance
   metadata and cannot support an asserted merchant or offer field.
+  Explicit `coupon code`, promo/discount-code, and `codice sconto` forms remain
+  deterministic. Ambiguous bare Italian `codice` and English `use the code`
+  forms are left to evidence-gated AI rather than a proximity heuristic.
+  Before downloading images or requesting AI extraction, a shared local check
+  excludes the **entire message** when readable source clearly issues an
+  authentication code—even if it also contains an offer. The check also guards
+  direct AI/deterministic extraction and Retry. Ordinary login requirements and
+  generic discussion of verification codes do not exclude a promotion.
+  Supported English/Italian evidence includes explicit verification/security/OTP/passcode or qualified PIN
+  labels before or after their values, code-use instructions for verification,
+  sign-in, password reset or email/account confirmation, an explicit authentication subject plus generic
+  code issuance in the body, and a verification heading with a leading
+  code on a separate line, sentence, or rendered block (including a wrapped
+  copula, expiry text, or a supported security advisory after the value).
+  Explicit authentication-use instructions can introduce the next value, and
+  expiry/advisory clauses may have one matched parenthesis or bracket pair.
+  Space-grouped digits are recognized only for admission, within one source
+  span; coupon token identity and factual evidence are never joined or normalized.
+  Body heading/example frames stay within their plain-text or HTML representation;
+  only explicit subject associations seed both alternatives independently.
+  This admission decision can combine those supported message-level signals;
+  factual coupon quotes still cannot cross original source spans.
+  Generic verification verbs require an authentication target such as an account,
+  identity, email, or phone; checking a discount, order, or checkout state is not
+  sufficient. Explicit authentication labels still take precedence over incidental
+  purchase wording.
+  This is a bounded text recognizer, not universal language understanding:
+  recognition requires a concrete 3–40-code-point value with an issuance
+  relation, independently of letter case. Ordinary predicates such as REQUIRED and
+  NECESSARIO, example/documentation frames, and explicit placeholder forms
+  are not guessed as issued values. URL and email references are not code values.
+  If text does not decide admission, the model also checks inspected images.
+  Its response requires `authentication: null` or `{quote, image}` alongside
+  `candidates`. Valid image authentication excludes the whole message before
+  deterministic merging or staging, including mixed promotions and incomplete
+  messages. Image references require valid supplied descriptors; malformed or
+  unsupported proof fails closed. Text-only proof must also satisfy the shared
+  source-derived policy. A null signal supplies no extra completion, offer-absence,
+  or archival authority. Ordinary image offers retain their existing review rules.
+  Code punctuation and Unicode identity are never rewritten.
+  Exclusion returns `excludedReason: authentication_code_message`, not verified
+  absence of offers. It records an `ignored` journal checkpoint with that reason
+  but creates no coupon batch/rows and does not label, archive, or delete Gmail.
+  Retry leaves existing rows unchanged; historical retained batches and explicit
+  manual review authority are not retroactively migrated.
   Deterministic candidates currently require review. Tokens end at whitespace;
   one matching pair of outer ASCII quotes or angle brackets may wrap a token.
   Internal punctuation is never silently removed. Introducers require whitespace

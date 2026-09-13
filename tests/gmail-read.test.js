@@ -38,6 +38,30 @@ function installGmail(ctx, list, get) {
 }
 function state(journal, startMs, deadlineMs) { return {journalSheet: journal, recoveryStart: startMs, _deadlineMs: deadlineMs}; }
 
+test('canonical authentication admission precedes all image acquisition and retains original source', () => {
+  const {authenticationMessages, ordinaryMessages} = require('./authentication-fixtures');
+  const {ctx} = harness();
+  let images = 0;
+  ctx.acquireMessageImages_ = () => { images++; return {images: [], incomplete: false}; };
+  for (const source of authenticationMessages.concat(ordinaryMessages)) {
+    const parts = [['text', 'text/plain'], ['html', 'text/html']]
+      .filter(([key]) => typeof source[key] === 'string')
+      .map(([key, mimeType]) => ({mimeType, body: body(source[key])}));
+    for (const ordered of parts.length > 1 ? [parts, parts.slice().reverse()] : [parts]) {
+      const raw = {id: 'abc123', internalDate: '0', payload: {mimeType: 'multipart/alternative',
+        headers: [{name: 'Subject', value: source.subject || ''}], parts: ordered}};
+      const before = images;
+      const canonical = ctx.canonicalGmailMessage_(raw);
+      const excluded = authenticationMessages.includes(source);
+      assert.equal(images - before, excluded ? 0 : 1, JSON.stringify(source));
+      assert.equal(canonical.subject, source.subject || '');
+      assert.equal(canonical.text, source.text || '');
+      assert.equal(canonical.html, source.html || '');
+      assert.equal(ctx.authenticationMessage_(ctx.candidateSource_(canonical)), excluded);
+    }
+  }
+});
+
 test('discovers all default-search mail in a frozen window without label or unread filters', () => {
   const {ctx} = harness(); const journal = sheetMock();
   const start = Date.parse('2026-05-21T22:00:00Z'); const end = Date.parse('2026-05-23T22:00:00Z');

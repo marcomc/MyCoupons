@@ -175,6 +175,9 @@ function retryReviewCandidate_(sheet, rowNumber, state, candidate, message, jour
   if (!completeCandidateBatch_(state)) { keepIncompleteBatch_(state, journalSheet); return; }
   let extraction;
   try { extraction = extractCouponOutcome_(message); } catch (e) { return reviewFailure_(sheet, rowNumber, errorCode_(e)); }
+  if (extraction.excludedReason === 'authentication_code_message') {
+    return {status: 'ignored', excludedReason: extraction.excludedReason};
+  }
   const candidates = extraction.candidates;
   const row = retryComparableRow_(sheet, rowNumber, candidate.key, c);
   const enriched = candidates.filter(function (item) { return retryCandidateMatchesRow_(item, row); });

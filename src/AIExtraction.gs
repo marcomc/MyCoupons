@@ -13,8 +13,11 @@ function candidateResponseSchema_() {
   properties.review = {type: 'boolean'};
   // Do not constrain maxItems: excess offers must reach the rejecting consumer,
   // rather than asking the provider to silently select a subset of the message.
-  return {type: 'object', additionalProperties: false, required: ['candidates'],
-    properties: {candidates: {type: 'array', items: {type: 'object', additionalProperties: false,
+  return {type: 'object', additionalProperties: false, required: ['candidates', 'authentication'],
+    properties: {authentication: {type: ['object', 'null'], additionalProperties: false,
+      properties: {quote: {type: 'string'}, image: {type: ['integer', 'null'], minimum: 0}},
+      required: ['quote', 'image']},
+    candidates: {type: 'array', items: {type: 'object', additionalProperties: false,
       properties: properties, required: aiCandidateKeys_()}}}};
 }
 
@@ -52,6 +55,44 @@ function projectAIWireCandidate_(candidate) {
   return raw;
 }
 
+function validateAIAuthentication_(authentication, source) {
+  if (authentication === null) return;
+  if (!exactAIKeys_(authentication, ['quote', 'image']) ||
+      typeof authentication.quote !== 'string' || authentication.quote.length > 2000 ||
+      !wellFormedUtf16_(authentication.quote)) fail_('AI');
+  if (authentication.image === null) {
+    // A grounded promotion excerpt is not authentication proof. Text must also
+    // satisfy the shared source-derived policy, never a model-only assertion.
+    if (!authentication.quote.trim() || !source.spans.some(function (span) { return span.indexOf(authentication.quote) >= 0; }) ||
+        !authenticationMessage_(source)) fail_('AI');
+    return;
+  }
+  if (!Number.isInteger(authentication.image) || authentication.image < 0 ||
+      authentication.image >= source.images.length || source.images.length > MC.maxImages) fail_('AI');
+  let total = 0;
+  for (let index = 0; index < source.images.length; index++) {
+    const item = Object.getOwnPropertyDescriptor(source.images, index);
+    if (!item || !Object.prototype.hasOwnProperty.call(item, 'value') || !inspectedImage_(item.value)) fail_('AI');
+    const image = item.value;
+    if (Object.getOwnPropertySymbols(image).length || Object.getOwnPropertyNames(image).some(function (key) {
+      return !Object.prototype.hasOwnProperty.call(Object.getOwnPropertyDescriptor(image, key), 'value');
+    })) fail_('AI');
+    const mimeType = ownEnumerableDataValue_(image, 'mimeType');
+    const bytes = ownEnumerableDataValue_(image, 'bytes');
+    if (MC_IMAGE_MIME_TYPES.indexOf(mimeType) < 0 || !Array.isArray(bytes) ||
+        !bytes.length || bytes.length > MC.maxImageBytes || total + bytes.length > MC.maxTotalImageBytes) fail_('AI');
+    for (let offset = 0; offset < bytes.length; offset++) {
+      const byte = Object.getOwnPropertyDescriptor(bytes, offset);
+      if (!byte || !Object.prototype.hasOwnProperty.call(byte, 'value') ||
+          !Number.isInteger(byte.value) || byte.value < -128 || byte.value > 255) fail_('AI');
+    }
+    if (!imageSignature_(mimeType, bytes)) fail_('AI');
+    const dimensions = imageDimensions_(mimeType, bytes);
+    if (dimensions && (dimensions.width <= 2 || dimensions.height <= 2)) fail_('AI');
+    total += bytes.length;
+  }
+}
+
 function buildCandidatePrompt_(message) {
   return candidatePrompt_(message).text;
 }
@@ -69,6 +110,11 @@ function candidatePrompt_(message) {
     'Set review=true for uncertain facts or actual offer information that could not be represented. Optional fields absent from the source may be null without requiring review.',
     'Preserve exact code case, Unicode and punctuation. Use source wording for descriptive values including notes, not summaries.',
     'Use HTTPS websites and explicit YYYY-MM-DD expiry supported by the source. discountValue and minimumSpend are scalar numeric strings without units.',
+    'Inspect readable text and every supplied image for actual issuance of an account, login, verification, or other authentication code.',
+    'Return exactly {candidates, authentication}. authentication is null if no actual authentication issuance is found; otherwise it is {quote, image} identifying the supporting source excerpt or inspected image.',
+    'Use an empty authentication quote only for image-only evidence. A text quote must be exact; image is one supplied integer index or null.',
+    'If any source issues an authentication code, exclude the ENTIRE message, even if it also contains a promotion: report authentication evidence and return no coupon candidates.',
+    'Generic account discussion, descriptive predicates, examples, and negated authentication labels are not issuance. Null authentication does not establish absence of offers or complete inspection.',
     'discountType is the exact unit beside the discount amount, such as %, EUR, or a currency symbol; never a phrase such as percent off or % off. The type and value quotes must support the same adjacent amount and unit.',
     'An image-only fact is always review=true. Incomplete source coverage requires review=true and cannot verify absence of an offer.',
     'Each candidate has exactly these keys: ' + aiCandidateKeys_().join(', ') + '.',
@@ -109,16 +155,20 @@ function duplicateJsonKeys_(json) {
 }
 
 function parseAICandidateOutcome_(response, message) {
+  const source = candidateSource_(message);
+  const excluded = authenticationExclusion_(source);
+  if (excluded) return excluded;
   if (!response || typeof response.text !== 'string' || response.text.length > AI_EXTRACTION.maxResponse ||
       /^\s*```|```\s*$/.test(response.text) || duplicateJsonKeys_(response.text)) fail_('AI');
   let body;
   try { body = JSON.parse(response.text); } catch (e) { fail_('AI'); }
-  if (!exactAIKeys_(body, ['candidates']) || !Array.isArray(body.candidates) ||
+  if (!exactAIKeys_(body, ['candidates', 'authentication']) || !Array.isArray(body.candidates) ||
       body.candidates.length > AI_EXTRACTION.maxCandidates) fail_('AI');
-  const source = candidateSource_(message);
   // Validate the entire wire response, including keys and types in later offers,
   // before projecting any facts into the internal evidence representation.
   body.candidates.forEach(function (candidate) { validateAIWireCandidate_(candidate, source); });
+  validateAIAuthentication_(body.authentication, source);
+  if (body.authentication !== null) return authenticationExcludedOutcome_(source);
   let invalidated = 0;
   const candidates = body.candidates.map(function (candidate) {
     const raw = projectAIWireCandidate_(candidate);
@@ -203,12 +253,15 @@ function uniqueAICandidates_(candidates) {
 function extractCouponOutcome_(message, hooks) {
   // Validate all source ownership, HTML coverage, and image records before any fetch.
   const source = candidateSource_(message);
+  const excluded = authenticationExclusion_(source);
+  if (excluded) return excluded;
   const prompt = candidatePrompt_(message);
   const images = source.images.map(function (image) {
     if (!image || typeof image.mimeType !== 'string' || !Array.isArray(image.bytes)) fail_('AI');
     return {mimeType: image.mimeType, data: canonicalBase64Url_(Utilities.base64EncodeWebSafe(image.bytes))};
   });
   const aiOutcome = parseAICandidateOutcome_(callGeminiModel_({text: prompt.text, images: images}, hooks), message);
+  if (aiOutcome.excludedReason === 'authentication_code_message') return aiOutcome;
   // Consolidate exact model duplicates before sparse deterministic enrichment
   // adds copied source notes that could make an identical proposal look new.
   const ai = uniqueAICandidates_(aiOutcome.candidates);

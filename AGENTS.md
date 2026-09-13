@@ -19,6 +19,11 @@
 
 ## Source and mutation contracts
 
+- Exclude an entire message that clearly issues an authentication code, even
+  alongside a promotion. Apply the shared source-derived decision before coupon
+  staging and, when text permits, image/model calls. Exclusion is not verified
+  absence of offers and must not label, archive, delete, or create coupon rows.
+  Generic login mentions and discussion of verification codes are insufficient.
 - Coupon codes preserve case and full Unicode token identity, including
   punctuation. Extraction and evidence checks share whole-token boundaries;
   never accept a fragment in either the quoted evidence or original source.

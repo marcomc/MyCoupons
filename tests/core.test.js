@@ -300,12 +300,13 @@ test('only canonical Gmail links provide an identity without partial token colli
 
 test('coupon introducers are case-insensitive and never truncate the code token', () => {
   const {ctx} = harness();
-  for (const prefix of ['Coupon code', 'COUPON CODE', 'Use the code', 'Codice sconto']) {
+  for (const prefix of ['Coupon code', 'COUPON CODE', 'Codice sconto']) {
     assert.equal(ctx.deterministicCandidates_({text: prefix + ': MiXeD20'})[0].code, 'MiXeD20');
   }
-  for (const source of ['Coupon code is MiXeD20', 'COUPON CODE IS MiXeD20', 'Use the code is <SAVE20>']) {
-    assert.equal(ctx.deterministicCandidates_({text: source})[0].code, source.includes('SAVE20') ? 'SAVE20' : 'MiXeD20', source);
+  for (const source of ['Coupon code is MiXeD20', 'COUPON CODE IS MiXeD20']) {
+    assert.equal(ctx.deterministicCandidates_({text: source})[0].code, 'MiXeD20', source);
   }
+  assert.deepEqual([...ctx.deterministicCandidates_({text: 'Use the code is <SAVE20>'})], []);
   assert.equal(ctx.deterministicCandidates_({text: 'Coupon code isomorphic'})[0].code, 'isomorphic');
   for (const source of ['Coupon codeis SAVE20', 'coupon code-SAVE20']) {
     assert.equal(ctx.deterministicCandidates_({text: source}).length, 0, source);
@@ -1584,13 +1585,13 @@ test('internal quote and angle characters remain part of complete code identitie
   }
 });
 
-test('coupon introducers require a delimiter after the complete phrase', () => {
+test('explicit coupon introducers require a delimiter after the complete phrase', () => {
   const {ctx} = harness();
   for (const text of ['discount codebase', 'use codependency', 'Coupon codeSAVE20', 'codicesconto',
     'promotional codeword', 'coupon code-SAVE20', 'codice sconto']) {
     assert.deepEqual([...ctx.deterministicCandidates_({text})], [], text);
   }
-  for (const phrase of ['Coupon code', 'PROMOTIONAL CODE', 'Use the code', 'codice sconto', 'codice']) {
+  for (const phrase of ['Coupon code', 'PROMOTIONAL CODE', 'codice sconto']) {
     for (const prefix of ['x', 'é', '𐐀', '4', '４', '𝟜', '\u0301', '_']) {
       assert.deepEqual([...ctx.deterministicCandidates_({text: prefix + phrase + ' SAVE20'})], [], prefix + phrase);
     }
@@ -1600,6 +1601,9 @@ test('coupon introducers require a delimiter after the complete phrase', () => {
     for (const delimiter of [' ', '\t', '\n', ':', '=', ' : ', ' = ']) {
       assert.equal(ctx.deterministicCandidates_({text: phrase + delimiter + 'MiXeD20'})[0].code, 'MiXeD20');
     }
+  }
+  for (const phrase of ['Use the code', 'codice']) {
+    assert.deepEqual([...ctx.deterministicCandidates_({text: phrase + ' SAVE20'})], [], phrase);
   }
 });
 
