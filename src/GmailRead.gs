@@ -359,14 +359,20 @@ function canonicalGmailMessage_(raw, deadlineMs) {
   if (!isFinite(receivedAt.getTime())) fail_('MAIL');
   const payload = parseMimePayload_(raw.payload);
   const imageDeadline = Math.min(Date.now() + 30000, deadlineMs ? deadlineMs - 15000 : Infinity);
-  const acquired = acquireMessageImages_(raw, payload.html, imageDeadline);
+  const subject = mimeHeader_(payload.headers, 'subject');
+  // Text can establish policy exclusion without downloading images. Downstream
+  // admission rechecks the source; a caller-supplied flag grants no authority.
+  const source = candidateSource_({subject: subject, text: payload.text, html: payload.html,
+    incomplete: payload.incomplete, images: []});
+  const acquired = authenticationMessage_(source) ? {images: [], incomplete: source.incomplete} :
+    acquireMessageImages_(raw, payload.html, imageDeadline);
   return {
     id: raw.id,
     threadId: raw.threadId || '',
     receivedAt: receivedAt.toISOString(),
     receivedAtMs: receivedAtMs,
     sender: mimeHeader_(payload.headers, 'from'),
-    subject: mimeHeader_(payload.headers, 'subject'),
+    subject: subject,
     text: payload.text,
     html: payload.html,
     link: gmailLink_(raw.id),

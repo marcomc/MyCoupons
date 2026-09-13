@@ -110,13 +110,15 @@ function duplicateJsonKeys_(json) {
 }
 
 function parseAICandidateOutcome_(response, message) {
+  const source = candidateSource_(message);
+  const excluded = authenticationExclusion_(source);
+  if (excluded) return excluded;
   if (!response || typeof response.text !== 'string' || response.text.length > AI_EXTRACTION.maxResponse ||
       /^\s*```|```\s*$/.test(response.text) || duplicateJsonKeys_(response.text)) fail_('AI');
   let body;
   try { body = JSON.parse(response.text); } catch (e) { fail_('AI'); }
   if (!exactAIKeys_(body, ['candidates']) || !Array.isArray(body.candidates) ||
       body.candidates.length > AI_EXTRACTION.maxCandidates) fail_('AI');
-  const source = candidateSource_(message);
   // Validate the entire wire response, including keys and types in later offers,
   // before projecting any facts into the internal evidence representation.
   body.candidates.forEach(function (candidate) { validateAIWireCandidate_(candidate, source); });
@@ -124,12 +126,6 @@ function parseAICandidateOutcome_(response, message) {
   const candidates = body.candidates.map(function (candidate) {
     const raw = projectAIWireCandidate_(candidate);
     const normalized = normalizeCandidate_(raw, message);
-    // A grounded token in an authentication-only sentence is not an offer.
-    // Evaluate each candidate, rather than excluding a mixed source message.
-    if (normalized.code && authenticationCodeOnly_(normalized.code, raw.evidence, source)) {
-      invalidated++;
-      return null;
-    }
     if (!(normalized.merchant || normalized.code || normalized.website || normalized.discountType && normalized.discountValue)) {
       invalidated++;
       return null;
@@ -210,6 +206,8 @@ function uniqueAICandidates_(candidates) {
 function extractCouponOutcome_(message, hooks) {
   // Validate all source ownership, HTML coverage, and image records before any fetch.
   const source = candidateSource_(message);
+  const excluded = authenticationExclusion_(source);
+  if (excluded) return excluded;
   const prompt = candidatePrompt_(message);
   const images = source.images.map(function (image) {
     if (!image || typeof image.mimeType !== 'string' || !Array.isArray(image.bytes)) fail_('AI');

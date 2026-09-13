@@ -88,6 +88,14 @@ function processCouponMessage_(state, message) {
     const extraction = resumingBatch ? {candidates: journal.batchIntent.candidates,
       archiveAllowed: false, verifiedNonOffer: false} : extractCouponOutcomeForState_(state, message);
     const candidates = extraction.candidates;
+    if (extraction.excludedReason === 'authentication_code_message') {
+      // Policy exclusion can include an offer: it is not verified offer absence.
+      // No batch/row reconciliation or Gmail finalization is authorized here.
+      journal.outcome = extraction.excludedReason; journal.status = 'ignored';
+      journal.failureStage = ''; journal.nextRetryAt = '';
+      journal.updatedAt = new Date().toISOString(); saveMessageState_(state.journalSheet, journal);
+      return {messageId: message.id, status: 'ignored', rows: [], excludedReason: extraction.excludedReason};
+    }
     if (extraction.verifiedNonOffer) {
       if (journal.candidateStates.length) {
         if (!candidateStates_(journal.candidateStates, journal.candidateKeys, journal.rowNumbers)) fail_('STATE');

@@ -49,123 +49,56 @@ test('subject is independent factual evidence while sender remains metadata only
   assert.equal(ctx.normalizeCandidate_(senderOnly, {subject: 'Coupon code SAVE20', sender: 'Brand', incomplete: false}).merchant, '');
 });
 
-test('generic code introductions stay with grounded AI while explicit forms remain deterministic', () => {
-  const {ctx, properties} = harness(); properties.GEMINI_API_KEY = 'test-key';
-  const verification = {subject: 'Account: codice di verifica monouso', text: 'Notifica codice di verifica. Inserisci il codice di verifica entro 20 minuti. DEMO123. Nota: il codice scadrà 20 minuti dalla consegna.', incomplete: false};
-  assert.deepEqual(Array.from(ctx.deterministicCandidates_(verification)), []);
-  const empty = {fetch: () => ({status: 200, body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify({candidates: []})}]}}]})})};
-  const verificationOutcome = ctx.extractCouponOutcome_(verification, empty);
-  assert.equal(verificationOutcome.verifiedNonOffer, true);
-  assert.deepEqual(Array.from(ctx.deterministicCandidates_({text: 'Use the code LOGIN77 to verify your account.', incomplete: false})), []);
-  const authenticationProposal = aiResponse({merchant: 'Account', code: 'LOGIN77', evidence: {merchant: {quote: 'Use the code LOGIN77 to verify your account.'}, code: {quote: 'Use the code LOGIN77 to verify your account.'}}});
-  const authenticationOutcome = ctx.extractCouponOutcome_({text: 'Use the code LOGIN77 to verify your account.', incomplete: false}, {fetch: () => ({status: 200,
-    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: authenticationProposal.text}]}}]})})});
-  assert.deepEqual(Array.from(authenticationOutcome.candidates), []);
-  assert.equal(authenticationOutcome.invalidated, true);
-  assert.equal(authenticationOutcome.verifiedNonOffer, false);
-  assert.equal(authenticationOutcome.archiveAllowed, false);
-  for (const authenticationCase of [
-    {text: 'Acme: use code LOGIN77 to verify your order.', code: 'LOGIN77'},
-    {text: 'Acme: enter code LOGIN77 to reset your password.', code: 'LOGIN77'},
-    {text: 'Acme: use code LOGIN77 to sign in.', code: 'LOGIN77'},
-    {text: 'Acme: use code ABC.77 to verify your account.', code: 'ABC.77'},
-    {text: 'Acme: use code ABC.77! to verify your account.', code: 'ABC.77!', quote: 'ABC.77!'},
-    {text: 'Acme: use code ABC.77! To verify your account.', code: 'ABC.77!', quote: 'ABC.77!'},
-    {text: 'Acme: use code ABC.77! to verify your account.', code: 'ABC.77!', quote: ' ABC.77! '},
-    {text: 'Acme: use code ABC.77! to verify your account.', code: 'ABC.77!', quote: 'code ABC.77!'},
-    {text: 'Acme: use code SAVE to verify your order.', code: 'SAVE'},
-    {text: 'Acme: use code LOGIN77 to verify your cart at checkout.', code: 'LOGIN77'}
-  ]) {
-    const proposal = aiResponse({merchant: 'Acme', code: authenticationCase.code, evidence: {
-      merchant: {quote: 'Acme'}, code: {quote: authenticationCase.quote || authenticationCase.text}
-    }});
-    const outcome = ctx.extractCouponOutcome_({text: authenticationCase.text, incomplete: false}, {fetch: () => ({status: 200,
-      body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: proposal.text}]}}]})})});
-    assert.deepEqual(Array.from(outcome.candidates), [], authenticationCase.text);
-    assert.equal(outcome.invalidated, true, authenticationCase.text);
-    assert.equal(outcome.archiveAllowed, false, authenticationCase.text);
+test('authentication issuance excludes the entire message before model and both candidate producers', () => {
+  const {ctx} = harness();
+  const {authenticationMessages, ordinaryMessages} = require('./authentication-fixtures');
+  ctx.callGeminiModel_ = () => assert.fail('excluded messages must not reach Gemini');
+  for (const message of authenticationMessages) {
+    const input = {incomplete: false, ...message};
+    const outcome = ctx.extractCouponOutcome_(input);
+    assert.equal(outcome.excludedReason, 'authentication_code_message', JSON.stringify(message));
+    assert.deepEqual(Array.from(outcome.candidates), []);
+    assert.equal(outcome.archiveAllowed, false);
+    assert.equal(outcome.verifiedNonOffer, false);
+    assert.equal(outcome.modelEmpty, false);
+    assert.deepEqual(Array.from(ctx.deterministicCandidates_(input)), []);
+    // The parser entry point cannot bypass admission with a promotional response.
+    assert.deepEqual(Array.from(ctx.parseAICandidates_(aiResponse(), input)), []);
   }
-  const terminalCode = 'Acme: verify your account using code LOGIN77. Brand coupon code SAVE20 gives 20% off.';
-  const terminalProposal = aiResponse({merchant: 'Acme', code: 'LOGIN77.', evidence: {
-    merchant: {quote: 'Acme'}, code: {quote: 'Acme: verify your account using code LOGIN77.'}
-  }});
-  const terminalOutcome = ctx.extractCouponOutcome_({text: terminalCode, incomplete: false}, {fetch: () => ({status: 200,
-    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: terminalProposal.text}]}}]})})});
-  assert.deepEqual(Array.from(terminalOutcome.candidates, candidate => candidate.code), ['SAVE20']);
-  assert.equal(terminalOutcome.invalidated, true);
-  assert.equal(terminalOutcome.archiveAllowed, false);
-  const leadingDiscount = 'Acme: verify your account using code LOGIN77. Brand gives 20% off with coupon code SAVE20';
-  const leadingDiscountOutcome = ctx.extractCouponOutcome_({text: leadingDiscount, incomplete: false}, {fetch: () => ({status: 200,
-    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: terminalProposal.text}]}}]})})});
-  assert.deepEqual(Array.from(leadingDiscountOutcome.candidates, candidate => candidate.code), ['SAVE20']);
-  assert.equal(leadingDiscountOutcome.invalidated, true);
-  assert.equal(leadingDiscountOutcome.archiveAllowed, false);
-  const punctuationCollision = 'Acme: verify your account using code LOGIN77. Brand coupon code LOGIN77. gives 20% off.';
-  const punctuationCollisionProposal = aiResponse({merchant: 'Acme', code: 'LOGIN77.', evidence: {
-    merchant: {quote: 'Acme: verify your account using code LOGIN77.'}, code: {quote: 'LOGIN77.'}
-  }});
-  const punctuationCollisionOutcome = ctx.extractCouponOutcome_({text: punctuationCollision, incomplete: false}, {fetch: () => ({status: 200,
-    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: punctuationCollisionProposal.text}]}}]})})});
-  assert.deepEqual(Array.from(punctuationCollisionOutcome.candidates, candidate => [candidate.merchant, candidate.code]), [['', 'LOGIN77.']]);
-  assert.equal(punctuationCollisionOutcome.invalidated, true);
-  assert.equal(punctuationCollisionOutcome.archiveAllowed, false);
-  const lowercasePunctuationCollision = punctuationCollision.replace('Brand coupon', 'brand coupon');
-  const lowercasePunctuationCollisionOutcome = ctx.extractCouponOutcome_({text: lowercasePunctuationCollision, incomplete: false}, {fetch: () => ({status: 200,
-    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: punctuationCollisionProposal.text}]}}]})})});
-  assert.deepEqual(Array.from(lowercasePunctuationCollisionOutcome.candidates, candidate => [candidate.merchant, candidate.code]), [['', 'LOGIN77.']]);
-  assert.equal(lowercasePunctuationCollisionOutcome.invalidated, true);
-  assert.equal(lowercasePunctuationCollisionOutcome.archiveAllowed, false);
-  const repeatedAction = 'use code LOGIN77 '.repeat(4000) + 'to verify your account.';
-  assert.equal(ctx.authenticationCodeOnly_('LOGIN77', {code: {quote: 'LOGIN77'}},
-    ctx.candidateSource_({text: repeatedAction, incomplete: false})), true);
-  const mixedAuthenticationOutcome = ctx.extractCouponOutcome_({text: 'Use the code LOGIN77 to verify your account. Brand coupon code SAVE20', incomplete: false}, {fetch: () => ({status: 200,
-    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: authenticationProposal.text}]}}]})})});
-  assert.deepEqual(Array.from(mixedAuthenticationOutcome.candidates, candidate => candidate.code), ['SAVE20']);
-  assert.equal(mixedAuthenticationOutcome.invalidated, true);
-  for (const loginOffer of [{text: 'Brand members: use code SAVE20 after login for 20% off.', incomplete: false},
-    {text: 'Brand members: log in and use code SAVE20 for 20% off.', incomplete: false},
-    {text: 'Brand members: 20% off with code SAVE20 after login.', incomplete: false},
-    {text: 'Brand members: log in and apply code SAVE20 at checkout.', incomplete: false},
-    {text: 'Brand members: log in to your account and apply code SAVE20 at checkout.', incomplete: false},
-    {text: 'Brand members: log in and apply code "SAVE20" at checkout.', incomplete: false},
-    {text: 'Brand members: log in and apply code SAVE20 in your cart.', incomplete: false},
-    {text: 'Brand members: log in and apply code SAVE20 at checkout.', codeQuote: 'log in and apply code SAVE20', incomplete: false},
-    {text: 'Brand members: log in and apply code SAVE20! at checkout.', code: 'SAVE20!', codeQuote: 'log in and apply code SAVE20!', incomplete: false},
-    {text: 'Brand members: log in and apply code SAVE20! At checkout.', code: 'SAVE20!', codeQuote: 'log in and apply code SAVE20!', incomplete: false},
-    {text: 'Brand members: log in and apply code SAVE20. at checkout.', code: 'SAVE20.', codeQuote: 'log in and apply code SAVE20.', incomplete: false}]) {
-    const code = loginOffer.code || 'SAVE20';
-    const loginOfferProposal = aiResponse({code: code, evidence: {
-      merchant: {quote: loginOffer.text}, code: {quote: loginOffer.codeQuote || loginOffer.text}
-    }});
-    assert.equal(ctx.extractCouponOutcome_(loginOffer, {fetch: () => ({status: 200,
-      body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: loginOfferProposal.text}]}}]})})}).candidates[0].code, code);
+  for (const message of ordinaryMessages) {
+    assert.equal(ctx.authenticationMessage_(ctx.candidateSource_({incomplete: false, ...message})), false, JSON.stringify(message));
   }
-  const collision = {text: 'Use the code LOGIN77 to verify your account. Brand coupon code LOGIN77 gives 20% off.', incomplete: false};
-  const collisionProposal = aiResponse({merchant: 'Account', code: 'LOGIN77', evidence: {merchant: {quote: 'Use the code LOGIN77 to verify your account.'}, code: {quote: 'LOGIN77'}}});
-  const collisionOutcome = ctx.extractCouponOutcome_(collision, {fetch: () => ({status: 200,
-    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: collisionProposal.text}]}}]})})});
-  assert.deepEqual(Array.from(collisionOutcome.candidates, candidate => [candidate.merchant, candidate.code]), [['', 'LOGIN77']]);
-  assert.equal(collisionOutcome.invalidated, true);
-  const mismatchProposal = aiResponse({merchant: 'Account', code: 'LOGIN77', discountType: '%', discountValue: '20', evidence: {
-    merchant: {quote: 'Use the code LOGIN77 to verify your account.'}, code: {quote: 'LOGIN77'},
-    discountType: {quote: 'Brand coupon code LOGIN77 gives 20% off.'}, discountValue: {quote: 'Brand coupon code LOGIN77 gives 20% off.'}
-  }});
-  const mismatchOutcome = ctx.extractCouponOutcome_(collision, {fetch: () => ({status: 200,
-    body: JSON.stringify({candidates: [{finishReason: 'STOP', content: {parts: [{text: mismatchProposal.text}]}}]})})});
-  assert.deepEqual(Array.from(mismatchOutcome.candidates, candidate => [candidate.merchant, candidate.code]), [['', 'LOGIN77']]);
-  assert.equal(mismatchOutcome.invalidated, true);
-  assert.equal(mismatchOutcome.archiveAllowed, false);
+});
+
+test('R4 login-adjacent coupon remains automatically eligible and generic wording stays AI-only', () => {
+  const {ctx} = harness();
+  const text = 'Brand: Log in to your account and use code SAVE20 to get 20% off';
+  ctx.callGeminiModel_ = () => aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: text}}});
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.equal(outcome.candidates[0].code, 'SAVE20');
+  assert.equal(outcome.invalidated, false);
+  assert.equal(outcome.archiveAllowed, true);
+  assert.deepEqual(Array.from(ctx.deterministicCandidates_({text, incomplete: false})), []);
   assert.deepEqual(Array.from(ctx.deterministicCandidates_({text: 'Coupon code SAVE20 Promo code PLUS20 Discount code LESS20 Codice sconto ÈTÉ+20', incomplete: false}), c => c.code),
     ['SAVE20', 'PLUS20', 'LESS20', 'ÈTÉ+20']);
-  const genericCoupon = {text: 'Brand promo: usa il codice ÈTÉ+20', incomplete: false};
-  assert.deepEqual(Array.from(ctx.deterministicCandidates_(genericCoupon)), []);
-  const ai = aiResponse({code: 'ÈTÉ+20', evidence: {merchant: {quote: 'Brand promo: usa il codice ÈTÉ+20'}, code: {quote: 'Brand promo: usa il codice ÈTÉ+20'}}});
-  ctx.callGeminiModel_ = () => ai;
-  assert.equal(ctx.extractCouponOutcome_(genericCoupon).candidates[0].code, 'ÈTÉ+20');
-  assert.match(ctx.buildCandidatePrompt_(genericCoupon), /Do not extract account, login, or verification codes/);
-  const mixed = {text: verification.text + ' Brand coupon code SAVE20', incomplete: false};
-  assert.deepEqual(Array.from(ctx.extractCouponOutcome_(mixed, empty).candidates, c => c.code), ['SAVE20']);
-  assert.equal(ctx.extractCouponOutcome_({...mixed, incomplete: true}, empty).verifiedNonOffer, false);
+  const generic = 'Brand promo: usa il codice ÈTÉ+20';
+  ctx.callGeminiModel_ = () => aiResponse({code: 'ÈTÉ+20', evidence: {merchant: {quote: generic}, code: {quote: generic}}});
+  assert.deepEqual(Array.from(ctx.deterministicCandidates_({text: generic, incomplete: false})), []);
+  assert.equal(ctx.extractCouponOutcome_({text: generic, incomplete: false}).candidates[0].code, 'ÈTÉ+20');
+});
+
+test('authentication admission preserves full token punctuation and ignores model quote selection', () => {
+  const {ctx} = harness();
+  ctx.callGeminiModel_ = () => assert.fail('auth must be excluded before model quote selection');
+  for (const code of ['LOGIN77', 'ABC.77', 'ABC.77!', 'LOGIN77.', 'ÈTÉ+20!', '１２３４５６', 'Code+12!']) {
+    for (const wrapped of [code, '"' + code + '"', "'" + code + "'", '<' + code + '>']) {
+      const auth = 'Acme: use code ' + wrapped + ' To verify your account.';
+      const offer = 'Brand coupon code ' + code + ' gives 20% off.';
+      for (const text of [auth, auth + '\n' + offer, offer + '\n' + auth, auth + ' ' + offer]) {
+        assert.equal(ctx.extractCouponOutcome_({text, incomplete: false}).excludedReason, 'authentication_code_message', text);
+      }
+    }
+  }
 });
 
 test('code purpose takes precedence over incidental offer words and preserves associated promotions', () => {
@@ -197,13 +130,14 @@ test('code purpose takes precedence over incidental offer words and preserves as
     ctx.callGeminiModel_ = () => aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: text}}});
     const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
     assert.equal(outcome.candidates.some(candidate => candidate.merchant === 'Brand' && candidate.code === 'SAVE20'), retained, text);
-    assert.equal(outcome.invalidated, !retained, text);
+    assert.equal(outcome.invalidated, false, text);
+    assert.equal(outcome.excludedReason, retained ? undefined : 'authentication_code_message', text);
     assert.equal(outcome.archiveAllowed, retained, text);
     assert.equal(outcome.verifiedNonOffer, false, text);
   }
 });
 
-test('full coupon quotes retain their occurrence in mixed messages with repeated code identities', () => {
+test('message exclusion supersedes historical mixed-code quote selection in either order', () => {
   const {ctx} = harness();
   for (const code of ['LOGIN77', 'LOGIN77.', 'ÈTÉ+20!']) {
     const auth = 'Acme: verify your account using code ' + code;
@@ -212,28 +146,42 @@ test('full coupon quotes retain their occurrence in mixed messages with repeated
       ctx.callGeminiModel_ = () => aiResponse({code, evidence: {merchant: {quote: 'Brand'}, code: {quote: offer}}});
       const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
       assert.equal(outcome.invalidated, false, text);
-      assert.deepEqual(Array.from(outcome.candidates, candidate => [candidate.merchant, candidate.code]), [['Brand', code]], text);
+      assert.equal(outcome.excludedReason, 'authentication_code_message', text);
+      assert.deepEqual(Array.from(outcome.candidates), [], text);
     }
   }
 });
 
-test('authentication context scans repeated evidence with bounded fragment work', () => {
+test('message classification uses bounded context work for repeated literals and introductions', () => {
   const {ctx} = harness();
-  const original = ctx.codePurposeContext_;
-  for (const fragment of ['LOGIN77 ', 'use code LOGIN77 ', 'Brand: use code LOGIN77 for a discount.\n']) {
-    const text = fragment.repeat(8000);
+  const original = ctx.authenticationInstruction_;
+  for (const text of ['LOGIN77 '.repeat(8000), 'use code LOGIN77 '.repeat(8000),
+    'Brand: use code LOGIN77 for a discount.\n'.repeat(8000), 'x'.repeat(100000) + '\n' + 'LOGIN77 '.repeat(8000)]) {
     let units = 0;
     let calls = 0;
-    ctx.codePurposeContext_ = function (before, after) {
+    ctx.authenticationInstruction_ = function (before, after, code) {
       units += before.length + after.length;
       calls++;
-      return original(before, after);
+      return original(before, after, code);
     };
-    assert.equal(ctx.authenticationCodeOnly_('LOGIN77', {code: {quote: 'LOGIN77'}}, ctx.candidateSource_({text, incomplete: false})), false);
+    assert.equal(ctx.authenticationMessage_(ctx.candidateSource_({text, incomplete: false})), false);
     assert.equal(calls, 8000);
-    assert.ok(units <= 2 * text.length, 'each gap may participate in at most two adjacent contexts');
+    assert.ok(units <= 480 * calls, 'fixed per-literal context, no growing prefix/suffix');
+    assert.ok(units <= 160 * text.length, 'linear total context bound for minimum three-unit literals');
   }
-  ctx.codePurposeContext_ = original;
+  ctx.authenticationInstruction_ = original;
+});
+
+test('message scanner keeps line, literal and discussion inspection work linear', () => {
+  const {ctx} = harness();
+  let units = 0;
+  for (const name of ['authenticationHeading_', 'authenticationLiteral_', 'authenticationDiscussion_']) {
+    const original = ctx[name];
+    ctx[name] = text => { units += text.length; return original(text); };
+  }
+  const text = 'x'.repeat(100000) + '\n' + 'LOGIN77 '.repeat(8000);
+  assert.equal(ctx.authenticationMessage_(ctx.candidateSource_({text, incomplete: false})), false);
+  assert.ok(units <= 50 * text.length, 'whole-line discussion must not be rescanned per literal');
 });
 
 test('AI extraction rejects fenced or unknown responses before transport', () => {

@@ -175,17 +175,29 @@ The example configuration contains product defaults only.
   metadata and cannot support an asserted merchant or offer field.
   Explicit `coupon code`, promo/discount-code, and `codice sconto` forms remain
   deterministic. Ambiguous bare Italian `codice` and English `use the code`
-  forms are left to evidence-gated AI rather than a proximity heuristic; this
-  avoids treating authentication tokens as coupons without excluding mixed
-  account-and-offer messages.
-  Candidate projection rejects supported authentication-purpose instructions
-  (verification, password reset, or a code used to sign in). Ordinary login
-  remains compatible with an associated coupon, discount, or checkout action.
-  Quotes select exact source occurrences; an ambiguous quote covering an
-  authentication occurrence cannot borrow another coupon's context. Code bytes
-  are excluded from context matching, so `SAVE` cannot supply its own offer
-  evidence. This is a bounded English/Italian recognizer, not a complete natural
-  language classifier; unfamiliar wording retains the existing grounded-AI checks.
+  forms are left to evidence-gated AI rather than a proximity heuristic.
+  Before downloading images or requesting AI extraction, a shared local check
+  excludes the **entire message** when readable source clearly issues an
+  authentication code—even if it also contains an offer. The check also guards
+  direct AI/deterministic extraction and Retry. Ordinary login requirements and
+  generic discussion of verification codes do not exclude a promotion.
+  Supported English/Italian evidence includes explicit verification/security/OTP
+  labels, code-use instructions for verification/sign-in/password reset, and a
+  verification heading with a code on a separate line, sentence, or rendered
+  block. This admission decision can combine those message-level signals;
+  factual coupon quotes still cannot cross original source spans.
+  This is a bounded text recognizer, not universal language understanding:
+  label/heading recognition requires a concrete 3–40-code-point value containing
+  digits; all-letter uppercase values additionally require a direct
+  authentication-use instruction. Ordinary prose and explicit placeholder forms
+  are not guessed as issued values. Unsupported wording,
+  image-only evidence, and incomplete coverage retain normal extraction/review
+  rules. Code punctuation and Unicode identity are never rewritten.
+  Exclusion returns `excludedReason: authentication_code_message`, not verified
+  absence of offers. It records an `ignored` journal checkpoint with that reason
+  but creates no coupon batch/rows and does not label, archive, or delete Gmail.
+  Retry leaves existing rows unchanged; historical retained batches and explicit
+  manual review authority are not retroactively migrated.
   Deterministic candidates currently require review. Tokens end at whitespace;
   one matching pair of outer ASCII quotes or angle brackets may wrap a token.
   Internal punctuation is never silently removed. Introducers require whitespace

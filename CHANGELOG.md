@@ -4,12 +4,14 @@
 
 ### Fixed
 
-- Leave weak generic Italian and English code introductions to evidence-gated AI,
-  so authentication notices cannot synthesize coupon-review rows. Explicit
-  coupon/promo/discount forms remain deterministic, and authentication-only AI
-  code proposals (including sign-in, verification, and password-reset context)
-  are rejected during candidate projection without treating the code token as
-  offer evidence.
+- Exclude messages clearly issuing authentication codes before image acquisition,
+  AI extraction, or coupon staging, including messages that also contain offers.
+  Share the source-derived gate with deterministic extraction and Retry; record
+  policy exclusion separately from verified offer absence, without coupon rows
+  or Gmail mutations. Preserve ordinary login-adjacent promotions, exact Unicode
+  code identities, and existing manual-review/retained-batch authority.
+  Weak generic Italian/English code introductions remain AI-only; explicit
+  coupon/promo/discount introductions remain deterministic for admitted messages.
 
 - Bind Gemini extraction values to typed evidence in a shared JSON response
   schema on both backends. Validate the complete response before projection,
