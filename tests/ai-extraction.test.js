@@ -849,6 +849,24 @@ for (const delivery of ["We've", "We’ve"]) test('R32 reported contracted deliv
   assert.equal(calls, 1);
 });
 
+for (const verb of ['emailed', 'texted']) test('R32 active ' + verb + ' delivery binds authentication', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'We ' + verb + ' you a verification code: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+for (const verb of ['complete', 'finish']) test('R32 nominal login purpose governs code instruction: ' + verb, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'To ' + verb + ' your login, enter code 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
 test('R32 reported active delivery preserves dotted issuer context', () => {
   const {ctx} = harness();
   let calls = 0;

@@ -344,7 +344,7 @@ function authenticationTargetEnd_(beforeValue) {
 function authenticationActionPattern_(beforeValue) {
   return '(?:' + authenticationVerificationPattern_(beforeValue) + '|' + authenticationAccessPattern_(beforeValue) +
     '|(?:authentication|(?:two[ -]factor|multi[ -]factor)\\s+authentication|(?:mfa|2fa)(?:\\s+authentication)?)' + authenticationTargetEnd_(beforeValue) +
-    '|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|reimposta(?:re)?|ripristina|acced(?:i|ere)|' + authenticationConfirmationPattern_(beforeValue) + ')';
+    '|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|(?:complete|finish)(?:ing)?\\s+(?:(?:your|the)\\s+)?log(?:[ -]?in|[ -]?into)|reimposta(?:re)?|ripristina|acced(?:i|ere)|' + authenticationConfirmationPattern_(beforeValue) + ')';
 }
 function authenticationConfirmationPattern_(beforeValue) {
   return '(?:confirm(?:ing)?\\s+(?:(?:your|the)\\s+)?(?:e-?mail(?:\\s+address)?|account|identity)|' +
@@ -399,7 +399,7 @@ function authenticationExampleSuffix_(text) {
 function authenticationReportedClause_(text) {
   // Retain a connected report through politeness and a bounded dotted issuer.
   // A closing quote or independent sentence ends its authority over later values.
-  if (/(?:^|[.!?;\n]\s*)\s*(?:you\s+)?(?:said|reported|recalled|remembered)\s*:\s*(?:[\p{L}\p{N} ._-]{1,60}:\s*)?(?:we(?:[\x27’]ve)?|i|you|they|the\s+system|the\s+service)(?:\s+(?:have|has))?\s+sent\b[^\n.!?;]*$/iu.test(text)) return true;
+  if (/(?:^|[.!?;\n]\s*)\s*(?:you\s+)?(?:said|reported|recalled|remembered)\s*:\s*(?:[\p{L}\p{N} ._-]{1,60}:\s*)?(?:we(?:[\x27’]ve)?|i|you|they|the\s+system|the\s+service)(?:\s+(?:have|has))?\s+(?:sent|emailed|texted)\b[^\n.!?;]*$/iu.test(text)) return true;
   const indirect = /\b(?:if|whether)(?:\s+|$)(["“'‘]?)\s*(?:(?=(?:your|the|a|an|this|that|you|i|we|he|she|it|they|il|la|tuo)\b|\S+\s+(?:is|è)(?=\s))(?:(?![.!?]\s|["”'’])[^\n])*|$)$/iu.exec(text);
   const auxiliary = '(?:(?:am|was|were|is|are|did|does|do|can|could|would|should|has|have|had|may|might|must|will|shall)(?:n[’\x27]t)?|(?:ca|wo|sha)n[’\x27]t)';
   const questionHead = '(?:(?:(?:why|how|when|where|what|which|who|whom)\\s+)?' + auxiliary + '\\s+' +
@@ -459,9 +459,10 @@ function authenticationIssuance_(before, after, code) {
     /^(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail) ||
     /^(?:(?:here|this)['’]s|(?:here|this)\s+is)\s+(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail);
   const deliverySubject = '(?:we(?:[\\x27’]ve)?|i|you|they|the\\s+system|the\\s+service)';
-  const deliveryCount = (beforeLine.match(new RegExp('\\b' + deliverySubject + '(?:\\s+(?:have|has))?\\s+sent\\b', 'giu')) || []).length;
-  const dottedReportedDelivery = deliveryCount === 1 && new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*(?:you\\s+(?:said|reported|recalled|remembered))\\s*:\\s*[\\p{L}\\p{N} _-]{1,60}\\.\\s*:\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+sent\\b', 'iu').test(beforeLine);
-  const activeDeliveryLabel = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+sent\\s+(?:you\\s+)?(?:your|the|a|an)?\\s*(?:to\\s+you\\s+)?$', 'iu').test(labelPrefix) && !dottedReportedDelivery;
+  const deliveryVerb = '(?:sent|emailed|texted)';
+  const deliveryCount = (beforeLine.match(new RegExp('\\b' + deliverySubject + '(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\b', 'giu')) || []).length;
+  const dottedReportedDelivery = deliveryCount === 1 && new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*(?:you\\s+(?:said|reported|recalled|remembered))\\s*:\\s*[\\p{L}\\p{N} _-]{1,60}\\.\\s*:\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\b', 'iu').test(beforeLine);
+  const activeDeliveryLabel = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\s+(?:you\\s+)?(?:your|the|a|an)?\\s*(?:to\\s+you\\s+)?$', 'iu').test(labelPrefix) && !dottedReportedDelivery;
   const historicalLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:previous|prior|old|former|last|earlier|historical|past)\s*$/iu.test(labelPrefix.trim());
   const statusLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:invalid|expired|used|wrong|incorrect|cancelled|canceled|obsolete|inactive|void|unusable)\s*$/iu.test(labelPrefix.trim());
   const affirmativeLabelContext = Boolean(precedingLabel && (directLabelContext ||
