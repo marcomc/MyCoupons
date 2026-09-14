@@ -318,12 +318,31 @@ function authenticationConfirmationPattern_(beforeValue) {
 function authenticationCodeNoun_() {
   return '(?:(?:(?:coupon|promo(?:tional)?|discount)\\s+)?(?:code|passcode|pin)|codice(?:\\s+sconto)?)';
 }
+function authenticationClauseBoundary_(text, includeSemicolon = true) {
+  let closing = null;
+  let boundary = -1;
+  for (let index = 0; index < text.length; index++) {
+    const character = text.charAt(index);
+    const apostropheInWord = character === "'" && index > 0 && index + 1 < text.length &&
+      /[\p{L}\p{N}]/u.test(text.charAt(index - 1)) && /[\p{L}\p{N}]/u.test(text.charAt(index + 1));
+    if (closing !== null) {
+      if (character === closing && !apostropheInWord) closing = null;
+      continue;
+    }
+    if (!apostropheInWord && (character === '"' || character === '“' || character === '‘' || character === "'")) {
+      closing = character === '“' ? '”' : character === '‘' ? '’' : character;
+      continue;
+    }
+    if (/[.!?\n]/u.test(character) || includeSemicolon && character === ';') boundary = index;
+  }
+  return boundary;
+}
 function authenticationDiscussionClause_(text) {
   // A quoted report remains connected to its reporting verb across a comma.
   // Closing the quote ends this role so a later independent issuance survives.
   if (/\b(?:asked|said|reported|recalled|remembered)\s*[:,]?\s*(?:"[^"\n]*|“[^”\n]*|'[^'\n]*|‘[^’\n]*)$/iu.test(text)) return true;
   const instructionClause = text.slice(Math.max(text.lastIndexOf(','), text.lastIndexOf(';')) + 1);
-  if (/(?:^|:\s*)\s*(?:if|unless|se)(?:\s*$|\s+(?:your|the|il|la)\b)/iu.test(instructionClause)) return true;
+  if (/(?:^|:\s*)\s*["“'‘]?\s*(?:if|unless|se)(?:\s*$|\s+(?:your|the|a|an|this|that|my|our|his|her|its|their|you|i|we|he|she|it|they|the|il|la|tuo|mio|nostro|suo|sua|loro)\b)/iu.test(instructionClause)) return true;
   if (/\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?$/iu.test(instructionClause) ||
       /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(?:you|your|the|il|la|tuo)\b/iu.test(instructionClause)) return true;
   if (/\b(?:(?:do\s+not|don[’']t|never|non)\s+(?:enter|type|use|inserisci|digita|usa)|(?:never|not)\s+ask\s+(?:you\s+)?to\s+(?:enter|type|use)|(?:learn|explain)\s+how\s+to\s+(?:enter|type|use))\b/iu.test(instructionClause)) return true;
@@ -375,8 +394,12 @@ function authenticationIssuance_(before, after) {
   // Purpose may precede an imperative under a dotted issuer such as Acme Inc.
   // Retain the bounded line for that association before slicing other clauses.
   const beforeLine = before.slice(before.lastIndexOf('\n') + 1);
-  before = before.slice(Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'),
-    before.lastIndexOf('?'), before.lastIndexOf('\n')) + 1);
+  const contextBoundary = Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'),
+    before.lastIndexOf('?'), before.lastIndexOf('\n'));
+  const clauseBoundary = authenticationClauseBoundary_(before);
+  const discussionContext = clauseBoundary > contextBoundary ? before :
+    before.slice(contextBoundary + 1);
+  before = before.slice(clauseBoundary + 1);
   const label = authenticationLabelPattern_();
   const qualifier = authenticationLabelQualifier_();
   const precedingLabel = new RegExp('\\b' + label + qualifier + '\\s*[:=]?\\s*$', 'iu').exec(before);
@@ -384,6 +407,9 @@ function authenticationIssuance_(before, after) {
   // In "value is your verification code ..." the label belongs to the value
   // before it; its following descriptive words cannot become another value.
   const labelPrefix = precedingLabel ? before.slice(0, precedingLabel.index) : '';
+  const reportingVerb = /\b(?:mention(?:s|ed|ing)|discuss(?:es|ed|ing)|describ(?:es|ed|ing)|refer(?:s|red|ring))\s+/iu;
+  const issuerPrefix = /(?:^|[.!?;]\s*)\s*(?:mention(?:s|ed|ing)|discuss(?:es|ed|ing)|describ(?:es|ed|ing)|refer(?:s|red|ring))\s+[^.;:]{1,60}:\s*(?:your|the|a|an|il|la|tuo|mio|nostro|suo|sua|loro)?\s*$/iu;
+  const nonAffirmativeLabel = Boolean(precedingLabel && reportingVerb.test(labelPrefix) && !issuerPrefix.test(labelPrefix));
   const instructionLabel = Boolean(precedingLabel && /\b(?:enter|type|use|inserisci|digita|usa)\s+(?:(?:your|the|il|il\s+tuo)\s+)?$/iu.test(labelPrefix));
   const priorValue = new RegExp('(?:^|\\s)(\\S+)\\s+' + authenticationCopulaPattern_() + '\\s+(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?$', 'iu').exec(labelPrefix);
   const reversed = Boolean(priorValue && !/^(?:here|there|this|below|following|attached|questo|questa)$/iu.test(priorValue[1]));
@@ -391,13 +417,16 @@ function authenticationIssuance_(before, after) {
     /\b(?:coupon|promo(?:tional)?|discount|sconto)\s*$/iu.test(labelPrefix));
   const negatedLabel = /\b(?:not|never|non)(?:\s+(?:is|è|e[’']|a|an|the|your|un|uno|una|il|lo|la|tuo|tua))*\s*$/iu.test(labelPrefix);
   const genericInstruction = qualifiedGeneric && /\b(?:use|enter|type|usa|inserisci|digita)\s+(?:(?:this|the|your|questo|il|il\s+tuo)\s+)?$/iu.test(labelPrefix);
-  const issuingLabel = Boolean(precedingLabel && !reversed && !promotional && !negatedLabel && !genericInstruction);
+  const issuingLabel = Boolean(precedingLabel && !reversed && !promotional && !negatedLabel && !genericInstruction && !nonAffirmativeLabel);
   const followingPrefix = '^\\s+' + authenticationCopulaPattern_() + '\\s+(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?';
   const followingLabel = new RegExp(followingPrefix + label + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
   const noun = authenticationCodeNoun_();
   const followingGeneric = new RegExp(followingPrefix + noun + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
   const followingOrdinary = followingGeneric && !/\b(?:coupon|promo(?:tional)?|discount|sconto)\b/iu.test(followingGeneric[0]);
   const following = followingLabel || followingGeneric;
+  const followingBoundary = authenticationClauseBoundary_(beforeLine);
+  const followingContext = beforeLine.slice(followingBoundary + 1);
+  const nonAffirmativeFollowing = Boolean(followingLabel && reportingVerb.test(followingContext) && !issuerPrefix.test(followingContext));
   const continuation = following ? after.slice(following[0].length) : after;
   const completeValue = authenticationValueTail_(continuation);
   const generic = new RegExp('(?:^|\\s|:)(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?(?:code|passcode|pin|codice)\\s*(?:' + authenticationCopulaPattern_() + '\\s*[:=]?\\s+|[:=]\\s*)$', 'iu').exec(before);
@@ -440,8 +469,8 @@ function authenticationIssuance_(before, after) {
     frameContinuation: authenticationFrameContinuation_(continuation),
     invalidRecipientTail: authenticationRecipientTail_(continuation) === false,
     descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
-    discussion: negatedLabel || authenticationReportedClause_(beforeLine) ||
-      authenticationDiscussionClause_(before) || authenticationExampleSuffix_(continuation)};
+    discussion: negatedLabel || nonAffirmativeLabel || nonAffirmativeFollowing || authenticationReportedClause_(beforeLine) ||
+      authenticationDiscussionClause_(discussionContext) || authenticationExampleSuffix_(continuation)};
 }
 function authenticationInstruction_(before, after, code, frame, allowAmbiguousCopular) {
   const relation = authenticationIssuance_(before, after);

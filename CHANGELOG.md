@@ -45,6 +45,8 @@
   Support purpose-qualified generic labels, directly governed numeric/mixed values,
   and short values under complete specialized-label issuance without borrowing
   generic subject authority or weakening alphabetic-presentation requirements.
+  Preserve possessive conditional discussion and require affirmative assignment,
+  delivery, or use context before specialized labels exclude a message.
   Associate subject/body issuance, labels in either direction, alphabetic
   values, and heading/instruction/value layouts without relaxing factual quote
   boundaries. Keep verification actions tied to authentication targets and

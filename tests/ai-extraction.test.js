@@ -107,6 +107,37 @@ test('R28 qualified generic alphabetic values retain grounded semantic admission
 });
 
 for (const [text, excluded] of [
+  ['If my verification code is 123456, enter it to sign in. Brand coupon code SAVE20', false],
+  ['Unless our verification code is 123456, enter it to sign in. Brand coupon code SAVE20', false],
+  ['The help page mentions verification code 123456. Brand coupon code SAVE20', false],
+  ['The article discusses verification code 123456. Brand coupon code SAVE20', false],
+  ['The help page mentions shipping; Your verification code is 123456. Brand coupon code SAVE20', true],
+  ['Mention Bank: Your verification code is 123456. Brand coupon code SAVE20', true],
+  ['The help page mentions that 123456 is your verification code. Brand coupon code SAVE20', false],
+  ['“If my verification code is 123456, enter it to sign in”. Brand coupon code SAVE20', false],
+  ['The help page mentions shipping; 123456 is your verification code. Brand coupon code SAVE20', true],
+  ['The help page mentions shipping. 123456 is your verification code. Brand coupon code SAVE20', true],
+  ['The help page mentions this: Your verification code is 123456. Brand coupon code SAVE20', false],
+  ['The article describes the following: Your verification code is 123456. Brand coupon code SAVE20', false],
+  ['Welcome. Refers Bank: Your verification code is 123456. Brand coupon code SAVE20', true],
+  ['Welcome; Refers Bank: Your verification code is 123456. Brand coupon code SAVE20', true],
+  ['The help page mentions “a code; Your verification code is 123456”. Brand coupon code SAVE20', false],
+  ["The help page mentions 'a code; Your verification code is 123456'. Brand coupon code SAVE20", false],
+  ["The help page mentions 'it's a code; Your verification code is 123456'. Brand coupon code SAVE20", false],
+  ["The help page mentions 'a code'. Your verification code is 123456. Brand coupon code SAVE20", true],
+  ["The store's help page mentions verification code 123456. Brand coupon code SAVE20", false],
+  ['The help page mentions “a code”. Your verification code is 123456. Brand coupon code SAVE20', true],
+  ['The help page mentions a code; Your verification code is 123456. Brand coupon code SAVE20', true],
+  ['Your verification code is 123456. Brand coupon code SAVE20', true]
+]) test('R29 actual consumer discussion/conditional role: ' + text, () => {
+  const {ctx} = harness(); let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.equal(outcome.excludedReason === 'authentication_code_message', excluded);
+  assert.equal(calls, excluded ? 0 : 1);
+});
+
+for (const [text, excluded] of [
   ['Why should I share my verification code 123456? Brand coupon code SAVE20', false],
   ['Your verification code is 123456, enter it to sign in. Brand coupon code SAVE20', true],
   ['Suppose your verification code is 123456. Brand coupon code SAVE20', false]

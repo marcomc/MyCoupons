@@ -1037,6 +1037,33 @@ for (const text of ['Your code is: 42', 'PIN 42', 'Sign in with 42', 'Use 42 to 
   'Your security PIN to sign in:', 'Your code to verify your account discount is SAVE20']) {
   ordinaryMessages.push({text: text + '\nBrand coupon code SAVE20'});
 }
+for (const owner of ['my', 'our', 'his', 'her', 'its', 'their']) {
+  ordinaryMessages.push(
+    {text: 'If ' + owner + ' verification code is 123456, enter it to sign in. Brand coupon code SAVE20'},
+    {text: 'Unless ' + owner + ' verification code is 123456, enter it to sign in. Brand coupon code SAVE20'}
+  );
+}
+for (const verb of ['mentions', 'discusses', 'describes', 'refers to']) {
+  ordinaryMessages.push({text: 'The help page ' + verb + ' verification code 123456. Brand coupon code SAVE20'});
+}
+authenticationMessages.push(
+  {text: 'Mention Bank: Your verification code is 123456'},
+  {text: 'Refers Bank: Your verification code is 123456'},
+  {text: 'The help page mentions shipping; Your verification code is 123456'},
+  {text: 'The help page mentions shipping; 123456 is your verification code'},
+  {text: 'The help page mentions shipping. 123456 is your verification code'},
+  {text: "The help page mentions 'a code'. Your verification code is 123456"}
+);
+ordinaryMessages.push(
+  {text: 'The help page mentions that 123456 is your verification code. Brand coupon code SAVE20'},
+  {text: "The help page mentions 'a code; Your verification code is 123456'. Brand coupon code SAVE20"},
+  {text: "The help page mentions 'it's a code; Your verification code is 123456'. Brand coupon code SAVE20"},
+  {text: "The store's help page mentions verification code 123456. Brand coupon code SAVE20"},
+  {text: '“If my verification code is 123456, enter it to sign in”. Brand coupon code SAVE20'},
+  {text: '“Unless our verification code is 123456, enter it to sign in”. Brand coupon code SAVE20'},
+  {text: 'The help page mentions this: Your verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'The article describes the following: Your verification code is 123456. Brand coupon code SAVE20'}
+);
 for (const value of ['42', '42.', '“7”.', 'A1!']) {
   for (const instruction of ['Use code ', 'Your PIN is ']) {
     authenticationMessages.push({text: 'Your security PIN:\n' + instruction + value},
