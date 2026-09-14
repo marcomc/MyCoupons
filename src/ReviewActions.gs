@@ -70,7 +70,9 @@ function processReviewAction_(sheet, rowNumber, action, c) {
 
 function reviewAuthenticationAdmission_(message) {
   const source = candidateSource_(message);
-  if (authenticationAdmission_(source).kind === 'issued') return true;
+  const admission = authenticationAdmission_(source);
+  if (admission.kind === 'issued') return true;
+  if (admission.kind === 'incomplete') fail_('REVIEW');
   // Manual factual edits cannot account for source/image content never inspected.
   if (source.incomplete) fail_('REVIEW');
   if (!source.images.length && !authenticationMessage_(source, true)) return false;

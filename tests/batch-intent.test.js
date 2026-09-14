@@ -320,6 +320,17 @@ test('R21 replay finalization retains refreshed image exclusion in both archive-
   }
 });
 
+test('R21 manual Confirm fails closed when authentication evidence is beyond the scan bound', () => {
+  const f = fixture(); f.run();
+  f.ctx.getReviewMessage_ = () => ({...f.message, text: 'x'.repeat(60001) + ' Your verification code is 123456.'});
+  const result = f.action(2, 'Confirm');
+  assert.equal(result.status, 'failed');
+  assert.equal(result.code, 'REVIEW');
+  assert.equal(f.coupon.rows[1][17], 'Needs review');
+  assert.equal(f.mutations.length, 0);
+  assert.equal(f.saved().outcome, 'review');
+});
+
 test('R21 partial v3 replay admits images before any missing row and recovers after rejected admission', () => {
   const {png} = require('./mime-fixtures');
   for (const written of [0, 1]) for (const mode of ['auth', 'incomplete', 'invalid-proof', 'model-failure', 'ordinary']) {

@@ -105,7 +105,7 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
     // Authentication admission is lexical and bounded independently of the
     // model prompt. Preserve fail-closed coverage for oversized spans instead
     // of spending the invocation on unbounded per-token regex work.
-    const span = sourceSpan.text.slice(0, 60000);
+    const span = authenticationBoundedSpan_(sourceSpan.text);
     // Evidence queries bind the selected literal to an exact original occurrence.
     // Advance monotonically through disjoint quote ranges, never rescan prefixes.
     const quoteRanges = evidenceQuote === undefined ? null : rawOccurrences_(evidenceQuote, span, false);
@@ -186,6 +186,12 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
     }
   }
   return false;
+}
+function authenticationBoundedSpan_(text) {
+  if (text.length <= 60000) return text;
+  let end = 60000;
+  while (end > 0 && !/\s/u.test(text.charAt(end - 1))) end--;
+  return text.slice(0, end);
 }
 function authenticationAdmission_(source, allowAmbiguousCopular, evidenceQuote) {
   if (!source) return {kind: 'incomplete', deterministic: false};
@@ -299,7 +305,7 @@ function authenticationCompletionTail_(text) {
   return (wrapper === null || !authenticationDiscussion_(clause)) && (
     authenticationAnaphoricTail_(clause) ||
     /^[^\S\n]*(?:[,;][^\S\n]*)?(?:(?:and|e)\s+)?(?:(?:should|must)\s+not\s+be\s+shared|(?:do\s+not|never)\s+share|(?:must|should)\s+be\s+kept\s+secret|non\s+(?:deve\s+essere\s+condiviso|condividerlo)|deve\s+rimanere\s+segreto)(?![\p{L}\p{N}\p{M}_])/iu.test(clause) ||
-    /^[^\S\n]*(?:(?:[,;]|and|e)\s*)?(?:(?:it\s+)|(?:(?:this|the)\s+(?:code|passcode|pin)\s+))?(?:(?:expires?|(?:will\s+)?expire)\s+in|is\s+valid|valid\s+(?:for|until)|scad(?:e|rà)|(?:è\s+)?valid[oa]\s+(?:per|fino))(?![\p{L}\p{N}\p{M}_])/iu.test(clause)
+    /^[^\S\n]*(?:(?:[,;]|and|e)\s*)?(?:(?:it\s+)|(?:(?:this|the)\s+(?:code|passcode|pin)\s+))?(?:(?:expires?(?:\s+in)?|(?:will\s+)?expire\s+in)|is\s+valid|valid\s+(?:for|until)|scad(?:e|rà)|(?:è\s+)?valid[oa]\s+(?:per|fino))(?![\p{L}\p{N}\p{M}_])/iu.test(clause)
   );
 }
 function authenticationAnaphoricTail_(text) {
@@ -393,7 +399,7 @@ function authenticationExampleSuffix_(text) {
 function authenticationReportedClause_(text) {
   // Retain a connected report through politeness and a bounded dotted issuer.
   // A closing quote or independent sentence ends its authority over later values.
-  if (/(?:^|[.!?;\n]\s*)\s*(?:you\s+)?(?:said|reported|recalled|remembered)\s*:\s*(?:[\p{L}\p{N} ._-]{1,60}:\s*)?(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\b[^\n.!?;]*$/iu.test(text)) return true;
+  if (/(?:^|[.!?;\n]\s*)\s*(?:you\s+)?(?:said|reported|recalled|remembered)\s*:\s*(?:[\p{L}\p{N} ._-]{1,60}:\s*)?(?:we(?:[\x27’]ve)?|i|you|they|the\s+system|the\s+service)(?:\s+(?:have|has))?\s+sent\b[^\n.!?;]*$/iu.test(text)) return true;
   const indirect = /\b(?:if|whether)(?:\s+|$)(["“'‘]?)\s*(?:(?=(?:your|the|a|an|this|that|you|i|we|he|she|it|they|il|la|tuo)\b|\S+\s+(?:is|è)(?=\s))(?:(?![.!?]\s|["”'’])[^\n])*|$)$/iu.exec(text);
   const auxiliary = '(?:(?:am|was|were|is|are|did|does|do|can|could|would|should|has|have|had|may|might|must|will|shall)(?:n[’\x27]t)?|(?:ca|wo|sha)n[’\x27]t)';
   const questionHead = '(?:(?:(?:why|how|when|where|what|which|who|whom)\\s+)?' + auxiliary + '\\s+' +

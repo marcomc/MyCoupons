@@ -840,6 +840,15 @@ for (const prefix of ['You said:', 'You reported:']) test('R32 reported active d
   assert.equal(calls, 1);
 });
 
+for (const delivery of ["We've", "We’ve"]) test('R32 reported contracted delivery remains ordinary: ' + delivery, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'You said: ' + delivery + ' sent you a verification code: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
 test('R32 reported active delivery preserves dotted issuer context', () => {
   const {ctx} = harness();
   let calls = 0;
@@ -1027,7 +1036,7 @@ test('message classification uses bounded context work for repeated literals and
       return original(before, after, code, frame);
     };
     assert.equal(ctx.authenticationMessage_(ctx.candidateSource_({text, incomplete: false})), false);
-    const bounded = text.slice(0, 60000);
+    const bounded = ctx.authenticationBoundedSpan_(text);
     assert.equal(calls, ctx.codeLexemes_(bounded).filter(code => ctx.authenticationLiteral_(code)).length);
     assert.ok(units <= 480 * calls, 'fixed per-literal context, no growing prefix/suffix');
     assert.ok(units <= 480 * text.length, 'linear total context bound including one-unit literals');
@@ -1039,6 +1048,8 @@ test('authentication admission handles future expiry, contracted delivery and ex
   const {ctx} = harness();
   const cases = [
     ['Your verification code is 123456 and will expire in 10 minutes. Brand coupon code SAVE20', true],
+    ['Your verification code is 123456, expires tomorrow. Brand coupon code SAVE20', true],
+    ['Your verification code is 123456; it expires at noon. Brand coupon code SAVE20', true],
     ["We've sent you a verification code: 123456. Brand coupon code SAVE20", true],
     ["We’ve sent you a verification code: 123456. Brand coupon code SAVE20", true],
     ['For instance: verification code: 123456. Brand coupon code SAVE20', false]
@@ -1055,6 +1066,8 @@ test('authentication admission handles future expiry, contracted delivery and ex
   }
   const oversized = {text: 'x'.repeat(60001) + ' Your verification code is 123456', incomplete: false};
   assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(oversized)).kind, 'incomplete');
+  const boundaryToken = {text: 'x'.repeat(59980) + ' Your verification code: support.acme.example', incomplete: false};
+  assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(boundaryToken)).kind, 'incomplete');
 });
 
 test('message scanner keeps line, literal and discussion inspection work linear', () => {
