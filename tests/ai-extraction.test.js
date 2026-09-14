@@ -840,6 +840,18 @@ test('R32 speculative named-provider delivery remains ordinary', () => {
   assert.equal(calls, 1);
 });
 
+for (const text of [
+  'Has Acme sent you a verification code: 123456? Brand coupon code SAVE20',
+  'Could Acme have emailed you a verification code: 123456? Brand coupon code SAVE20'
+]) test('R32 interrogative named-provider delivery remains ordinary: ' + text, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
 for (const prefix of ['You said:', 'You reported:']) test('R32 reported active delivery remains ordinary: ' + prefix, () => {
   const {ctx} = harness();
   let calls = 0;

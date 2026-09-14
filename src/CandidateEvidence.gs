@@ -474,7 +474,8 @@ function authenticationIssuance_(before, after, code) {
   // be reinterpreted as a two-word provider name. Keep those reports ordinary.
   const speculativeDelivery = /(?:^|[.!?;:\n]\s*)(?:maybe|perhaps|i\s+(?:think|guess))\s+[^.!?;:\n]{1,80}\b(?:sent|emailed|texted)\b/iu.test(labelPrefix);
   const nonAffirmativeDelivery = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+(?:never|not|may|might|could|would|should|probably|possibly)(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\b', 'iu').test(labelPrefix);
-  const activeDeliveryLabel = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\s+(?:you\\s+)?(?:your|the|a|an)?\\s*(?:to\\s+you\\s+)?$', 'iu').test(labelPrefix) && !dottedReportedDelivery && !speculativeDelivery && !nonAffirmativeDelivery;
+  const interrogativeDelivery = /(?:^|[.!?;:\n]\s*)(?:has|have|did|does|do|can|could|would|should|will|may|might|is|are|was|were)\s+[^.!?;:\n]{1,80}(?:\s+(?:have|has))?\s+(?:sent|emailed|texted)\b/iu.test(labelPrefix);
+  const activeDeliveryLabel = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\s+(?:you\\s+)?(?:your|the|a|an)?\\s*(?:to\\s+you\\s+)?$', 'iu').test(labelPrefix) && !dottedReportedDelivery && !speculativeDelivery && !nonAffirmativeDelivery && !interrogativeDelivery;
   const historicalLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:previous|prior|old|former|last|earlier|historical|past)\s*$/iu.test(labelPrefix.trim());
   const statusLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:invalid|expired|used|wrong|incorrect|cancelled|canceled|obsolete|inactive|void|unusable)\s*$/iu.test(labelPrefix.trim());
   const affirmativeLabelContext = Boolean(precedingLabel && (directLabelContext ||
@@ -543,7 +544,7 @@ function authenticationIssuance_(before, after, code) {
     frameContinuation: authenticationFrameContinuation_(continuation),
     invalidRecipientTail: authenticationRecipientTail_(continuation) === false,
     descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
-    discussion: speculativeContext || speculativeDelivery || speculativeDeliveryContext || historicalLabel || statusLabel || negatedLabel || nonAffirmativeLabel || nonAffirmativeFollowing || authenticationReportedClause_(beforeLine) ||
+    discussion: speculativeContext || speculativeDelivery || speculativeDeliveryContext || interrogativeDelivery || historicalLabel || statusLabel || negatedLabel || nonAffirmativeLabel || nonAffirmativeFollowing || authenticationReportedClause_(beforeLine) ||
       authenticationDiscussionClause_(discussionContext) || authenticationExampleSuffix_(continuation)};
 }
 function authenticationInstruction_(before, after, code, frame, allowAmbiguousCopular) {
