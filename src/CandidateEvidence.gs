@@ -322,7 +322,7 @@ function authenticationCompletionTail_(text) {
   const clause = wrapper === null ? text : wrapper;
   return (wrapper === null || !authenticationDiscussion_(clause)) && (
     authenticationAnaphoricTail_(clause) ||
-    /^[^\S\n]*(?:[,;][^\S\n]*)?(?:(?:and|e)\s+)?(?:(?:should|must)\s+not\s+be\s+shared|(?:do\s+not|never)\s+share|(?:must|should)\s+be\s+kept\s+secret|non\s+(?:deve\s+essere\s+condiviso|condividerlo)|deve\s+rimanere\s+segreto)(?![\p{L}\p{N}\p{M}_])/iu.test(clause) ||
+    /^[^\S\n]*(?:[,;][^\S\n]*)?(?:(?:and|e)\s+)?(?:(?:should|must)\s+not\s+be\s+shared|(?:do\s+not|never)\s+share|(?:must|should)\s+be\s+kept\s+secret|keep\s+it\s+(?:safe|private)|do\s+not\s+give\s+it\s+to\s+anyone|non\s+(?:deve\s+essere\s+condiviso|condividerlo)|deve\s+rimanere\s+segreto)(?![\p{L}\p{N}\p{M}_])/iu.test(clause) ||
     /^[^\S\n]*(?:(?:[,;]|and|e)\s*)?(?:(?:it\s+)|(?:(?:this|the)\s+(?:code|passcode|pin)\s+))?(?:(?:expires?(?:\s+in)?|(?:will\s+)?expire\s+in)|is\s+valid|valid\s+(?:for|until)|scad(?:e|rà)|(?:è\s+)?valid[oa]\s+(?:per|fino))(?![\p{L}\p{N}\p{M}_])/iu.test(clause)
   );
 }
@@ -361,8 +361,8 @@ function authenticationTargetEnd_(beforeValue) {
 }
 function authenticationActionPattern_(beforeValue) {
   return '(?:' + authenticationVerificationPattern_(beforeValue) + '|' + authenticationAccessPattern_(beforeValue) +
-    '|(?:authentication|(?:two[ -]factor|multi[ -]factor)\\s+authentication|(?:mfa|2fa)(?:\\s+authentication)?)' + authenticationTargetEnd_(beforeValue) +
-    '|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|(?:complete|finish)(?:ing)?\\s+(?:(?:your|the)\\s+)?(?:log(?:[ -]?in|[ -]?into)|sign(?:[ -]?in|[ -]?into))|reimposta(?:re)?|ripristina|acced(?:i|ere)|' + authenticationConfirmationPattern_(beforeValue) + ')';
+    '|(?:authentication|verification|(?:two[ -]factor|multi[ -]factor)\\s+authentication|(?:mfa|2fa)(?:\\s+authentication)?)' + authenticationTargetEnd_(beforeValue) +
+    '|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|(?:complete|finish)(?:ing)?\\s+(?:(?:your|the)\\s+)?(?:log(?:[ -]?in|[ -]?into)|sign(?:[ -]?in|[ -]?into)|authentication|verification)|reimposta(?:re)?|ripristina|acced(?:i|ere)|' + authenticationConfirmationPattern_(beforeValue) + ')';
 }
 function authenticationConfirmationPattern_(beforeValue) {
   return '(?:confirm(?:ing)?\\s+(?:(?:your|the)\\s+)?(?:e-?mail(?:\\s+address)?|account|identity)|' +
@@ -471,7 +471,7 @@ function authenticationIssuance_(before, after, code) {
   const imperativeNoteLabel = /(?:^|[.!?;:]\s*)\s*please\s+note(?:\s+that)?\s+(?:your|the|a|an)\s*$/iu.test(labelPrefix);
   const nonAffirmativeLabel = Boolean(precedingLabel && (reportingVerb.test(labelPrefix) ||
     reportedLabelContext) && !issuerPrefix.test(labelPrefix) && !imperativeNoteLabel);
-  const instructionLabel = Boolean(precedingLabel && /\b(?:enter|type|use|inserisci|digita|usa)\s+(?:(?:your|the|il|il\s+tuo)\s+)?$/iu.test(labelPrefix));
+  const instructionLabel = Boolean(precedingLabel && /\b(?:enter|type|use|inserisci|digita|usa)\s+(?:(?:this|your|the|questo|il|il\s+tuo)\s+)?$/iu.test(labelPrefix));
   const labelPrefixTail = labelPrefix.trim().replace(/^.*[.!?;:]\s*/u, '');
   const simpleIssuer = /^(?:[\p{L}\p{N}][\p{L}\p{N}._-]*)(?:\s+[\p{L}\p{N}][\p{L}\p{N}._-]*){0,2}$/u.test(labelPrefixTail);
   const directLabelContext = !labelPrefixTail ||
