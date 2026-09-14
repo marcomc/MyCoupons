@@ -205,13 +205,16 @@ function authenticationBoundedSpan_(text) {
 }
 function authenticationAdmission_(source, allowAmbiguousCopular, evidenceQuote) {
   if (!source) return {kind: 'incomplete', deterministic: false};
-  if (source.spans.some(function (span) { return span.length > 60000; })) {
-    return {kind: 'incomplete', deterministic: false};
-  }
-  if (authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote)) {
+  const oversized = source.spans.some(function (span) { return span.length > 60000; });
+  const completeSource = oversized ? (function () {
+    const sourceSpans = source.sourceSpans.filter(function (span) { return span.text.length <= 60000; });
+    return Object.assign({}, source, {spans: sourceSpans.map(function (span) { return span.text; }),
+      sourceSpans: sourceSpans, evidenceSpans: sourceSpans.map(function (span) { return span.text; })});
+  }()) : source;
+  if (authenticationMessage_(completeSource, allowAmbiguousCopular, evidenceQuote)) {
     return {kind: 'issued', deterministic: true};
   }
-  if (source.incomplete) {
+  if (source.incomplete || oversized) {
     return {kind: 'incomplete', deterministic: false};
   }
   const text = source.spans.join('\n');

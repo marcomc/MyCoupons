@@ -1174,6 +1174,12 @@ test('authentication admission handles future expiry, contracted delivery and ex
   assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(oversized)).kind, 'incomplete');
   const boundaryToken = {text: 'x'.repeat(59980) + ' Your verification code: support.acme.example', incomplete: false};
   assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(boundaryToken)).kind, 'incomplete');
+  const subjectWithOversizedBody = {subject: 'Your verification code: 123456', text: 'x'.repeat(60001), incomplete: false};
+  assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(subjectWithOversizedBody)).kind, 'issued');
+  let subjectCalls = 0;
+  ctx.callGeminiModel_ = () => { subjectCalls++; return {text: JSON.stringify({authentication: null, candidates: []})}; };
+  assert.equal(ctx.extractCouponOutcome_(subjectWithOversizedBody).excludedReason, 'authentication_code_message');
+  assert.equal(subjectCalls, 0);
 });
 
 test('message scanner keeps line, literal and discussion inspection work linear', () => {
