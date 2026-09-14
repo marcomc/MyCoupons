@@ -203,11 +203,19 @@ function authenticationBoundedSpan_(text) {
   while (end > 0 && !/\s/u.test(text.charAt(end - 1))) end--;
   return text.slice(0, end);
 }
+function authenticationCompletePrefix_(text) {
+  const bounded = authenticationBoundedSpan_(text);
+  if (bounded.length === text.length) return bounded;
+  const boundary = authenticationClauseBoundary_(bounded);
+  return boundary < 0 ? '' : bounded.slice(0, boundary + 1);
+}
 function authenticationAdmission_(source, allowAmbiguousCopular, evidenceQuote) {
   if (!source) return {kind: 'incomplete', deterministic: false};
   const oversized = source.spans.some(function (span) { return span.length > 60000; });
   const completeSource = oversized ? (function () {
-    const sourceSpans = source.sourceSpans.filter(function (span) { return span.text.length <= 60000; });
+    const sourceSpans = source.sourceSpans.map(function (span) {
+      return {kind: span.kind, text: authenticationCompletePrefix_(span.text)};
+    }).filter(function (span) { return span.text; });
     return Object.assign({}, source, {spans: sourceSpans.map(function (span) { return span.text; }),
       sourceSpans: sourceSpans, evidenceSpans: sourceSpans.map(function (span) { return span.text; })});
   }()) : source;

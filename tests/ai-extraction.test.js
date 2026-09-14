@@ -1178,6 +1178,8 @@ test('authentication admission handles future expiry, contracted delivery and ex
   assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(oversized)).kind, 'incomplete');
   const boundaryToken = {text: 'x'.repeat(59980) + ' Your verification code: support.acme.example', incomplete: false};
   assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(boundaryToken)).kind, 'incomplete');
+  const prefixIssuance = {text: 'Your verification code is 123456. Brand coupon code SAVE20' + ' x'.repeat(30000), incomplete: false};
+  assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(prefixIssuance)).kind, 'issued');
   const subjectWithOversizedBody = {subject: 'Your verification code: 123456', text: 'x'.repeat(60001), incomplete: false};
   assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(subjectWithOversizedBody)).kind, 'issued');
   let subjectCalls = 0;
