@@ -1059,7 +1059,9 @@ authenticationMessages.push(
   {text: 'Here is the verification code you asked for: 123456. Brand coupon code SAVE20'},
   {text: '123456 is the verification code you requested. Brand coupon code SAVE20'},
   {text: 'Your verification code was sent to your phone: 123456. Brand coupon code SAVE20'},
-  {text: 'Your verification code has been sent to your email: 123456. Brand coupon code SAVE20'}
+  {text: 'Your verification code has been sent to your email: 123456. Brand coupon code SAVE20'},
+  {text: 'Welcome. Your verification code 123456. Brand coupon code SAVE20'},
+  {text: 'Records Bank: 123456 is your verification code. Brand coupon code SAVE20'}
 );
 ordinaryMessages.push(
   {text: 'The help page mentions that 123456 is your verification code. Brand coupon code SAVE20'},
@@ -1071,7 +1073,11 @@ ordinaryMessages.push(
   {text: 'The help page mentions this: Your verification code is 123456. Brand coupon code SAVE20'},
   {text: 'The article describes the following: Your verification code is 123456. Brand coupon code SAVE20'},
   {text: 'The article discusses the verification code you requested: 123456. Brand coupon code SAVE20'},
-  {text: 'The audit log records verification code 123456. Brand coupon code SAVE20'}
+  {text: 'The audit log records verification code 123456. Brand coupon code SAVE20'},
+  {text: 'The audit log records verification code: 123456. Brand coupon code SAVE20'},
+  {text: 'The audit log records verification code = 123456. Brand coupon code SAVE20'},
+  {text: 'The audit log records that 123456 is your verification code. Brand coupon code SAVE20'},
+  {text: 'The audit log records verification code was sent to your phone: 123456. Brand coupon code SAVE20'}
 );
 for (const value of ['42', '42.', '“7”.', 'A1!']) {
   for (const instruction of ['Use code ', 'Your PIN is ']) {

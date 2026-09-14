@@ -409,17 +409,21 @@ function authenticationIssuance_(before, after) {
   const labelPrefix = precedingLabel ? before.slice(0, precedingLabel.index) : '';
   const reportingVerb = /\b(?:mention(?:s|ed|ing)|discuss(?:es|ed|ing)|describ(?:es|ed|ing)|refer(?:s|red|ring))\s+/iu;
   const issuerPrefix = /(?:^|[.!?;]\s*)\s*(?:mention(?:s|ed|ing)|discuss(?:es|ed|ing)|describ(?:es|ed|ing)|refer(?:s|red|ring))\s+[^.;:]{1,60}:\s*(?:your|the|a|an|il|la|tuo|mio|nostro|suo|sua|loro)?\s*$/iu;
-  const nonAffirmativeLabel = Boolean(precedingLabel && reportingVerb.test(labelPrefix) && !issuerPrefix.test(labelPrefix));
+  const reportedLabelContext = authenticationReportedContext_(labelPrefix);
+  const nonAffirmativeLabel = Boolean(precedingLabel && (reportingVerb.test(labelPrefix) ||
+    reportedLabelContext) && !issuerPrefix.test(labelPrefix));
   const instructionLabel = Boolean(precedingLabel && /\b(?:enter|type|use|inserisci|digita|usa)\s+(?:(?:your|the|il|il\s+tuo)\s+)?$/iu.test(labelPrefix));
-  const affirmativeLabelContext = Boolean(precedingLabel && (
-    !labelPrefix.trim() ||
-    /:\s*$/u.test(labelPrefix) ||
-    /[:=]\s*$/u.test(precedingLabel[0]) ||
-    /(?:^|[.!?;:]\s*)(?:your|the|a|an|il|la|tuo|il\s+tuo)\s*$/iu.test(labelPrefix) ||
-    /(?:^|[.!?;:]\s*)(?:here|this)\s+is\s+(?:your|the|a|an|il|la|tuo|il\s+tuo)\s*$/iu.test(labelPrefix) ||
-    /(?:is|will\s+be|has\s+been|was\s+sent|requested|asked\s+for|below|shown\s+below|expires?|valid|scad|monouso|seguente)\b/iu.test(precedingLabel[0]) ||
-    instructionLabel
-  ));
+  const labelPrefixTail = labelPrefix.trim().replace(/^.*[.!?;:]\s*/u, '');
+  const simpleIssuer = /^(?:[\p{L}\p{N}][\p{L}\p{N}._-]*)(?:\s+[\p{L}\p{N}][\p{L}\p{N}._-]*){0,2}$/u.test(labelPrefixTail);
+  const directLabelContext = !labelPrefixTail ||
+    /^(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail) ||
+    /^(?:here|this)\s+is\s+(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail);
+  const affirmativeLabelContext = Boolean(precedingLabel && (directLabelContext ||
+    /\b(?:your|the|a|an|il|la|tuo|il\s+tuo)\s*$/iu.test(labelPrefix) &&
+      /\b(?:is|will\s+be|è|sarà|e[’'])\b/iu.test(precedingLabel[0]) ||
+    simpleIssuer && /[:=]\s*$/.test(precedingLabel[0]) ||
+    simpleIssuer && /(?:is|will\s+be|has\s+been|was\s+sent|requested|asked\s+for|below|shown\s+below|expires?|valid|scad|monouso|seguente)\b/iu.test(precedingLabel[0]) ||
+    instructionLabel));
   const priorValue = new RegExp('(?:^|\\s)(\\S+)\\s+' + authenticationCopulaPattern_() + '\\s+(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?$', 'iu').exec(labelPrefix);
   const reversed = Boolean(priorValue && !/^(?:here|there|this|below|following|attached|questo|questa)$/iu.test(priorValue[1]));
   const promotional = Boolean(precedingLabel && /^passcode\b/iu.test(precedingLabel[0]) &&
@@ -435,7 +439,8 @@ function authenticationIssuance_(before, after) {
   const following = followingLabel || followingGeneric;
   const followingBoundary = authenticationClauseBoundary_(beforeLine);
   const followingContext = beforeLine.slice(followingBoundary + 1);
-  const nonAffirmativeFollowing = Boolean(followingLabel && reportingVerb.test(followingContext) && !issuerPrefix.test(followingContext));
+  const nonAffirmativeFollowing = Boolean(followingLabel && (reportingVerb.test(followingContext) ||
+    authenticationReportedContext_(followingContext)) && !issuerPrefix.test(followingContext));
   const continuation = following ? after.slice(following[0].length) : after;
   const completeValue = authenticationValueTail_(continuation);
   const generic = new RegExp('(?:^|\\s|:)(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?(?:code|passcode|pin|codice)\\s*(?:' + authenticationCopulaPattern_() + '\\s*[:=]?\\s+|[:=]\\s*)$', 'iu').exec(before);
@@ -465,7 +470,7 @@ function authenticationIssuance_(before, after) {
     /[:=]\s*$/u.test(before) && (issuingLabel || genericIssued || imperative || inlineInstruction);
   const specialized = Boolean(issuingLabel && new RegExp('^' + authenticationSpecializedLabelPattern_(), 'iu').test(precedingLabel[0]) ||
     new RegExp(followingPrefix + authenticationSpecializedLabelPattern_() + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').test(after));
-  return {explicit: issuingLabel || Boolean(followingLabel && completeValue) || preposedPurpose, specialized: specialized, governed: governed,
+  return {explicit: issuingLabel || Boolean(followingLabel && completeValue && !nonAffirmativeFollowing) || preposedPurpose, specialized: specialized, governed: governed,
     presented: wrappedValue || assignmentPresentation,
     wrapperOnly: wrappedValue && !assignmentPresentation,
     copular: Boolean(following || (issuingLabel || genericIssued) &&
@@ -520,6 +525,10 @@ function authenticationDiscussionPattern_() {
   return '(?:example|sample|placeholder|tutorial|documentation|esempio|segnaposto)(?:\\s+\\d+)?' +
     '(?=\\s*(?:$|[:,;.!?)]|' + authenticationLabelPattern_() + '\\b|' +
     '(?:code|value|codice|above|below|shows|uses|illustrates|explains|says|states|describes|reads|for|of|di)\\b))';
+}
+function authenticationReportedContext_(text) {
+  return /\b(?:audit|access|activity|event|system|message|email|page|help|article|log|history|record|documentation|guide|report)\s+(?:record(?:s|ed|ing)?|log(?:s|ged|ging)?|document(?:s|ed|ing)?|state(?:s|d|ting)?|list(?:s|ed|ing)?|show(?:s|ed|ing)?|indicate(?:s|d|ing)?|report(?:s|ed|ing)?|note(?:s|d|ting)?|contain(?:s|ed|ing)?)\b/iu.test(text) ||
+    /\b(?:record(?:s|ed|ing)?|log(?:s|ged|ging)?|document(?:s|ed|ing)?|state(?:s|d|ting)?|list(?:s|ed|ing)?|show(?:s|ed|ing)?|indicate(?:s|d|ing)?|report(?:s|ed|ing)?|note(?:s|d|ting)?|contain(?:s|ed|ing)?)\s+(?:that|this|the|your|a|an|verification|authentication|security|one[ -]?time|code|passcode|pin|123456|[\p{Nd}]{1,40})\b/iu.test(text);
 }
 function authenticationExampleHeading_(text) {
   return /(?:^|\s)(?:example|sample|esempio|placeholder|segnaposto)(?:\s+\d+)?\s*:?\s*$/iu.test(text) ||
