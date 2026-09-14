@@ -167,7 +167,9 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
       // A heading applies to a following value or explicit auth-use instruction,
       // not to a later promotional block. Example frames have the same scope.
       if (trimmed && !exampleHeading && !codeHeading) {
-        heading = !example && !authenticationDiscussionClause_(trimmed) && authenticationUseInstruction_(trimmed);
+        const discussionProbe = trimmed.length <= 480 ? trimmed :
+          trimmed.slice(0, 240) + '\n' + trimmed.slice(-240);
+        heading = !example && !authenticationDiscussionClause_(discussionProbe) && authenticationUseInstruction_(trimmed);
         instructionFrame = heading;
         specializedHeading = false;
         presentation = false;
@@ -185,13 +187,14 @@ function authenticationAdmission_(source, allowAmbiguousCopular, evidenceQuote) 
   }
   const text = source.spans.join('\n');
   if (authenticationDiscussion_(text) || authenticationAdmissionDiscussion_(text) ||
-      authenticationDiscussionClause_(text) || authenticationReportedContext_(text)) {
+      authenticationReportedContext_(text)) {
     return {kind: 'discussion', deterministic: false};
   }
   return {kind: 'ambiguous', deterministic: false};
 }
 function authenticationAdmissionDiscussion_(text) {
-  return /\b(?:mention(?:s|ed|ing)|discuss(?:es|ed|ing)|describ(?:es|ed|ing)|refer(?:s|red|ring))\b[^.!?\n]{0,120}\b(?:verification|authentication|security|one[ -]?time|code|passcode|pin|codice)\b/iu.test(text);
+  return /\b(?:mention(?:s|ed|ing)|discuss(?:es|ed|ing)|describ(?:es|ed|ing)|refer(?:s|red|ring))\b[^.!?\n]{0,120}\b(?:verification|authentication|security|one[ -]?time|code|passcode|pin|codice)\b/iu.test(text) ||
+    /(?:^|[.!?;\n])\s*(?:if|unless|suppose|whether|asked|said|reported|recalled|remembered|maybe|perhaps|never|do\s+not|don[’']t)\b/iu.test(text);
 }
 function authenticationClosingWrapper_(opening) {
   return {'"': '"', "'": "'", '<': '>', '“': '”', '‘': '’'}[opening];
