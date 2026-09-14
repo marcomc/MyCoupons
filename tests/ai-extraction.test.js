@@ -831,6 +831,15 @@ for (const prefix of ['Maybe', 'I think', 'You said']) test('R32 embedded active
   assert.equal(calls, 1);
 });
 
+test('R32 speculative named-provider delivery remains ordinary', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'Maybe Acme sent you a verification code: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
 for (const prefix of ['You said:', 'You reported:']) test('R32 reported active delivery remains ordinary: ' + prefix, () => {
   const {ctx} = harness();
   let calls = 0;
@@ -899,6 +908,15 @@ for (const verb of ['complete', 'finish']) test('R32 nominal login purpose gover
   let calls = 0;
   ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
   const outcome = ctx.extractCouponOutcome_({text: 'To ' + verb + ' your login, enter code 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+test('R32 nominal sign-in completion governs code instruction', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'To complete your sign-in, enter code 123456. Brand coupon code SAVE20', incomplete: false});
   assert.equal(outcome.excludedReason, 'authentication_code_message');
   assert.equal(calls, 0);
 });

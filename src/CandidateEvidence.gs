@@ -349,7 +349,7 @@ function authenticationTargetEnd_(beforeValue) {
 function authenticationActionPattern_(beforeValue) {
   return '(?:' + authenticationVerificationPattern_(beforeValue) + '|' + authenticationAccessPattern_(beforeValue) +
     '|(?:authentication|(?:two[ -]factor|multi[ -]factor)\\s+authentication|(?:mfa|2fa)(?:\\s+authentication)?)' + authenticationTargetEnd_(beforeValue) +
-    '|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|(?:complete|finish)(?:ing)?\\s+(?:(?:your|the)\\s+)?log(?:[ -]?in|[ -]?into)|reimposta(?:re)?|ripristina|acced(?:i|ere)|' + authenticationConfirmationPattern_(beforeValue) + ')';
+    '|authenticat(?:e|ing)|reset(?:ting)?|log(?:ging)?[ -]?(?:in|into)|sign(?:ing)?[ -]?(?:in|into)|(?:complete|finish)(?:ing)?\\s+(?:(?:your|the)\\s+)?(?:log(?:[ -]?in|[ -]?into)|sign(?:[ -]?in|[ -]?into))|reimposta(?:re)?|ripristina|acced(?:i|ere)|' + authenticationConfirmationPattern_(beforeValue) + ')';
 }
 function authenticationConfirmationPattern_(beforeValue) {
   return '(?:confirm(?:ing)?\\s+(?:(?:your|the)\\s+)?(?:e-?mail(?:\\s+address)?|account|identity)|' +
@@ -443,6 +443,7 @@ function authenticationIssuance_(before, after, code) {
   const discussionContext = clauseBoundary > contextBoundary ? before :
     before.slice(contextBoundary + 1);
   before = before.slice(clauseBoundary + 1);
+  const speculativeDeliveryContext = /(?:^|[.!?;:\n]\s*)(?:maybe|perhaps|i\s+(?:think|guess))\s+[^.!?;:\n]{1,80}\b(?:sent|emailed|texted)\b/iu.test(before);
   const label = authenticationLabelPattern_();
   const qualifier = authenticationLabelQualifier_();
   const precedingLabel = new RegExp('\\b' + label + qualifier + '\\s*[:=]?\\s*$', 'iu').exec(before) ||
@@ -471,7 +472,7 @@ function authenticationIssuance_(before, after, code) {
   // The provider branch is intentionally case-insensitive for ordinary mail
   // text, so a speculative lead-in such as "Maybe we sent ..." can otherwise
   // be reinterpreted as a two-word provider name. Keep those reports ordinary.
-  const speculativeDelivery = /(?:^|[.!?;:\\n]\\s*)(?:maybe|perhaps|i\\s+(?:think|guess))\\s+(?:we(?:[\\x27’]ve)?|i|you|they)\\s+(?:have|has)?\\s+sent\\b/iu.test(labelPrefix);
+  const speculativeDelivery = /(?:^|[.!?;:\n]\s*)(?:maybe|perhaps|i\s+(?:think|guess))\s+[^.!?;:\n]{1,80}\b(?:sent|emailed|texted)\b/iu.test(labelPrefix);
   const nonAffirmativeDelivery = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+(?:never|not|may|might|could|would|should|probably|possibly)(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\b', 'iu').test(labelPrefix);
   const activeDeliveryLabel = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\s+(?:you\\s+)?(?:your|the|a|an)?\\s*(?:to\\s+you\\s+)?$', 'iu').test(labelPrefix) && !dottedReportedDelivery && !speculativeDelivery && !nonAffirmativeDelivery;
   const historicalLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:previous|prior|old|former|last|earlier|historical|past)\s*$/iu.test(labelPrefix.trim());
@@ -542,7 +543,7 @@ function authenticationIssuance_(before, after, code) {
     frameContinuation: authenticationFrameContinuation_(continuation),
     invalidRecipientTail: authenticationRecipientTail_(continuation) === false,
     descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
-    discussion: speculativeContext || historicalLabel || statusLabel || negatedLabel || nonAffirmativeLabel || nonAffirmativeFollowing || authenticationReportedClause_(beforeLine) ||
+    discussion: speculativeContext || speculativeDelivery || speculativeDeliveryContext || historicalLabel || statusLabel || negatedLabel || nonAffirmativeLabel || nonAffirmativeFollowing || authenticationReportedClause_(beforeLine) ||
       authenticationDiscussionClause_(discussionContext) || authenticationExampleSuffix_(continuation)};
 }
 function authenticationInstruction_(before, after, code, frame, allowAmbiguousCopular) {
