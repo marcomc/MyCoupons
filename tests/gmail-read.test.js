@@ -53,7 +53,8 @@ test('canonical authentication admission precedes all image acquisition and reta
       const before = images;
       const canonical = ctx.canonicalGmailMessage_(raw);
       const excluded = authenticationMessages.includes(source);
-      const imageRequiresInspection = Boolean(excluded && source.html && /<img\b/iu.test(source.html));
+      const textAdmission = ctx.authenticationMessage_(ctx.candidateSource_({subject: source.subject || '', text: source.text || '', html: source.html || '', images: []}));
+      const imageRequiresInspection = Boolean(excluded && !textAdmission && source.html && /<img\b/iu.test(source.html));
       assert.equal(images - before, imageRequiresInspection || !excluded ? 1 : 0, JSON.stringify(source));
       assert.equal(canonical.subject, source.subject || '');
       assert.equal(canonical.text, source.text || '');

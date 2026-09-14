@@ -77,7 +77,14 @@ function processCouponMessage_(state, message) {
   if (existing && completeCandidateBatch_(existing) && existing.outcome === 'archive' && existing.candidateStates &&
       existing.candidateStates.length && existing.candidateStates.every(function (item) { return item.status === 'confirmed'; })) {
     reconcileCandidateRows_(state.couponSheet, existing);
-    if (!refreshAndValidateReviewRows_(existing, state.couponSheet, state.config, state.journalSheet)) {
+    let refreshed;
+    try {
+      refreshed = refreshAndValidateReviewRows_(existing, state.couponSheet, state.config, state.journalSheet);
+    } catch (e) {
+      if (e && typeof e === 'object') e.replayAdmissionFailure_ = true;
+      throw e;
+    }
+    if (!refreshed) {
       if (authenticationExcludedState_(existing)) return authenticationExcludedResult_(existing);
       restoreReviewRows_(existing, state.couponSheet);
       existing.status = 'review'; existing.outcome = 'review'; existing.updatedAt = new Date().toISOString();
@@ -201,8 +208,17 @@ function processCouponMessage_(state, message) {
       const status = Object.create(null); status.status = item.status; return status;
     });
     journal.outcome = messageOutcome_(persistedStatuses);
-    if (resumingBatch && journal.outcome === 'archive' &&
-        !refreshAndValidateReviewRows_(journal, state.couponSheet, state.config, state.journalSheet)) {
+    const resumedArchive = resumingBatch && journal.outcome === 'archive';
+    let refreshedResumedBatch = true;
+    if (resumedArchive) {
+      try {
+        refreshedResumedBatch = refreshAndValidateReviewRows_(journal, state.couponSheet, state.config, state.journalSheet);
+      } catch (e) {
+        if (e && typeof e === 'object') e.replayAdmissionFailure_ = true;
+        throw e;
+      }
+    }
+    if (resumedArchive && !refreshedResumedBatch) {
       if (authenticationExcludedState_(journal)) return authenticationExcludedResult_(journal);
       restoreReviewRows_(journal, state.couponSheet);
       journal.outcome = 'review';

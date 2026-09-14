@@ -67,6 +67,9 @@ function validateAIAuthentication_(authentication, source) {
     if (!authentication.quote.trim() || !authenticationMessage_(source, true, authentication.quote)) fail_('AI');
     return;
   }
+  if (authentication.quote.trim() && !source.spans.some(function (span) {
+    return rawOccurrences_(authentication.quote, span, false).length > 0;
+  })) fail_('AI');
   if (!Number.isInteger(authentication.image) || authentication.image < 0 ||
       authentication.image >= source.images.length || source.images.length > MC.maxImages) fail_('AI');
   validateAIAuthenticationImages_(source);

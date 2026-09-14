@@ -9,7 +9,7 @@ test('closed authentication admission contract classifies issued, ambiguous, dis
     [{text: 'Your verification code is 123456', incomplete: false}, 'issued'],
     [{text: 'Your code is 123456', incomplete: false}, 'ambiguous'],
     [{text: 'The help page mentions verification code 123456', incomplete: false}, 'discussion'],
-    [{text: 'Your verification code is 123456', incomplete: true}, 'incomplete']
+    [{text: 'Your verification code is 123456', incomplete: true}, 'issued']
   ];
   for (const [message, kind] of cases) {
     const result = ctx.authenticationAdmission_(ctx.candidateSource_(message));
@@ -1027,11 +1027,34 @@ test('message classification uses bounded context work for repeated literals and
       return original(before, after, code, frame);
     };
     assert.equal(ctx.authenticationMessage_(ctx.candidateSource_({text, incomplete: false})), false);
-    assert.equal(calls, ctx.codeLexemes_(text).filter(code => ctx.authenticationLiteral_(code)).length);
+    const bounded = text.slice(0, 60000);
+    assert.equal(calls, ctx.codeLexemes_(bounded).filter(code => ctx.authenticationLiteral_(code)).length);
     assert.ok(units <= 480 * calls, 'fixed per-literal context, no growing prefix/suffix');
     assert.ok(units <= 480 * text.length, 'linear total context bound including one-unit literals');
   }
   ctx.authenticationInstruction_ = original;
+});
+
+test('authentication admission handles future expiry, contracted delivery and example prose', () => {
+  const {ctx} = harness();
+  const cases = [
+    ['Your verification code is 123456 and will expire in 10 minutes. Brand coupon code SAVE20', true],
+    ["We've sent you a verification code: 123456. Brand coupon code SAVE20", true],
+    ["We’ve sent you a verification code: 123456. Brand coupon code SAVE20", true],
+    ['For instance: verification code: 123456. Brand coupon code SAVE20', false]
+  ];
+  for (const [text, excluded] of cases) {
+    let calls = 0;
+    ctx.callGeminiModel_ = () => {
+      calls++;
+      return {text: JSON.stringify({authentication: null, candidates: []})};
+    };
+    const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+    assert.equal(outcome.excludedReason === 'authentication_code_message', excluded, text);
+    assert.equal(calls, excluded ? 0 : 1, text);
+  }
+  const oversized = {text: 'x'.repeat(60001) + ' Your verification code is 123456', incomplete: false};
+  assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(oversized)).kind, 'incomplete');
 });
 
 test('message scanner keeps line, literal and discussion inspection work linear', () => {

@@ -20,7 +20,7 @@ test('image authentication evidence excludes the whole message before determinis
     images: [{mimeType: 'image/png', bytes: png, sourceId: 'synthetic-auth-image'}]};
   const authentication = {quote: 'Your verification code is 123456', image: 0};
   for (const candidates of [[], [candidate()]]) {
-    const raw = {text: JSON.stringify({authentication, candidates})};
+    const raw = {text: JSON.stringify({authentication: {quote: '', image: 0}, candidates})};
     const parsed = ctx.parseAICandidateOutcome_(raw, source);
     assert.equal(parsed.excludedReason, 'authentication_code_message');
     assert.equal(parsed.archiveAllowed, false);
@@ -34,6 +34,7 @@ test('image authentication evidence excludes the whole message before determinis
     assert.equal(outcome.archiveAllowed, false);
     assert.equal(outcome.verifiedNonOffer, false);
   }
+  assert.throws(() => ctx.parseAICandidateOutcome_({text: JSON.stringify({authentication, candidates: []})}, source), /AI/);
 });
 
 test('authentication response field is mandatory even for an empty candidate response', () => {

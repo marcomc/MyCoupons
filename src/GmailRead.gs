@@ -253,7 +253,7 @@ function mailboxProcessMessage_(state, scan, messageId, enforceWindow, onMessage
     return true;
   }
   if (mailboxDeadlineReached_(state._deadlineMs)) return false;
-  const replayAdmission = journal && journal.version === 3 && !completeCandidateBatch_(journal);
+  const replayAdmission = journal && journal.version === 3;
   let outcome;
   try {
     outcome = onMessage(message);

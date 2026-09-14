@@ -102,7 +102,10 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
       example = sourceSpan.kind !== 'subject' && subjectExample;
       representation = sourceSpan.kind;
     }
-    const span = sourceSpan.text;
+    // Authentication admission is lexical and bounded independently of the
+    // model prompt. Preserve fail-closed coverage for oversized spans instead
+    // of spending the invocation on unbounded per-token regex work.
+    const span = sourceSpan.text.slice(0, 60000);
     // Evidence queries bind the selected literal to an exact original occurrence.
     // Advance monotonically through disjoint quote ranges, never rescan prefixes.
     const quoteRanges = evidenceQuote === undefined ? null : rawOccurrences_(evidenceQuote, span, false);
@@ -185,9 +188,12 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
   return false;
 }
 function authenticationAdmission_(source, allowAmbiguousCopular, evidenceQuote) {
-  if (!source || source.incomplete) return {kind: 'incomplete', deterministic: false};
+  if (!source) return {kind: 'incomplete', deterministic: false};
   if (authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote)) {
     return {kind: 'issued', deterministic: true};
+  }
+  if (source.incomplete || source.spans.some(function (span) { return span.length > 60000; })) {
+    return {kind: 'incomplete', deterministic: false};
   }
   const text = source.spans.join('\n');
   if (authenticationDiscussion_(text) || authenticationAdmissionDiscussion_(text) ||
@@ -244,7 +250,7 @@ function authenticationSpecializedLabelPattern_() {
 function authenticationLabelQualifier_() {
   return '(?:\\s+(?:to|for|per)\\s+' + authenticationActionPattern_(true) + ')?' +
     '(?:\\s+(?:(?:you|the\\s+user)\\s+(?:requested|asked\\s+for)|' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+sent(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|monouso|below|shown\\s+below|riportato\\s+sotto|seguente|' +
-    '(?:expires?\\s+in|(?:is\\s+)?valid\\s+for|scad(?:e|rà)\\s+(?:tra|fra)|(?:è\\s+)?valid[oa]\\s+per)\\s+\\p{Nd}{1,4}\\s+(?:seconds?|minutes?|hours?|secondi|minuti|ore)(?=\\s*[:=])))*';
+    '(?:expires?\\s+in|(?:will\\s+)?expire\\s+in|(?:is\\s+)?valid\\s+for|scad(?:e|rà)\\s+(?:tra|fra)|(?:è\\s+)?valid[oa]\\s+per)\\s+\\p{Nd}{1,4}\\s+(?:seconds?|minutes?|hours?|secondi|minuti|ore)(?=\\s*[:=])))*';
 }
 function authenticationCopulaPattern_() {
   return '(?:is|will\\s+be|è|sarà|e[’\x27])';
@@ -293,7 +299,7 @@ function authenticationCompletionTail_(text) {
   return (wrapper === null || !authenticationDiscussion_(clause)) && (
     authenticationAnaphoricTail_(clause) ||
     /^[^\S\n]*(?:[,;][^\S\n]*)?(?:(?:and|e)\s+)?(?:(?:should|must)\s+not\s+be\s+shared|(?:do\s+not|never)\s+share|(?:must|should)\s+be\s+kept\s+secret|non\s+(?:deve\s+essere\s+condiviso|condividerlo)|deve\s+rimanere\s+segreto)(?![\p{L}\p{N}\p{M}_])/iu.test(clause) ||
-    /^[^\S\n]*(?:(?:[,;]|and|e)\s*)?(?:(?:it\s+)|(?:(?:this|the)\s+(?:code|passcode|pin)\s+))?(?:expires?|is\s+valid|valid\s+(?:for|until)|scad(?:e|rà)|(?:è\s+)?valid[oa]\s+(?:per|fino))(?![\p{L}\p{N}\p{M}_])/iu.test(clause)
+    /^[^\S\n]*(?:(?:[,;]|and|e)\s*)?(?:(?:it\s+)|(?:(?:this|the)\s+(?:code|passcode|pin)\s+))?(?:(?:expires?|(?:will\s+)?expire)\s+in|is\s+valid|valid\s+(?:for|until)|scad(?:e|rà)|(?:è\s+)?valid[oa]\s+(?:per|fino))(?![\p{L}\p{N}\p{M}_])/iu.test(clause)
   );
 }
 function authenticationAnaphoricTail_(text) {
@@ -446,9 +452,10 @@ function authenticationIssuance_(before, after, code) {
   const directLabelContext = !labelPrefixTail ||
     /^(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail) ||
     /^(?:(?:here|this)['’]s|(?:here|this)\s+is)\s+(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail);
-  const deliveryCount = (beforeLine.match(/\b(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\b/giu) || []).length;
-  const dottedReportedDelivery = deliveryCount === 1 && /(?:^|[.!?;:\n]\s*)\s*(?:you\s+(?:said|reported|recalled|remembered))\s*:\s*[\p{L}\p{N} _-]{1,60}\.\s*:\s*(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\b/iu.test(beforeLine);
-  const activeDeliveryLabel = /(?:^|[.!?;:\n]\s*)\s*(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\s+(?:you\s+)?(?:your|the|a|an)?\s*(?:to\s+you\s+)?$/iu.test(labelPrefix) && !dottedReportedDelivery;
+  const deliverySubject = '(?:we(?:[\\x27’]ve)?|i|you|they|the\\s+system|the\\s+service)';
+  const deliveryCount = (beforeLine.match(new RegExp('\\b' + deliverySubject + '(?:\\s+(?:have|has))?\\s+sent\\b', 'giu')) || []).length;
+  const dottedReportedDelivery = deliveryCount === 1 && new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*(?:you\\s+(?:said|reported|recalled|remembered))\\s*:\\s*[\\p{L}\\p{N} _-]{1,60}\\.\\s*:\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+sent\\b', 'iu').test(beforeLine);
+  const activeDeliveryLabel = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+sent\\s+(?:you\\s+)?(?:your|the|a|an)?\\s*(?:to\\s+you\\s+)?$', 'iu').test(labelPrefix) && !dottedReportedDelivery;
   const historicalLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:previous|prior|old|former|last|earlier|historical|past)\s*$/iu.test(labelPrefix.trim());
   const statusLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:invalid|expired|used|wrong|incorrect|cancelled|canceled|obsolete|inactive|void|unusable)\s*$/iu.test(labelPrefix.trim());
   const affirmativeLabelContext = Boolean(precedingLabel && (directLabelContext ||
@@ -561,11 +568,11 @@ function authenticationHeadingCopular_(before, frame, requireLocalHeading) {
 function authenticationDiscussion_(text) {
   // A marker must introduce explanatory syntax or end its clause. A word in
   // an issuer name ("Sample Bank:") is not an example of the following value.
-  return /\b(?:for|ad)\s+(?:example|esempio)\b/iu.test(text) ||
+  return /\b(?:for|ad)\s+(?:example|instance|esempio)\b/iu.test(text) ||
     new RegExp('\\b' + authenticationDiscussionPattern_(), 'iu').test(text);
 }
 function authenticationDiscussionPattern_() {
-  return '(?:example|sample|placeholder|tutorial|documentation|esempio|segnaposto)(?:\\s+\\d+)?' +
+  return '(?:example|instance|sample|placeholder|tutorial|documentation|esempio|segnaposto)(?:\\s+\\d+)?' +
     '(?=\\s*(?:$|[:,;.!?)]|' + authenticationLabelPattern_() + '\\b|' +
     '(?:code|value|codice|above|below|shows|uses|illustrates|explains|says|states|describes|reads|for|of|di)\\b))';
 }
