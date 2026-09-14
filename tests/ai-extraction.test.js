@@ -593,6 +593,84 @@ test('R32 affirmative issuance survives a prior independent sentence', () => {
   assert.equal(calls, 0);
 });
 
+test('R32 imperative note-your-code issuance remains authentication', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'Please note your verification code is 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+for (const text of [
+  'Please note the verification code is 123456. Brand coupon code SAVE20',
+  'Please note that your verification code is 123456. Brand coupon code SAVE20',
+  'Welcome. Please note the verification code is 123456. Brand coupon code SAVE20'
+]) test('R32 imperative note-code variants remain authentication: ' + text, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+test('R32 records-your reporting remains ordinary', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'Acme records your verification code: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
+for (const prefix of ['Maybe', 'I think']) test('R32 speculative code prefix remains ordinary: ' + prefix, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: prefix + ' your verification code is 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
+for (const message of [
+  {text: 'Welcome. Maybe your verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'Maybe 123456 is your verification code. Brand coupon code SAVE20'},
+  {subject: 'Sign in to Acme', text: 'Maybe your code is 123456. Brand coupon code SAVE20'}
+]) test('R32 speculative occurrence remains ordinary across admission path: ' + message.text, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({incomplete: false, ...message});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
+for (const text of [
+  'Maybe 123456. is your verification code. Brand coupon code SAVE20',
+  'Maybe 123456 is your MFA code. Brand coupon code SAVE20',
+  'Maybe 123456 is your account recovery code. Brand coupon code SAVE20',
+  'Maybe ABC.77 is your verification code. Brand coupon code SAVE20',
+  'Maybe ABC!77 is your MFA code. Brand coupon code SAVE20',
+  'Maybe 123456 is your verification code. Additional information. More text. Brand coupon code SAVE20'
+]) test('R32 speculative reversed qualified label remains ordinary: ' + text, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
+test('R32 later speculation does not suppress an earlier issued code', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'Your verification code is 123456. Maybe your verification code is 654321. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
 for (const destination of ['your phone', 'your email']) test('R32 passive delivery carries a bounded destination: ' + destination, () => {
   const {ctx} = harness();
   let calls = 0;

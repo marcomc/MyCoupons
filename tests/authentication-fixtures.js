@@ -1061,6 +1061,11 @@ authenticationMessages.push(
   {text: 'Your verification code was sent to your phone: 123456. Brand coupon code SAVE20'},
   {text: 'Your verification code has been sent to your email: 123456. Brand coupon code SAVE20'},
   {text: 'Welcome. Your verification code 123456. Brand coupon code SAVE20'},
+  {text: 'Please note your verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'Please note the verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'Please note that your verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'Welcome. Please note the verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'Your verification code is 123456. Maybe your verification code is 654321. Brand coupon code SAVE20'},
   {text: 'Records Bank: 123456 is your verification code. Brand coupon code SAVE20'}
 );
 ordinaryMessages.push(
@@ -1077,7 +1082,19 @@ ordinaryMessages.push(
   {text: 'The audit log records verification code: 123456. Brand coupon code SAVE20'},
   {text: 'The audit log records verification code = 123456. Brand coupon code SAVE20'},
   {text: 'The audit log records that 123456 is your verification code. Brand coupon code SAVE20'},
-  {text: 'The audit log records verification code was sent to your phone: 123456. Brand coupon code SAVE20'}
+  {text: 'The audit log records verification code was sent to your phone: 123456. Brand coupon code SAVE20'},
+  {text: 'Acme records your verification code: 123456. Brand coupon code SAVE20'},
+  {text: 'Maybe your verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'I think your verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'Welcome. Maybe your verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'Maybe 123456 is your verification code. Brand coupon code SAVE20'},
+  {text: 'Maybe 123456. is your verification code. Brand coupon code SAVE20'},
+  {text: 'Maybe 123456 is your MFA code. Brand coupon code SAVE20'},
+  {text: 'Maybe 123456 is your account recovery code. Brand coupon code SAVE20'},
+  {text: 'Maybe ABC.77 is your verification code. Brand coupon code SAVE20'},
+  {text: 'Maybe ABC!77 is your MFA code. Brand coupon code SAVE20'},
+  {text: 'Maybe 123456 is your verification code. Additional information. More text. Brand coupon code SAVE20'},
+  {subject: 'Sign in to Acme', text: 'Maybe your code is 123456. Brand coupon code SAVE20'}
 );
 for (const value of ['42', '42.', '“7”.', 'A1!']) {
   for (const instruction of ['Use code ', 'Your PIN is ']) {
