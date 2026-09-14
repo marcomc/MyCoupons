@@ -270,7 +270,7 @@ function authenticationCompletionTail_(text) {
   return (wrapper === null || !authenticationDiscussion_(clause)) && (
     authenticationAnaphoricTail_(clause) ||
     /^[^\S\n]*(?:[,;][^\S\n]*)?(?:(?:and|e)\s+)?(?:(?:should|must)\s+not\s+be\s+shared|(?:do\s+not|never)\s+share|(?:must|should)\s+be\s+kept\s+secret|non\s+(?:deve\s+essere\s+condiviso|condividerlo)|deve\s+rimanere\s+segreto)(?![\p{L}\p{N}\p{M}_])/iu.test(clause) ||
-    /^[^\S\n]*(?:(?:[,;]|and|e)\s*)?(?:expires?|is\s+valid|valid\s+(?:for|until)|scad(?:e|rà)|(?:è\s+)?valid[oa]\s+(?:per|fino))(?![\p{L}\p{N}\p{M}_])/iu.test(clause)
+    /^[^\S\n]*(?:(?:[,;]|and|e)\s*)?(?:(?:it\s+)|(?:(?:this|the)\s+(?:code|passcode|pin)\s+))?(?:expires?|is\s+valid|valid\s+(?:for|until)|scad(?:e|rà)|(?:è\s+)?valid[oa]\s+(?:per|fino))(?![\p{L}\p{N}\p{M}_])/iu.test(clause)
   );
 }
 function authenticationAnaphoricTail_(text) {
@@ -364,16 +364,19 @@ function authenticationExampleSuffix_(text) {
 function authenticationReportedClause_(text) {
   // Retain a connected report through politeness and a bounded dotted issuer.
   // A closing quote or independent sentence ends its authority over later values.
+  if (/(?:^|[.!?;\n]\s*)\s*(?:you\s+)?(?:said|reported|recalled|remembered)\s*:\s*(?:[\p{L}\p{N} ._-]{1,60}:\s*)?(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\b[^\n.!?;]*$/iu.test(text)) return true;
   const indirect = /\b(?:if|whether)(?:\s+|$)(["“'‘]?)\s*(?:(?=(?:your|the|a|an|this|that|you|i|we|he|she|it|they|il|la|tuo)\b|\S+\s+(?:is|è)(?=\s))(?:(?![.!?]\s|["”'’])[^\n])*|$)$/iu.exec(text);
   const auxiliary = '(?:(?:am|was|were|is|are|did|does|do|can|could|would|should|has|have|had|may|might|must|will|shall)(?:n[’\x27]t)?|(?:ca|wo|sha)n[’\x27]t)';
   const questionHead = '(?:(?:(?:why|how|when|where|what|which|who|whom)\\s+)?' + auxiliary + '\\s+' +
     '(?:i|we|you|he|she|it|they|my|our|your|his|her|its|their|the)\\b|who\\s+' + auxiliary + '\\b)';
+  const laterReport = /[.!?]\s+(?=(?:you\s+)?(?:said|reported|recalled|remembered)\s*:)/iu.exec(text);
+  if (laterReport) return authenticationReportedClause_(text.slice(laterReport.index + 1));
   // A colon inside a captured quote belongs to the question. Only unquoted
   // clauses need the issuer-prefix guard (for example, "Can I Bank:").
   const direct = new RegExp('(?:^|[.!?;]\\s+|:\\s*)\\s*(["“\x27‘])\\s*' + questionHead + '(?:(?![.!?]\\s|["”\x27’])[^\\n])*$', 'iu').exec(text) ||
     new RegExp('(?:^|[.!?;]\\s+|:\\s*)\\s*()' + questionHead + '(?:(?![.!?]\\s|["”\x27’]|:\\s*\\S)[^\\n])*$', 'iu').exec(text);
   const supposition = /(?:^|[.!?;]\s+|:\s*)\s*(["“'‘]?)\s*(?:suppose|supposing|assume|assuming|imagine)(?:\s+that)?\s+(["“'‘]?)\s*(?=(?:your|the|a|an|this|that|you|i|we|he|she|it|they|my|our)\b|\S+\s+is(?=\s))(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text);
-  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*)?(?:(?:i|we|you|he|she|they|it)\s+(?:(?:should|could|would|must|may|might|can|will)\s+)?)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita|sign|log|authenticate|verify|access|confirm|verifica|conferma|accedi|(?:have\s+)?assigned)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text) || indirect || direct || supposition;
+  const report = /\b(?:asked|said|reported|recalled|remembered)(?:\s+|:\s*)(?:(?:if|whether|that)\s+)?(["“'‘]?)\s*(?:(?:[\p{L}\p{N} _-]{1,60}\.\s*:|(?:(?!\.\s)[\p{L}\p{N} ._-]){1,60}:\s*))?(?:(?:i|we|you|he|she|they|it|the\s+system|the\s+service)\s+(?:(?:should|could|would|must|may|might|can|will|have)\s+)?)?(?:(?:please|per\s+favore,?)\s+)?(?:use|enter|type|usa|inserisci|digita|sign|log|authenticate|verify|access|confirm|verifica|conferma|accedi|(?:have\s+)?assigned|sent)\b(?:(?![.!?]\s|["”'’])[^\n])*$/iu.exec(text) || indirect || direct || supposition;
   // A semicolon starts an independent clause unless it remains inside a quote.
   if (!report) return false;
   const separator = Math.max(text.lastIndexOf(';'), report === indirect && /^if\b/iu.test(report[0]) ? text.lastIndexOf(',') : -1);
@@ -419,12 +422,15 @@ function authenticationIssuance_(before, after, code) {
   const directLabelContext = !labelPrefixTail ||
     /^(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail) ||
     /^(?:here|this)\s+is\s+(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail);
+  const deliveryCount = (beforeLine.match(/\b(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\b/giu) || []).length;
+  const dottedReportedDelivery = deliveryCount === 1 && /(?:^|[.!?;:\n]\s*)\s*(?:you\s+(?:said|reported|recalled|remembered))\s*:\s*[\p{L}\p{N} _-]{1,60}\.\s*:\s*(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\b/iu.test(beforeLine);
+  const activeDeliveryLabel = /(?:^|[.!?;:\n]\s*)\s*(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\s+(?:you\s+)?(?:your|the|a|an)?\s*$/iu.test(labelPrefix) && !dottedReportedDelivery;
   const affirmativeLabelContext = Boolean(precedingLabel && (directLabelContext ||
     /\b(?:your|the|a|an|il|la|tuo|il\s+tuo)\s*$/iu.test(labelPrefix) &&
       /\b(?:is|will\s+be|è|sarà|e[’'])\b/iu.test(precedingLabel[0]) ||
     simpleIssuer && /[:=]\s*$/.test(precedingLabel[0]) ||
     simpleIssuer && /(?:is|will\s+be|has\s+been|was\s+sent|requested|asked\s+for|below|shown\s+below|expires?|valid|scad|monouso|seguente)\b/iu.test(precedingLabel[0]) ||
-    instructionLabel) && !/(?:^|[.!?;:]\s*)(?:maybe|perhaps|i\s+think|i\s+guess|it\s+seems?)\s+(?:your|the|a|an)\b/iu.test(labelPrefix));
+    instructionLabel || activeDeliveryLabel) && !/(?:^|[.!?;:]\s*)(?:maybe|perhaps|i\s+think|i\s+guess|it\s+seems?)\s+(?:your|the|a|an)\b/iu.test(labelPrefix));
   const priorValue = new RegExp('(?:^|\\s)(\\S+)\\s+' + authenticationCopulaPattern_() + '\\s+(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?$', 'iu').exec(labelPrefix);
   const reversed = Boolean(priorValue && !/^(?:here|there|this|below|following|attached|questo|questa)$/iu.test(priorValue[1]));
   const promotional = Boolean(precedingLabel && /^passcode\b/iu.test(precedingLabel[0]) &&

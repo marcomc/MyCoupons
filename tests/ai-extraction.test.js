@@ -680,6 +680,87 @@ for (const destination of ['your phone', 'your email']) test('R32 passive delive
   assert.equal(calls, 0);
 });
 
+for (const text of [
+  'We sent you a verification code: 123456. Brand coupon code SAVE20',
+  'We sent you verification code: 123456. Brand coupon code SAVE20'
+]) test('R32 active delivery binds the issued value: ' + text, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+for (const prefix of ['Maybe', 'I think', 'You said']) test('R32 embedded active delivery remains ordinary: ' + prefix, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: prefix + ' we sent you a verification code: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
+for (const prefix of ['You said:', 'You reported:']) test('R32 reported active delivery remains ordinary: ' + prefix, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: prefix + ' We sent you a verification code: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
+test('R32 reported active delivery preserves dotted issuer context', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'You said: Acme Inc.: We sent you a verification code: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
+for (const text of [
+  'You said: Acme: The system sent you a verification code: 123456. Brand coupon code SAVE20',
+  'You said: Acme Inc. : We sent you a verification code: 123456. Brand coupon code SAVE20',
+  'You said: The service sent you a verification code: 123456. Brand coupon code SAVE20',
+  'You said: We sent you a verification code: 123456. You reported: We sent you a verification code: 654321. Brand coupon code SAVE20',
+  'You said: Acme Inc. : We sent you a verification code: 123456. You reported: Acme Inc. : We sent you a verification code: 654321. Brand coupon code SAVE20'
+]) test('R32 report scope remains ordinary across delivery subjects: ' + text, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
+test('R32 unquoted semicolon releases later active delivery', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'You said: We sent you a verification code: 123456; We sent you a verification code: 654321. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+test('R32 independent active delivery survives a reported complement', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'You said: We sent you a verification code: 123456. We sent you a verification code: 654321. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+for (const pronoun of ['it', 'this code']) test('R32 anaphoric expiry completes issued value: ' + pronoun, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'Your verification code is: 123456; ' + pronoun + ' expires in 10 minutes. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
 for (const label of ['email confirmation code', 'MFA code']) {
   test('R11 explicit authentication label at actual extraction consumer: ' + label, () => {
     const {ctx} = harness();
