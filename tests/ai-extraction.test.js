@@ -876,6 +876,15 @@ for (const delivery of ['has been emailed', 'has been texted']) test('R32 passiv
   assert.equal(calls, 0);
 });
 
+test('R32 generated authentication delivery binds authentication', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'Your verification code has been generated: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
 for (const prefix of ['We never sent', 'We have not sent', 'We may have sent']) test('R32 non-affirmative delivery remains ordinary: ' + prefix, () => {
   const {ctx} = harness();
   let calls = 0;
