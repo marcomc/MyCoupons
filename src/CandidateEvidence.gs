@@ -406,7 +406,8 @@ function authenticationIssuance_(before, after, code) {
   before = before.slice(clauseBoundary + 1);
   const label = authenticationLabelPattern_();
   const qualifier = authenticationLabelQualifier_();
-  const precedingLabel = new RegExp('\\b' + label + qualifier + '\\s*[:=]?\\s*$', 'iu').exec(before);
+  const precedingLabel = new RegExp('\\b' + label + qualifier + '\\s*[:=]?\\s*$', 'iu').exec(before) ||
+    new RegExp('\\b' + label + qualifier + '\\s+to\\s+you\\s*[:=]\\s*$', 'iu').exec(before);
   const qualifiedGeneric = Boolean(precedingLabel && /^(?:code|pin|codice)\s+(?:to|for|per)\s/iu.test(precedingLabel[0]));
   // In "value is your verification code ..." the label belongs to the value
   // before it; its following descriptive words cannot become another value.
@@ -425,8 +426,9 @@ function authenticationIssuance_(before, after, code) {
     /^(?:(?:here|this)['’]s|(?:here|this)\s+is)\s+(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail);
   const deliveryCount = (beforeLine.match(/\b(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\b/giu) || []).length;
   const dottedReportedDelivery = deliveryCount === 1 && /(?:^|[.!?;:\n]\s*)\s*(?:you\s+(?:said|reported|recalled|remembered))\s*:\s*[\p{L}\p{N} _-]{1,60}\.\s*:\s*(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\b/iu.test(beforeLine);
-  const activeDeliveryLabel = /(?:^|[.!?;:\n]\s*)\s*(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\s+(?:you\s+)?(?:your|the|a|an)?\s*$/iu.test(labelPrefix) && !dottedReportedDelivery;
-  const historicalLabel = /(?:^|[.!?;:]\s*)(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:previous|prior|old|former|last|earlier|historical|past)\s*$/iu.test(labelPrefix.trim());
+  const activeDeliveryLabel = /(?:^|[.!?;:\n]\s*)\s*(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\s+(?:you\s+)?(?:your|the|a|an)?\s*(?:to\s+you\s+)?$/iu.test(labelPrefix) && !dottedReportedDelivery;
+  const historicalLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:previous|prior|old|former|last|earlier|historical|past)\s*$/iu.test(labelPrefix.trim());
+  const statusLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:invalid|expired|used|wrong|incorrect|cancelled|canceled|obsolete|inactive|void|unusable)\s*$/iu.test(labelPrefix.trim());
   const affirmativeLabelContext = Boolean(precedingLabel && (directLabelContext ||
     /\b(?:your|the|a|an|il|la|tuo|il\s+tuo)\s*$/iu.test(labelPrefix) &&
       /\b(?:is|will\s+be|è|sarà|e[’'])\b/iu.test(precedingLabel[0]) ||
@@ -493,7 +495,7 @@ function authenticationIssuance_(before, after, code) {
     frameContinuation: authenticationFrameContinuation_(continuation),
     invalidRecipientTail: authenticationRecipientTail_(continuation) === false,
     descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
-    discussion: speculativeContext || historicalLabel || negatedLabel || nonAffirmativeLabel || nonAffirmativeFollowing || authenticationReportedClause_(beforeLine) ||
+    discussion: speculativeContext || historicalLabel || statusLabel || negatedLabel || nonAffirmativeLabel || nonAffirmativeFollowing || authenticationReportedClause_(beforeLine) ||
       authenticationDiscussionClause_(discussionContext) || authenticationExampleSuffix_(continuation)};
 }
 function authenticationInstruction_(before, after, code, frame, allowAmbiguousCopular) {

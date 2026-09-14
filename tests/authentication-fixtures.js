@@ -1062,6 +1062,7 @@ authenticationMessages.push(
   {text: 'Your verification code has been sent to your email: 123456. Brand coupon code SAVE20'},
   {text: 'We sent you a verification code: 123456. Brand coupon code SAVE20'},
   {text: 'We sent you verification code: 123456. Brand coupon code SAVE20'},
+  {text: 'We sent a verification code to you: 123456. Brand coupon code SAVE20'},
   {text: 'Your verification code is: 123456; it expires in 10 minutes. Brand coupon code SAVE20'},
   {text: 'Your verification code is: 123456; this code expires in 10 minutes. Brand coupon code SAVE20'},
   {text: 'Welcome. Your verification code 123456. Brand coupon code SAVE20'},
@@ -1085,6 +1086,10 @@ authenticationMessages.push(
 ordinaryMessages.push(
   {text: 'Previous verification code: 123456. Brand coupon code SAVE20'},
   {subject: 'Sign in to Acme', text: 'Previous verification code: 123456. Brand coupon code SAVE20'},
+  {text: 'The invalid verification code is 123456. Brand coupon code SAVE20'},
+  {text: 'Expired verification code: 123456. Brand coupon code SAVE20'},
+  {text: 'Here is your expired verification code: 123456. Brand coupon code SAVE20'},
+  {subject: 'Sign in to Acme', text: 'Here is your expired verification code: 123456. Brand coupon code SAVE20'},
   {text: 'Your verification code\nis “incorrect”. Brand coupon code SAVE20'},
   {text: 'Your verification code\nis “ABCDEF”. Brand coupon code SAVE20'},
   {text: 'Maybe we sent you a verification code: 123456. Brand coupon code SAVE20'},

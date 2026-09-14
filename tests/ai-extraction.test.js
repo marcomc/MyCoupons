@@ -774,7 +774,8 @@ for (const destination of ['your phone', 'your email']) test('R32 passive delive
 
 for (const text of [
   'We sent you a verification code: 123456. Brand coupon code SAVE20',
-  'We sent you verification code: 123456. Brand coupon code SAVE20'
+  'We sent you verification code: 123456. Brand coupon code SAVE20',
+  'We sent a verification code to you: 123456. Brand coupon code SAVE20'
 ]) test('R32 active delivery binds the issued value: ' + text, () => {
   const {ctx} = harness();
   let calls = 0;
@@ -782,6 +783,28 @@ for (const text of [
   const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
   assert.equal(outcome.excludedReason, 'authentication_code_message');
   assert.equal(calls, 0);
+});
+
+for (const text of [
+  'The invalid verification code is 123456. Brand coupon code SAVE20',
+  'Expired verification code: 123456. Brand coupon code SAVE20',
+  'Here is your expired verification code: 123456. Brand coupon code SAVE20'
+]) test('R32 status-qualified verification labels remain ordinary: ' + text, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
+test('R32 status-qualified label remains ordinary under an authentication subject', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({subject: 'Sign in to Acme', text: 'Here is your expired verification code: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
 });
 
 for (const prefix of ['Maybe', 'I think', 'You said']) test('R32 embedded active delivery remains ordinary: ' + prefix, () => {
