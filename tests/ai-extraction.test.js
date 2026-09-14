@@ -858,6 +858,24 @@ for (const verb of ['emailed', 'texted']) test('R32 active ' + verb + ' delivery
   assert.equal(calls, 0);
 });
 
+test('R32 named-provider active delivery binds authentication', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'Acme sent you a verification code: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+test('R32 active delivery destination remains bound to authentication label', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'We sent your verification code to your phone: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
 for (const verb of ['complete', 'finish']) test('R32 nominal login purpose governs code instruction: ' + verb, () => {
   const {ctx} = harness();
   let calls = 0;

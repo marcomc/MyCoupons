@@ -255,7 +255,7 @@ function authenticationSpecializedLabelPattern_() {
 }
 function authenticationLabelQualifier_() {
   return '(?:\\s+(?:to|for|per)\\s+' + authenticationActionPattern_(true) + ')?' +
-    '(?:\\s+(?:(?:you|the\\s+user)\\s+(?:requested|asked\\s+for)|' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+sent(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|monouso|below|shown\\s+below|riportato\\s+sotto|seguente|' +
+    '(?:\\s+(?:(?:you|the\\s+user)\\s+(?:requested|asked\\s+for)|' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+sent(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|(?:sent|emailed|texted)(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|to\\s+(?:(?:your|the)\\s+)?(?:phone|email|mobile|device|number|address)|monouso|below|shown\\s+below|riportato\\s+sotto|seguente|' +
     '(?:expires?\\s+in|(?:will\\s+)?expire\\s+in|(?:is\\s+)?valid\\s+for|scad(?:e|rà)\\s+(?:tra|fra)|(?:è\\s+)?valid[oa]\\s+per)\\s+\\p{Nd}{1,4}\\s+(?:seconds?|minutes?|hours?|secondi|minuti|ore)(?=\\s*[:=])))*';
 }
 function authenticationCopulaPattern_() {
@@ -458,11 +458,16 @@ function authenticationIssuance_(before, after, code) {
   const directLabelContext = !labelPrefixTail ||
     /^(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail) ||
     /^(?:(?:here|this)['’]s|(?:here|this)\s+is)\s+(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail);
-  const deliverySubject = '(?:we(?:[\\x27’]ve)?|i|you|they|the\\s+system|the\\s+service)';
+  const namedDeliverySubject = '(?:\\p{Lu}[\\p{L}\\p{N}._-]{0,39})(?:\\s+\\p{Lu}[\\p{L}\\p{N}._-]{0,39}){0,2}';
+  const deliverySubject = '(?:we(?:[\\x27’]ve)?|i|you|they|the\\s+system|the\\s+service|' + namedDeliverySubject + ')';
   const deliveryVerb = '(?:sent|emailed|texted)';
   const deliveryCount = (beforeLine.match(new RegExp('\\b' + deliverySubject + '(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\b', 'giu')) || []).length;
   const dottedReportedDelivery = deliveryCount === 1 && new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*(?:you\\s+(?:said|reported|recalled|remembered))\\s*:\\s*[\\p{L}\\p{N} _-]{1,60}\\.\\s*:\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\b', 'iu').test(beforeLine);
-  const activeDeliveryLabel = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\s+(?:you\\s+)?(?:your|the|a|an)?\\s*(?:to\\s+you\\s+)?$', 'iu').test(labelPrefix) && !dottedReportedDelivery;
+  // The provider branch is intentionally case-insensitive for ordinary mail
+  // text, so a speculative lead-in such as "Maybe we sent ..." can otherwise
+  // be reinterpreted as a two-word provider name. Keep those reports ordinary.
+  const speculativeDelivery = /(?:^|[.!?;:\\n]\\s*)(?:maybe|perhaps|i\\s+(?:think|guess))\\s+(?:we(?:[\\x27’]ve)?|i|you|they)\\s+(?:have|has)?\\s+sent\\b/iu.test(labelPrefix);
+  const activeDeliveryLabel = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\s+(?:you\\s+)?(?:your|the|a|an)?\\s*(?:to\\s+you\\s+)?$', 'iu').test(labelPrefix) && !dottedReportedDelivery && !speculativeDelivery;
   const historicalLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:previous|prior|old|former|last|earlier|historical|past)\s*$/iu.test(labelPrefix.trim());
   const statusLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:invalid|expired|used|wrong|incorrect|cancelled|canceled|obsolete|inactive|void|unusable)\s*$/iu.test(labelPrefix.trim());
   const affirmativeLabelContext = Boolean(precedingLabel && (directLabelContext ||
@@ -592,6 +597,7 @@ function authenticationSpeculativeContext_(before, after, code) {
   const noun = '(?:your|the|a|an)\\s+(?:' + authenticationSpecializedLabelPattern_() + '|code|passcode|pin|codice)';
   const start = '(?:^|[.!?;:\\n]\\s*)\\s*';
   if (new RegExp(start + prefix + '\\s+' + noun + '\\b', 'iu').test(before)) return true;
+  if (new RegExp(start + prefix + '\\s+(?:we(?:[\\x27’]ve)?|i|you|they)(?:\\s+(?:have|has))?\\s+(?:sent|emailed|texted)\\b', 'iu').test(before)) return true;
   const reversePrefix = new RegExp(start + prefix + '\\s*$', 'iu').test(before);
   return reversePrefix && new RegExp('^[\\s.!?,;:]{0,8}(?:is|are|will\\s+be|è|sarà|e[’\\x27])\\s+' + noun + '\\b', 'iu').test(after);
 }
