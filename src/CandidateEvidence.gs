@@ -151,7 +151,11 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
         const after = span.slice(end, Math.min(span.length, end + 240));
         const frame = {heading: heading, specializedHeading: specializedHeading, presentation: presentation, instruction: instructionFrame, subject: subjectPurpose && sourceSpan.kind !== 'subject',
           leading: match.index === leadingIndex};
-        if (example || !authenticationInstruction_(before, after, code, frame, allowAmbiguousCopular)) continue;
+        const numericRangeContext = /^\p{Nd}+$/u.test(code) &&
+          (new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])\\p{Nd}+[\\s]*(?:to|through|until|a)\\s*$', 'iu').test(line.slice(Math.max(0, literalIndex - 40), literalIndex)) ||
+            new RegExp('^\\s*(?:to|through|until|a)\\s+\\p{Nd}+(?=$|[^\\p{L}\\p{N}\\p{M}_])', 'iu').test(line.slice(match.index + match[0].length)));
+        const instruction = authenticationInstruction_(before, after, code, frame, allowAmbiguousCopular);
+        if (example || numericRangeContext || !instruction) continue;
         if (quoteRanges) {
           while (quoteIndex < quoteRanges.length && quoteRanges[quoteIndex].end < end) quoteIndex++;
           const range = quoteRanges[quoteIndex];
@@ -241,6 +245,7 @@ function authenticationLiteral_(token) {
   // never authority; a real issued value may be numeric or alphabetic in any case.
   const length = Array.from(token).length;
   return length >= 1 && length <= 40 && /[\p{L}\p{N}\p{M}]/u.test(token) &&
+    !/^\p{Nd}+[\s]*[-–—−/:][\s]*\p{Nd}+[.!?,;:]*$/u.test(token) &&
     !/^[("'[{<]*(?:example|sample|documentation|tutorial|documentazione|esempio|segnaposto|placeholder)[)"'\]}>.!?,;:]*$/iu.test(token) &&
     !/^["'([{<]?(?:(?:[a-z][a-z\d+.-]*:\/\/|www\.|\/\/)\S*|(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+[\p{L}]{2,}(?::\d+)?(?:[/?#]\S*|[.!?,;:]*[)"'\]}>]?[.!?,;:]*))$/iu.test(token) &&
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token) &&
@@ -585,7 +590,7 @@ function authenticationDiscussion_(text) {
     new RegExp('\\b' + authenticationDiscussionPattern_(), 'iu').test(text);
 }
 function authenticationDiscussionPattern_() {
-  return '(?:example|instance|sample|placeholder|tutorial|documentation|esempio|segnaposto)(?:\\s+\\d+)?' +
+  return '(?:example|instance|sample|placeholder|tutorial|documentation|demo|testing|esempio|segnaposto)(?:\\s+\\d+)?' +
     '(?=\\s*(?:$|[:,;.!?)]|' + authenticationLabelPattern_() + '\\b|' +
     '(?:code|value|codice|above|below|shows|uses|illustrates|explains|says|states|describes|reads|for|of|di)\\b))';
 }

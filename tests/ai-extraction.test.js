@@ -1106,7 +1106,14 @@ test('authentication admission handles future expiry, contracted delivery and ex
     ['Your verification code is 123456; it expires at noon. Brand coupon code SAVE20', true],
     ["We've sent you a verification code: 123456. Brand coupon code SAVE20", true],
     ["We’ve sent you a verification code: 123456. Brand coupon code SAVE20", true],
-    ['For instance: verification code: 123456. Brand coupon code SAVE20', false]
+    ['For instance: verification code: 123456. Brand coupon code SAVE20', false],
+    ['In this demo, the verification code is 123456. Brand coupon code SAVE20', false],
+    ['For testing, the verification code is 123456. Brand coupon code SAVE20', false],
+    ['Your verification code is 100000-999999. Brand coupon code SAVE20', false],
+    ['Your verification code is 100000/999999. Brand coupon code SAVE20', false],
+    ['Your verification code is 100000:999999. Brand coupon code SAVE20', false],
+    ['Your verification code is 100000−999999. Brand coupon code SAVE20', false],
+    ['Your verification code is 100000 to 999999. Brand coupon code SAVE20', false]
   ];
   for (const [text, excluded] of cases) {
     let calls = 0;
