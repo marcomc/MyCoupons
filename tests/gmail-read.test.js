@@ -42,7 +42,7 @@ test('canonical authentication admission precedes all image acquisition and reta
   const {authenticationMessages, ordinaryMessages} = require('./authentication-fixtures');
   const {ctx} = harness();
   let images = 0;
-  ctx.acquireMessageImages_ = () => { images++; return {images: [], incomplete: false}; };
+  ctx.acquireMessageImages_ = () => { images++; return {images: [{}], incomplete: false}; };
   for (const source of authenticationMessages.concat(ordinaryMessages)) {
     const parts = [['text', 'text/plain'], ['html', 'text/html']]
       .filter(([key]) => typeof source[key] === 'string')
@@ -53,7 +53,8 @@ test('canonical authentication admission precedes all image acquisition and reta
       const before = images;
       const canonical = ctx.canonicalGmailMessage_(raw);
       const excluded = authenticationMessages.includes(source);
-      assert.equal(images - before, excluded ? 0 : 1, JSON.stringify(source));
+      const imageRequiresInspection = Boolean(excluded && source.html && /<img\b/iu.test(source.html));
+      assert.equal(images - before, imageRequiresInspection || !excluded ? 1 : 0, JSON.stringify(source));
       assert.equal(canonical.subject, source.subject || '');
       assert.equal(canonical.text, source.text || '');
       assert.equal(canonical.html, source.html || '');

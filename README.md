@@ -184,6 +184,14 @@ The example configuration contains product defaults only.
   authentication code—even if it also contains an offer. The check also guards
   direct AI/deterministic extraction and Retry. Ordinary login requirements and
   generic discussion of verification codes do not exclude a promotion.
+
+The recognizer exposes a closed admission contract with four outcomes:
+`issued` (complete deterministic exclusion), `ambiguous` (route to Gemini or
+manual review), `discussion` (non-issuing explanatory content), and `incomplete`
+(coverage is insufficient for deterministic authority). Deterministic issuance
+requires one complete source span and clause-local value, authentication target,
+and affirmative assignment, delivery, or use relation. The only cross-span
+association is an explicit authentication subject-to-body purpose bridge.
   Supported English/Italian evidence includes explicit verification/security/OTP/passcode or qualified PIN
   labels before or after their values, code-use instructions for verification,
   sign-in, password reset or email/account confirmation, an explicit authentication subject plus generic
@@ -276,6 +284,7 @@ The example configuration contains product defaults only.
   or an explicit colon/equal delimiter before the code.
   Complete 3–40 code-point tokens with a Unicode letter, number, or mark remain
   exact identities, including internal and boundary punctuation.
+
 - AI and deterministic descriptions consolidate only when an exact code identity
   enriches a sparse deterministic code. Separate described offers remain separate
   even if they reuse a code. `extractCouponOutcome_` explicitly reports complete

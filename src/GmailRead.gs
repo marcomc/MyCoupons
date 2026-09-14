@@ -385,7 +385,7 @@ function canonicalGmailMessage_(raw, deadlineMs) {
   // admission rechecks the source; a caller-supplied flag grants no authority.
   const source = candidateSource_({subject: subject, text: payload.text, html: payload.html,
     incomplete: payload.incomplete, images: []});
-  const acquired = authenticationMessage_(source) ? {images: [], incomplete: source.incomplete} :
+  const acquired = authenticationAdmission_(source).kind === 'issued' ? {images: [], incomplete: source.incomplete} :
     acquireMessageImages_(raw, payload.html, imageDeadline);
   return {
     id: raw.id,

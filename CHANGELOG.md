@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Add a closed typed authentication-admission contract (`issued`, `ambiguous`,
+  `discussion`, and `incomplete`) while preserving occurrence-local evidence,
+  subject-purpose bridging, and fail-closed replay/manual-review behavior.
+
 - Exclude messages clearly issuing authentication codes before coupon staging,
   including messages that also contain offers. Readable text is checked before
   image acquisition or AI extraction; validated model evidence from inspected

@@ -57,7 +57,7 @@ function deterministicCandidateOutcome_(message) {
   // Preserve the full bounded terms and require review: a regex cannot establish
   // the completeness of an offer.
   const source = candidateSource_(message);
-  if (authenticationMessage_(source)) return {candidates: [], complete: !source.incomplete,
+  if (authenticationAdmission_(source).kind === 'issued') return {candidates: [], complete: !source.incomplete,
     excludedReason: 'authentication_code_message'};
   const codes = [];
   let complete = true;
@@ -177,6 +177,21 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
     }
   }
   return false;
+}
+function authenticationAdmission_(source, allowAmbiguousCopular, evidenceQuote) {
+  if (!source || source.incomplete) return {kind: 'incomplete', deterministic: false};
+  if (authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote)) {
+    return {kind: 'issued', deterministic: true};
+  }
+  const text = source.spans.join('\n');
+  if (authenticationDiscussion_(text) || authenticationAdmissionDiscussion_(text) ||
+      authenticationDiscussionClause_(text) || authenticationReportedContext_(text)) {
+    return {kind: 'discussion', deterministic: false};
+  }
+  return {kind: 'ambiguous', deterministic: false};
+}
+function authenticationAdmissionDiscussion_(text) {
+  return /\b(?:mention(?:s|ed|ing)|discuss(?:es|ed|ing)|describ(?:es|ed|ing)|refer(?:s|red|ring))\b[^.!?\n]{0,120}\b(?:verification|authentication|security|one[ -]?time|code|passcode|pin|codice)\b/iu.test(text);
 }
 function authenticationClosingWrapper_(opening) {
   return {'"': '"', "'": "'", '<': '>', '“': '”', '‘': '’'}[opening];
@@ -575,7 +590,7 @@ function authenticationUseInstruction_(text, complete) {
     '(?:' + qualified + '|' + generic + ')', 'iu').test(text);
 }
 function authenticationExclusion_(source) {
-  if (!authenticationMessage_(source)) return null;
+  if (authenticationAdmission_(source).kind !== 'issued') return null;
   return authenticationExcludedOutcome_(source);
 }
 function authenticationExcludedOutcome_(source) {

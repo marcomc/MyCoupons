@@ -63,7 +63,7 @@ function processCouponMessage_(state, message) {
   // finalization. Neither path replaces immutable retained candidate facts.
   if (existing && existing.version === 3) {
     try {
-      const excluded = completeCandidateBatch_(existing) ? authenticationMessage_(candidateSource_(message)) :
+      const excluded = completeCandidateBatch_(existing) ? authenticationAdmission_(candidateSource_(message)).kind === 'issued' :
         reviewAuthenticationAdmission_(message);
       if (excluded) return checkpointAuthenticationExclusion_(state.journalSheet, existing);
     } catch (e) {

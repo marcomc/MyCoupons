@@ -3,6 +3,21 @@ const assert = require('node:assert/strict');
 const {harness} = require('./harness');
 const {wireCandidate} = require('./ai-wire-fixtures');
 
+test('closed authentication admission contract classifies issued, ambiguous, discussion and incomplete source', () => {
+  const {ctx} = harness();
+  const cases = [
+    [{text: 'Your verification code is 123456', incomplete: false}, 'issued'],
+    [{text: 'Your code is 123456', incomplete: false}, 'ambiguous'],
+    [{text: 'The help page mentions verification code 123456', incomplete: false}, 'discussion'],
+    [{text: 'Your verification code is 123456', incomplete: true}, 'incomplete']
+  ];
+  for (const [message, kind] of cases) {
+    const result = ctx.authenticationAdmission_(ctx.candidateSource_(message));
+    assert.equal(result.kind, kind, JSON.stringify({message, result}));
+    assert.equal(result.deterministic, kind === 'issued');
+  }
+});
+
 test('AI prompt is bounded and strict response parsing normalizes evidence', () => {
   const {ctx} = harness();
   const message = {text: 'Brand offers 20% off with SAVE20', incomplete: false};
@@ -899,7 +914,8 @@ test('authentication issuance excludes the entire message before model and both 
   const {authenticationMessages, ordinaryMessages} = require('./authentication-fixtures');
   ctx.callGeminiModel_ = () => assert.fail('excluded messages must not reach Gemini');
   for (const message of authenticationMessages) {
-    const input = {incomplete: false, ...message};
+    const input = {incomplete: false, ...message,
+      ...(message.html && /<img\b/iu.test(message.html) ? {images: [{}]} : {})};
     const outcome = ctx.extractCouponOutcome_(input);
     assert.equal(outcome.excludedReason, 'authentication_code_message', JSON.stringify(message));
     assert.deepEqual(Array.from(outcome.candidates), []);

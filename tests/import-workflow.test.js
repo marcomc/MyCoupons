@@ -40,7 +40,8 @@ test('real admission checkpoints excluded mail without candidate staging, coupon
   for (const source of authenticationMessages) {
     const {ctx, config} = harness();
     const message = {id: 'abc123', receivedAtMs: 0, subject: '', sender: '',
-      link: 'https://mail.google.com/mail/#all/abc123', incomplete: false, ...source};
+      link: 'https://mail.google.com/mail/#all/abc123', incomplete: false, ...source,
+      ...(source.html && /<img\b/iu.test(source.html) ? {images: [{}]} : {})};
     ctx.callGeminiModel_ = () => assert.fail('excluded source cannot call model');
     ctx.createBatchIntent_ = () => assert.fail('excluded source cannot stage a candidate batch');
     ctx.appendCouponRow_ = () => assert.fail('excluded source cannot create coupon rows');
