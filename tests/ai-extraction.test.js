@@ -560,6 +560,24 @@ test('R31 reporting a requested-code qualifier remains ordinary discussion', () 
   assert.equal(calls, 1);
 });
 
+test('R32 specialized labels require an affirmative relation', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'The audit log records verification code 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
+for (const destination of ['your phone', 'your email']) test('R32 passive delivery carries a bounded destination: ' + destination, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'Your verification code was sent to ' + destination + ': 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
 for (const label of ['email confirmation code', 'MFA code']) {
   test('R11 explicit authentication label at actual extraction consumer: ' + label, () => {
     const {ctx} = harness();

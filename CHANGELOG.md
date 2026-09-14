@@ -49,6 +49,8 @@
   delivery, or use context before specialized labels exclude a message.
   Recognize bounded requested-code qualifiers as affirmative issuance evidence,
   while retaining reported requested-code discussion as ordinary content.
+  Require specialized labels to carry an affirmative assignment, delivery or
+  use relation, and accept bounded passive delivery destinations.
   Persist replay admission failures as per-message checkpoints and advance the
   mailbox cursor without mutating retained candidate payloads or coupon rows.
   Complete punctuated inline code-use instructions before evaluating a following
