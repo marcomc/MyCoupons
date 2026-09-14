@@ -169,7 +169,11 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
       if (trimmed && !exampleHeading && !codeHeading) {
         const discussionProbe = trimmed.length <= 480 ? trimmed :
           trimmed.slice(0, 240) + '\n' + trimmed.slice(-240);
-        heading = !example && !authenticationDiscussionClause_(discussionProbe) && authenticationUseInstruction_(trimmed);
+        // A truncated line may hide a discussion marker in its middle. Keep
+        // the bounded probe for role detection, but never let it create a
+        // positive frame from incomplete context.
+        heading = trimmed.length <= 480 && !example &&
+          !authenticationDiscussionClause_(discussionProbe) && authenticationUseInstruction_(trimmed);
         instructionFrame = heading;
         specializedHeading = false;
         presentation = false;
