@@ -85,6 +85,7 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
   let presentation = false;
   let instructionFrame = false;
   let example = false;
+  let reportingFrame = false;
   const subject = source.sourceSpans.find(function (span) { return span.kind === 'subject'; });
   const subjectPurpose = Boolean(subject && authenticationSubject_(subject.text));
   const subjectHeading = Boolean(subject && !authenticationDiscussion_(subject.text) && authenticationHeading_(subject.text.trim()));
@@ -100,6 +101,7 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
       presentation = heading && /[:=]\s*$/u.test(subject.text);
       instructionFrame = false;
       example = sourceSpan.kind !== 'subject' && subjectExample;
+      reportingFrame = false;
       representation = sourceSpan.kind;
     }
     // Authentication admission is lexical and bounded independently of the
@@ -116,6 +118,8 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
       const leadingIndex = line.search(/\S/u);
       const exampleHeading = authenticationExampleHeading_(trimmed);
       const codeHeading = authenticationHeading_(trimmed);
+      const carriedReportingFrame = reportingFrame;
+      reportingFrame = false;
       if (exampleHeading) { example = true; heading = false; specializedHeading = false; presentation = false; instructionFrame = false; }
       else if (codeHeading) {
         example = example || authenticationDiscussion_(trimmed);
@@ -124,6 +128,7 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
         presentation = heading && /[:=]$/u.test(trimmed);
         instructionFrame = false;
       }
+      if (carriedReportingFrame && !codeHeading && !exampleHeading) example = true;
       const tokens = /\S+/gu;
       let match;
       while (!codeHeading && !exampleHeading && (match = tokens.exec(line))) {
@@ -184,6 +189,7 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
         instructionFrame = heading;
         specializedHeading = false;
         presentation = false;
+        if (/:\s*$/u.test(trimmed) && authenticationReportedContext_(trimmed)) reportingFrame = true;
         example = false;
       }
       offset += line.length + 1;
@@ -256,10 +262,11 @@ function authenticationLabelPattern_() {
 }
 function authenticationSpecializedLabelPattern_() {
   return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp|(?:e-?mail|account|identity)(?:\\s+|-)confirmation|mfa|2fa|(?:two|multi)[ -]?factor|account\\s+access|account(?:\\s+|-)recovery)\\s+(?:code|passcode|pin)|' +
-    'one[ -]?time\\s+password|passcode|otp|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso|reimpostazione(?:\\s+password)?))';
+    'one[ -]?time\\s+password|passcode|otp|pin|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso|reimpostazione(?:\\s+password)?))';
 }
 function authenticationLabelQualifier_() {
-  return '(?:\\s+(?:to|for|per)\\s+' + authenticationActionPattern_(true) + ')?' +
+  const nominalPurpose = '(?:' + authenticationActionPattern_(true) + '|(?:(?:your|the)\\s+)?(?:log[ -]?in|sign[ -]?in))';
+  return '(?:\\s+(?:to|for|per)\\s+' + nominalPurpose + ')?' +
     '(?:\\s+(?:(?:you|the\\s+user)\\s+(?:requested|asked\\s+for)|' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+(?:sent|emailed|texted|generated|created)(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|(?:sent|emailed|texted|generated|created)(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|to\\s+(?:(?:your|the)\\s+)?(?:phone|email|mobile|device|number|address)|monouso|below|shown\\s+below|riportato\\s+sotto|seguente|' +
     '(?:expires?\\s+in|(?:will\\s+)?expire\\s+in|(?:is\\s+)?valid\\s+for|scad(?:e|rà)\\s+(?:tra|fra)|(?:è\\s+)?valid[oa]\\s+per)\\s+\\p{Nd}{1,4}\\s+(?:seconds?|minutes?|hours?|secondi|minuti|ore)(?=\\s*[:=])))*';
 }
@@ -464,6 +471,8 @@ function authenticationIssuance_(before, after, code) {
   const directLabelContext = !labelPrefixTail ||
     /^(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail) ||
     /^(?:(?:here|this)['’]s|(?:here|this)\s+is)\s+(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail);
+  const standalonePin = Boolean(precedingLabel && /^pin(?:\s|$)/iu.test(precedingLabel[0]) &&
+    !/^(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail));
   const namedDeliverySubject = '(?:\\p{Lu}[\\p{L}\\p{N}._-]{0,39})(?:\\s+\\p{Lu}[\\p{L}\\p{N}._-]{0,39}){0,2}';
   const deliverySubject = '(?:we(?:[\\x27’]ve)?|i|you|they|the\\s+system|the\\s+service|' + namedDeliverySubject + ')';
   const deliveryVerb = '(?:sent|emailed|texted)';
@@ -490,7 +499,7 @@ function authenticationIssuance_(before, after, code) {
     /\b(?:coupon|promo(?:tional)?|discount|sconto)\s*$/iu.test(labelPrefix));
   const negatedLabel = /\b(?:not|never|non)(?:\s+(?:is|è|e[’']|a|an|the|your|un|uno|una|il|lo|la|tuo|tua))*\s*$/iu.test(labelPrefix);
   const genericInstruction = qualifiedGeneric && /\b(?:use|enter|type|usa|inserisci|digita)\s+(?:(?:this|the|your|questo|il|il\s+tuo)\s+)?$/iu.test(labelPrefix);
-  const issuingLabel = Boolean(precedingLabel && affirmativeLabelContext && !reversed && !promotional && !negatedLabel && !genericInstruction && !nonAffirmativeLabel);
+  const issuingLabel = Boolean(precedingLabel && affirmativeLabelContext && !standalonePin && !reversed && !promotional && !negatedLabel && !genericInstruction && !nonAffirmativeLabel);
   const followingPrefix = '^\\s+' + authenticationCopulaPattern_() + '\\s+(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?';
   const followingLabel = new RegExp(followingPrefix + label + qualifier + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
   const noun = authenticationCodeNoun_();
