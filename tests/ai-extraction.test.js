@@ -256,6 +256,52 @@ test('R24 wrapper-only copular alphabetic values defer to grounded model semanti
   }
 });
 
+for (const value of ['incorrect', 'ABCDEF']) test('R24 heading wrapper-only alphabetic values defer to grounded model semantics: ' + value, () => {
+  const {ctx} = harness(); let calls = 0;
+  const quote = 'Your verification code\nis “' + value + '”';
+  ctx.callGeminiModel_ = () => {
+    calls++;
+    return value === 'incorrect' ? aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}) :
+      {text: JSON.stringify({candidates: [], authentication: null})};
+  };
+  const outcome = ctx.extractCouponOutcome_({text: quote + '. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(calls, 1);
+  assert.equal(outcome.excludedReason, undefined);
+  if (value === 'incorrect') assert.equal(outcome.candidates[0].code, 'SAVE20');
+});
+
+for (const delimiter of ['', ':']) test('R24 heading wrapper-only alphabetic authentication quote validates: ' + (delimiter || 'space'), () => {
+  const {ctx} = harness(); let calls = 0;
+  const quote = 'Your verification code\nis' + delimiter + ' “ABCDEF”';
+  ctx.callGeminiModel_ = () => {
+    calls++;
+    return {text: JSON.stringify({candidates: [], authentication: {quote, image: null}})};
+  };
+  const outcome = ctx.extractCouponOutcome_({text: quote + '. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(calls, delimiter ? 0 : 1);
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+});
+
+test('R24 heading explicit delimiter authorizes an unwrapped alphabetic value', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return {text: JSON.stringify({candidates: [], authentication: null})}; };
+  const outcome = ctx.extractCouponOutcome_({text: 'Your verification code\nis: ABCDEF. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(calls, 0);
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+});
+
+for (const quote of ['is “ABCDEF”', '\nis “ABCDEF”', 'code\nis “ABCDEF”']) test('R24 heading authentication evidence cannot borrow an omitted heading: ' + JSON.stringify(quote), () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => {
+    calls++;
+    return {text: JSON.stringify({candidates: [], authentication: {quote, image: null}})};
+  };
+  assert.throws(() => ctx.extractCouponOutcome_({text: 'Your verification code\nis “ABCDEF”. Brand coupon code SAVE20', incomplete: false}), /AI/);
+  assert.equal(calls, 1);
+});
+
 test('R24 former wrapper-only copular fixtures retain semantic rather than deterministic authority', () => {
   const {ctx} = harness();
   const {ambiguousMessages} = require('./authentication-fixtures');
@@ -598,6 +644,52 @@ test('R32 imperative note-your-code issuance remains authentication', () => {
   let calls = 0;
   ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
   const outcome = ctx.extractCouponOutcome_({text: 'Please note your verification code is 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+for (const text of [
+  "Here's your verification code: 123456. Brand coupon code SAVE20",
+  "Here’s your verification code: 123456. Brand coupon code SAVE20"
+]) test('R32 contracted authentication announcement remains authentication: ' + text, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+test('R32 historical verification-code label remains ordinary', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'Previous verification code: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
+test('R32 historical label remains ordinary under an authentication subject', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({subject: 'Sign in to Acme', text: 'Previous verification code: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
+for (const message of [
+  {text: 'Your verification code\nis 123456. Brand coupon code SAVE20'},
+  {text: 'Your security PIN\nis 42. Brand coupon code SAVE20'},
+  {text: 'Your verification code\nis: 123456. Brand coupon code SAVE20'},
+  {text: 'Your verification code\nis "123456". Brand coupon code SAVE20'},
+  {text: 'Your security PIN\nis: “42”. Brand coupon code SAVE20'},
+  {html: '<h1>Your verification code</h1><p>is 123456.</p><p>Brand coupon code SAVE20</p>'}
+]) test('R32 heading context carries across a line-leading copula', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({incomplete: false, ...message});
   assert.equal(outcome.excludedReason, 'authentication_code_message');
   assert.equal(calls, 0);
 });

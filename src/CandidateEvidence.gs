@@ -158,7 +158,8 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
           // A value-only or promotion-only excerpt cannot borrow a copular
           // relation from outside the quote. Original subject/frame context stays
           // admission context only; no factual spans are concatenated.
-          if (!authenticationIssuance_(quoteBefore, quoteAfter, code).copular ||
+          const quoteRelation = authenticationIssuance_(quoteBefore, quoteAfter, code);
+          if (!(quoteRelation.copular || authenticationHeadingCopular_(quoteBefore, frame, true)) ||
               !authenticationInstruction_(quoteBefore, quoteAfter, code, frame, true)) continue;
         }
         return true;
@@ -421,16 +422,17 @@ function authenticationIssuance_(before, after, code) {
   const simpleIssuer = /^(?:[\p{L}\p{N}][\p{L}\p{N}._-]*)(?:\s+[\p{L}\p{N}][\p{L}\p{N}._-]*){0,2}$/u.test(labelPrefixTail);
   const directLabelContext = !labelPrefixTail ||
     /^(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail) ||
-    /^(?:here|this)\s+is\s+(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail);
+    /^(?:(?:here|this)['’]s|(?:here|this)\s+is)\s+(?:your|the|a|an|il|la|tuo|il\s+tuo)$/iu.test(labelPrefixTail);
   const deliveryCount = (beforeLine.match(/\b(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\b/giu) || []).length;
   const dottedReportedDelivery = deliveryCount === 1 && /(?:^|[.!?;:\n]\s*)\s*(?:you\s+(?:said|reported|recalled|remembered))\s*:\s*[\p{L}\p{N} _-]{1,60}\.\s*:\s*(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\b/iu.test(beforeLine);
   const activeDeliveryLabel = /(?:^|[.!?;:\n]\s*)\s*(?:we|i|you|they|the\s+system|the\s+service)\s+(?:have\s+)?sent\s+(?:you\s+)?(?:your|the|a|an)?\s*$/iu.test(labelPrefix) && !dottedReportedDelivery;
+  const historicalLabel = /(?:^|[.!?;:]\s*)(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:previous|prior|old|former|last|earlier|historical|past)\s*$/iu.test(labelPrefix.trim());
   const affirmativeLabelContext = Boolean(precedingLabel && (directLabelContext ||
     /\b(?:your|the|a|an|il|la|tuo|il\s+tuo)\s*$/iu.test(labelPrefix) &&
       /\b(?:is|will\s+be|è|sarà|e[’'])\b/iu.test(precedingLabel[0]) ||
     simpleIssuer && /[:=]\s*$/.test(precedingLabel[0]) ||
     simpleIssuer && /(?:is|will\s+be|has\s+been|was\s+sent|requested|asked\s+for|below|shown\s+below|expires?|valid|scad|monouso|seguente)\b/iu.test(precedingLabel[0]) ||
-    instructionLabel || activeDeliveryLabel) && !/(?:^|[.!?;:]\s*)(?:maybe|perhaps|i\s+think|i\s+guess|it\s+seems?)\s+(?:your|the|a|an)\b/iu.test(labelPrefix));
+    instructionLabel || activeDeliveryLabel) && !historicalLabel && !/(?:^|[.!?;:]\s*)(?:maybe|perhaps|i\s+think|i\s+guess|it\s+seems?)\s+(?:your|the|a|an)\b/iu.test(labelPrefix));
   const priorValue = new RegExp('(?:^|\\s)(\\S+)\\s+' + authenticationCopulaPattern_() + '\\s+(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?$', 'iu').exec(labelPrefix);
   const reversed = Boolean(priorValue && !/^(?:here|there|this|below|following|attached|questo|questa)$/iu.test(priorValue[1]));
   const promotional = Boolean(precedingLabel && /^passcode\b/iu.test(precedingLabel[0]) &&
@@ -491,7 +493,7 @@ function authenticationIssuance_(before, after, code) {
     frameContinuation: authenticationFrameContinuation_(continuation),
     invalidRecipientTail: authenticationRecipientTail_(continuation) === false,
     descriptive: !completeValue && /^\s*(?:is|are|è|sono|format|mechanism)(?![\p{L}\p{N}\p{M}_])/iu.test(continuation),
-    discussion: speculativeContext || negatedLabel || nonAffirmativeLabel || nonAffirmativeFollowing || authenticationReportedClause_(beforeLine) ||
+    discussion: speculativeContext || historicalLabel || negatedLabel || nonAffirmativeLabel || nonAffirmativeFollowing || authenticationReportedClause_(beforeLine) ||
       authenticationDiscussionClause_(discussionContext) || authenticationExampleSuffix_(continuation)};
 }
 function authenticationInstruction_(before, after, code, frame, allowAmbiguousCopular) {
@@ -507,21 +509,30 @@ function authenticationInstruction_(before, after, code, frame, allowAmbiguousCo
   // Surrounding punctuation is not enough; token identity is never rewritten.
   const bareWord = /^[^\p{L}\p{N}\p{M}]*[\p{L}\p{M}]+[^\p{L}\p{N}\p{M}]*$/u.test(code);
   const shortValue = Array.from(code.replace(/^[^\p{L}\p{N}\p{M}]+|[^\p{L}\p{N}\p{M}]+$/gu, '')).length < 3;
-  const presented = relation.presented || relation.imperative || relation.instructionLabel || relation.inlineInstruction ||
+  const headingCopular = authenticationHeadingCopular_(before, frame);
+  const headingPresentation = headingCopular && /(?:^|\n)\s*(?:is|will\s+be|è|sarà|e[’'])\s*[:=]\s*["'“‘]?\s*$/iu.test(before);
+  const presented = relation.presented || headingPresentation || relation.imperative || relation.instructionLabel || relation.inlineInstruction ||
     frame && frame.leading && (frame.presentation || frame.instruction);
-  const ambiguousCopular = bareWord && relation.copular && relation.wrapperOnly &&
+  const ambiguousCopular = bareWord && (relation.copular || headingCopular) && relation.wrapperOnly && !headingPresentation &&
     !relation.imperative && !relation.instructionLabel && !relation.inlineInstruction &&
     !(frame && frame.leading && (frame.presentation || frame.instruction));
   if (ambiguousCopular && !allowAmbiguousCopular) return false;
   if (relation.discussion || relation.descriptive || purposeConnector || instructionLocation || nounModifier || bareWord && !presented) return false;
   const valueEnd = relation.valueTail || !relation.invalidRecipientTail && /[.!?]$/u.test(code);
   if (shortValue && (!(relation.specialized || frame && frame.specializedHeading &&
-      (frame.leading || relation.generic || relation.genericImperative)) || !valueEnd)) return false;
+      (frame.leading || relation.generic || relation.genericImperative || headingCopular)) || !valueEnd)) return false;
   const punctuatedInlineInstruction = relation.inlineInstruction && !bareWord && valueEnd && relation.frameContinuation;
   return relation.explicit && valueEnd || relation.direct || punctuatedInlineInstruction ||
     relation.governed && !bareWord && valueEnd && relation.frameContinuation ||
     Boolean(frame && relation.frameContinuation && !relation.promotionalFollowing && (frame.subject && (relation.generic || relation.genericImperative) && valueEnd ||
-      frame.heading && valueEnd && (frame.leading || relation.sentenceValue || relation.generic || relation.genericImperative)));
+      frame.heading && valueEnd && (frame.leading || relation.sentenceValue || relation.generic || relation.genericImperative || headingCopular)));
+}
+function authenticationHeadingCopular_(before, frame, requireLocalHeading) {
+  if (!frame || !frame.heading || !frame.specializedHeading ||
+    !/(?:^|\n)\s*(?:is|will\s+be|è|sarà|e[’'])\s*[:=]?\s*["'“‘]?\s*$/iu.test(before)) return false;
+  if (!requireLocalHeading) return true;
+  const localHeading = /(?:^|\n)([^\n]+)\n\s*(?:is|will\s+be|è|sarà|e[’'])\s*[:=]?\s*["'“‘]?\s*$/iu.exec(before);
+  return Boolean(localHeading && authenticationHeading_(localHeading[1].trim(), true));
 }
 function authenticationDiscussion_(text) {
   // A marker must introduce explanatory syntax or end its clause. A word in
