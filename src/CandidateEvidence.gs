@@ -205,10 +205,13 @@ function authenticationBoundedSpan_(text) {
 }
 function authenticationAdmission_(source, allowAmbiguousCopular, evidenceQuote) {
   if (!source) return {kind: 'incomplete', deterministic: false};
+  if (source.spans.some(function (span) { return span.length > 60000; })) {
+    return {kind: 'incomplete', deterministic: false};
+  }
   if (authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote)) {
     return {kind: 'issued', deterministic: true};
   }
-  if (source.incomplete || source.spans.some(function (span) { return span.length > 60000; })) {
+  if (source.incomplete) {
     return {kind: 'incomplete', deterministic: false};
   }
   const text = source.spans.join('\n');
@@ -267,7 +270,7 @@ function authenticationSpecializedLabelPattern_() {
 function authenticationLabelQualifier_() {
   const nominalPurpose = '(?:' + authenticationActionPattern_(true) + '|(?:(?:your|the)\\s+)?(?:log[ -]?in|sign[ -]?in))';
   return '(?:\\s+(?:to|for|per)\\s+' + nominalPurpose + ')?' +
-    '(?:\\s+(?:(?:you|the\\s+user)\\s+(?:requested|asked\\s+for)|' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+(?:sent|emailed|texted|generated|created)(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|(?:sent|emailed|texted|generated|created)(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|to\\s+(?:(?:your|the)\\s+)?(?:phone|email|mobile|device|number|address)|monouso|below|shown\\s+below|riportato\\s+sotto|seguente|' +
+    '(?:\\s+(?:(?:you|the\\s+user)\\s+(?:requested|asked\\s+for)|' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)(?:\\s+(?:just|recently|already))?\\s+(?:sent|emailed|texted|generated|created)(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|(?:sent|emailed|texted|generated|created)(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|to\\s+(?:(?:your|the)\\s+)?(?:phone|email|mobile|device|number|address)|monouso|below|shown\\s+below|riportato\\s+sotto|seguente|' +
     '(?:expires?\\s+in|(?:will\\s+)?expire\\s+in|(?:is\\s+)?valid\\s+for|scad(?:e|rà)\\s+(?:tra|fra)|(?:è\\s+)?valid[oa]\\s+per)\\s+\\p{Nd}{1,4}\\s+(?:seconds?|minutes?|hours?|secondi|minuti|ore)(?=\\s*[:=])))*';
 }
 function authenticationCopulaPattern_() {
@@ -293,7 +296,7 @@ function authenticationSubject_(text) {
 function authenticationValueTail_(text) {
   return authenticationPurposeTail_(text) || authenticationCompletionTail_(text) ||
     authenticationRecipientTail_(text) === true ||
-    /^[^\S\n]*(?:$|\n|[.!?](?:\s|$))/u.test(text);
+    /^[^\S\n]*(?:$|\n|[.!?;](?:\s|$))/u.test(text);
 }
 function authenticationFrameContinuation_(text) {
   // Code punctuation alone cannot detach an adjacent purpose/location clause.
@@ -578,7 +581,7 @@ function authenticationInstruction_(before, after, code, frame, allowAmbiguousCo
     !(frame && frame.leading && (frame.presentation || frame.instruction));
   if (ambiguousCopular && !allowAmbiguousCopular) return false;
   if (relation.discussion || relation.descriptive || purposeConnector || instructionLocation || nounModifier || bareWord && !presented) return false;
-  const valueEnd = relation.valueTail || !relation.invalidRecipientTail && /[.!?]$/u.test(code);
+  const valueEnd = relation.valueTail || !relation.invalidRecipientTail && /[.!?;]$/u.test(code);
   if (shortValue && (!(relation.specialized || frame && frame.specializedHeading &&
       (frame.leading || relation.generic || relation.genericImperative || headingCopular)) || !valueEnd)) return false;
   const punctuatedInlineInstruction = relation.inlineInstruction && !bareWord && valueEnd && relation.frameContinuation;
@@ -606,8 +609,8 @@ function authenticationDiscussionPattern_() {
     '(?:code|value|codice|above|below|shows|uses|illustrates|explains|says|states|describes|reads|for|of|di)\\b))';
 }
 function authenticationReportedContext_(text) {
-  return /\b(?:audit|access|activity|event|system|message|email|page|help|article|log|history|record|documentation|guide|report)\s+(?:record(?:s|ed|ing)?|log(?:s|ged|ging)?|document(?:s|ed|ing)?|state(?:s|d|ting)?|list(?:s|ed|ing)?|show(?:s|ed|ing)?|indicate(?:s|d|ing)?|report(?:s|ed|ing)?|note(?:s|d|ting)?|contain(?:s|ed|ing)?)\b/iu.test(text) ||
-    /\b(?:record(?:s|ed|ing)?|log(?:s|ged|ging)?|document(?:s|ed|ing)?|state(?:s|d|ting)?|list(?:s|ed|ing)?|show(?:s|ed|ing)?|indicate(?:s|d|ing)?|report(?:s|ed|ing)?|note(?:s|d|ting)?|contain(?:s|ed|ing)?)\s+(?:that|this|the|your|a|an|verification|authentication|security|one[ -]?time|code|passcode|pin|123456|[\p{Nd}]{1,40})\b/iu.test(text);
+  return /\b(?:audit|access|activity|event|system|message|email|page|help|article|log|history|record|documentation|guide|report)\s+(?:record(?:s|ed|ing)?|log(?:s|ged|ging)?|document(?:s|ed|ing)?|state(?:s|d|ting)?|list(?:s|ed|ing)?|show(?:s|ed|ing)?|indicate(?:s|d|ing)?|report(?:s|ed|ing)?|note(?:s|d|ting)?|contain(?:s|ed|ing)?|say(?:s|ing)?|said)\b/iu.test(text) ||
+    /\b(?:record(?:s|ed|ing)?|log(?:s|ged|ging)?|document(?:s|ed|ing)?|state(?:s|d|ting)?|list(?:s|ed|ing)?|show(?:s|ed|ing)?|indicate(?:s|d|ing)?|report(?:s|ed|ing)?|note(?:s|d|ting)?|contain(?:s|ed|ing)?|say(?:s|ing)?|said)\s+(?:that|this|the|your|a|an|verification|authentication|security|one[ -]?time|code|passcode|pin|123456|[\p{Nd}]{1,40})\b/iu.test(text);
 }
 function authenticationSpeculativeContext_(before, after, code) {
   const prefix = '(?:maybe|perhaps|i\\s+think|i\\s+guess|it\\s+seems?)';
