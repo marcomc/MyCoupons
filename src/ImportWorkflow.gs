@@ -63,8 +63,10 @@ function processCouponMessage_(state, message) {
   // finalization. Neither path replaces immutable retained candidate facts.
   if (existing && existing.version === 3) {
     try {
+      const replayHooks = Object.assign({}, state.extractionHooks || {});
+      if (state._deadlineMs) replayHooks.deadlineMs = state._deadlineMs;
       const excluded = completeCandidateBatch_(existing) ? authenticationAdmission_(candidateSource_(message)).kind === 'issued' :
-        reviewAuthenticationAdmission_(message);
+        reviewAuthenticationAdmission_(message, replayHooks);
       if (excluded) return checkpointAuthenticationExclusion_(state.journalSheet, existing);
     } catch (e) {
       // The mailbox scanner converts only this pre-write admission failure into

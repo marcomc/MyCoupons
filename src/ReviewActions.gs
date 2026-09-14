@@ -68,7 +68,7 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   completeReviewMessage_(state, sheet, journalSheet, c);
 }
 
-function reviewAuthenticationAdmission_(message) {
+function reviewAuthenticationAdmission_(message, hooks) {
   const source = candidateSource_(message);
   const admission = authenticationAdmission_(source);
   if (admission.kind === 'issued') return true;
@@ -81,7 +81,7 @@ function reviewAuthenticationAdmission_(message) {
   validateAIAuthenticationImages_(source);
   // Validate the entire envelope, but never replace edited facts with its offers
   // or use extraction archiveAllowed as manual authorization.
-  const outcome = requestAICandidateOutcome_(message, source, prompt);
+  const outcome = requestAICandidateOutcome_(message, source, prompt, hooks);
   if (outcome.excludedReason === 'authentication_code_message') return true;
   if (outcome.invalidated) fail_('AI');
   return false;

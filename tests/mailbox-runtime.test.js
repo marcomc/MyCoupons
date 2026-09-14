@@ -564,7 +564,10 @@ test('replay admission failures checkpoint the message and advance to later mail
   partial.status = 'processing'; f.ctx.saveMessageState_(f.state.journalSheet, partial);
   f.ctx.createBatchIntent_(partial, {candidates: [candidate], archiveAllowed: false});
   f.ctx.saveMessageState_(f.state.journalSheet, partial);
-  f.ctx.reviewAuthenticationAdmission_ = () => { throw new Error('REVIEW'); };
+  f.ctx.reviewAuthenticationAdmission_ = (message, hooks) => {
+    assert.equal(typeof hooks.deadlineMs, 'number');
+    throw new Error('REVIEW');
+  };
 
   const result = f.ctx.runScheduledImport();
   const failed = f.ctx.getMessageState_(f.state.journalSheet, '1');

@@ -92,7 +92,9 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
   const subjectExample = Boolean(subject && (authenticationExampleHeading_(subject.text.trim()) ||
     authenticationHeading_(subject.text.trim()) && authenticationDiscussion_(subject.text)));
   let representation;
+  let scanBudget = 60000;
   for (const sourceSpan of source.sourceSpans) {
+    if (scanBudget <= 0) return false;
     if (sourceSpan.kind !== representation) {
       // Plain text and HTML are independent alternatives. Only explicit subject
       // associations seed each body; transient body frames never cross between them.
@@ -107,7 +109,8 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
     // Authentication admission is lexical and bounded independently of the
     // model prompt. Preserve fail-closed coverage for oversized spans instead
     // of spending the invocation on unbounded per-token regex work.
-    const span = authenticationBoundedSpan_(sourceSpan.text);
+    const span = authenticationBoundedSpan_(sourceSpan.text, scanBudget);
+    scanBudget -= Math.min(sourceSpan.text.length, scanBudget);
     // Evidence queries bind the selected literal to an exact original occurrence.
     // Advance monotonically through disjoint quote ranges, never rescan prefixes.
     const quoteRanges = evidenceQuote === undefined ? null : rawOccurrences_(evidenceQuote, span, false);
@@ -197,14 +200,16 @@ function authenticationMessage_(source, allowAmbiguousCopular, evidenceQuote) {
   }
   return false;
 }
-function authenticationBoundedSpan_(text) {
-  if (text.length <= 60000) return text;
-  let end = 60000;
+function authenticationBoundedSpan_(text, limit) {
+  const max = limit === undefined ? 60000 : limit;
+  if (text.length <= max) return text;
+  let end = max;
   while (end > 0 && !/\s/u.test(text.charAt(end - 1))) end--;
   return text.slice(0, end);
 }
-function authenticationCompletePrefix_(text) {
-  const bounded = authenticationBoundedSpan_(text);
+function authenticationCompletePrefix_(text, limit) {
+  const max = limit === undefined ? 60000 : limit;
+  const bounded = authenticationBoundedSpan_(text, max);
   if (bounded.length === text.length) return bounded;
   let boundary = authenticationClauseBoundary_(bounded);
   while (boundary >= 0 && bounded.charAt(boundary) === ';' &&
@@ -215,10 +220,17 @@ function authenticationCompletePrefix_(text) {
 }
 function authenticationAdmission_(source, allowAmbiguousCopular, evidenceQuote) {
   if (!source) return {kind: 'incomplete', deterministic: false};
-  const oversized = source.spans.some(function (span) { return span.length > 60000; });
-  const completeSource = oversized ? (function () {
+  let sourceLength = 0;
+  const overBudget = source.spans.some(function (span) {
+    sourceLength += span.length;
+    return sourceLength > 60000;
+  });
+  const completeSource = overBudget ? (function () {
+    let budget = 60000;
     const sourceSpans = source.sourceSpans.map(function (span) {
-      return {kind: span.kind, text: authenticationCompletePrefix_(span.text)};
+      const text = authenticationCompletePrefix_(span.text, budget);
+      budget -= Math.min(span.text.length, budget);
+      return {kind: span.kind, text: text};
     }).filter(function (span) { return span.text; });
     return Object.assign({}, source, {spans: sourceSpans.map(function (span) { return span.text; }),
       sourceSpans: sourceSpans, evidenceSpans: sourceSpans.map(function (span) { return span.text; })});
@@ -226,7 +238,7 @@ function authenticationAdmission_(source, allowAmbiguousCopular, evidenceQuote) 
   if (authenticationMessage_(completeSource, allowAmbiguousCopular, evidenceQuote)) {
     return {kind: 'issued', deterministic: true};
   }
-  if (source.incomplete || oversized) {
+  if (source.incomplete || overBudget) {
     return {kind: 'incomplete', deterministic: false};
   }
   const text = source.spans.join('\n');
@@ -624,7 +636,8 @@ function authenticationDiscussionPattern_() {
     '(?:code|value|codice|above|below|shows|uses|illustrates|explains|says|states|describes|reads|for|of|di)\\b))';
 }
 function authenticationReportedContext_(text) {
-  return /\b(?:audit|access|activity|event|system|message|email|page|help|article|log|history|record|documentation|guide|report)\s+(?:record(?:s|ed|ing)?|log(?:s|ged|ging)?|document(?:s|ed|ing)?|state(?:s|d|ting)?|list(?:s|ed|ing)?|show(?:s|ed|ing)?|indicate(?:s|d|ing)?|report(?:s|ed|ing)?|note(?:s|d|ting)?|contain(?:s|ed|ing)?|say(?:s|ing)?|said)\b/iu.test(text) ||
+  return /\baccording\s+to\s+(?:the\s+)?(?:audit|access|activity|event|system|message|email|page|help|article|log|history|record|documentation|guide|report)\b/iu.test(text) ||
+    /\b(?:audit|access|activity|event|system|message|email|page|help|article|log|history|record|documentation|guide|report)\s+(?:record(?:s|ed|ing)?|log(?:s|ged|ging)?|document(?:s|ed|ing)?|state(?:s|d|ting)?|list(?:s|ed|ing)?|show(?:s|ed|ing)?|indicate(?:s|d|ing)?|report(?:s|ed|ing)?|note(?:s|d|ting)?|contain(?:s|ed|ing)?|say(?:s|ing)?|said)\b/iu.test(text) ||
     /\b(?:record(?:s|ed|ing)?|log(?:s|ged|ging)?|document(?:s|ed|ing)?|state(?:s|d|ting)?|list(?:s|ed|ing)?|show(?:s|ed|ing)?|indicate(?:s|d|ing)?|report(?:s|ed|ing)?|note(?:s|d|ting)?|contain(?:s|ed|ing)?|say(?:s|ing)?|said)\s+(?:that|this|the|your|a|an|verification|authentication|security|one[ -]?time|code|passcode|pin|123456|[\p{Nd}]{1,40})\b/iu.test(text);
 }
 function authenticationSpeculativeContext_(before, after, code) {

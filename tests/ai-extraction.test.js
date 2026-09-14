@@ -1153,6 +1153,7 @@ test('authentication admission handles future expiry, contracted delivery and ex
     ['Your verification code is 123456, keep it safe. Brand coupon code SAVE20', true],
     ['Your verification code is 123456; do not give it to anyone. Brand coupon code SAVE20', true],
     ['The help page says your verification code is 123456. Brand coupon code SAVE20', false],
+    ['According to the help page, your verification code is 123456. Brand coupon code SAVE20', false],
     ['Your verification code was just sent to you: 123456. Brand coupon code SAVE20', true],
     ['Your verification code is 123456; Brand coupon code SAVE20', true],
     ['The audit log records:\nYour verification code is 123456.\nBrand coupon code SAVE20', false],
