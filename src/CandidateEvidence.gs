@@ -206,7 +206,11 @@ function authenticationBoundedSpan_(text) {
 function authenticationCompletePrefix_(text) {
   const bounded = authenticationBoundedSpan_(text);
   if (bounded.length === text.length) return bounded;
-  const boundary = authenticationClauseBoundary_(bounded);
+  let boundary = authenticationClauseBoundary_(bounded);
+  while (boundary >= 0 && bounded.charAt(boundary) === ';' &&
+      !/\S/u.test(bounded.slice(boundary + 1))) {
+    boundary = authenticationClauseBoundary_(bounded.slice(0, boundary));
+  }
   return boundary < 0 ? '' : bounded.slice(0, boundary + 1);
 }
 function authenticationAdmission_(source, allowAmbiguousCopular, evidenceQuote) {
@@ -275,7 +279,7 @@ function authenticationLabelPattern_() {
   return '(?:' + authenticationSpecializedLabelPattern_() + '|(?:code|pin|codice)\\s+(?:to|for|per)\\s+' + authenticationActionPattern_(true) + ')';
 }
 function authenticationSpecializedLabelPattern_() {
-  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp|(?:e-?mail|account|identity)(?:\\s+|-)confirmation|mfa|2fa|(?:two|multi)[ -]?factor|account\\s+access|account(?:\\s+|-)recovery)\\s+(?:code|passcode|pin)|' +
+  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|log[ -]?in|sign[ -]?in|otp|(?:e-?mail|account|identity|log[ -]?in|sign[ -]?in)(?:\\s+|-)confirmation|mfa|2fa|(?:two|multi)[ -]?factor|account\\s+access|account(?:\\s+|-)recovery)\\s+(?:code|passcode|pin)|' +
     'one[ -]?time\\s+password|passcode|otp|pin|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso|reimpostazione(?:\\s+password)?))';
 }
 function authenticationLabelQualifier_() {

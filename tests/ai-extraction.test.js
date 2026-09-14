@@ -1149,6 +1149,7 @@ test('authentication admission handles future expiry, contracted delivery and ex
     ['Your PIN is 1234. Brand coupon code SAVE20', true],
     ['Enter this verification code 123456. Brand coupon code SAVE20', true],
     ['Enter code 123456 to complete authentication. Brand coupon code SAVE20', true],
+    ['Your login confirmation code is 123456. Brand coupon code SAVE20', true],
     ['Your verification code is 123456, keep it safe. Brand coupon code SAVE20', true],
     ['Your verification code is 123456; do not give it to anyone. Brand coupon code SAVE20', true],
     ['The help page says your verification code is 123456. Brand coupon code SAVE20', false],
@@ -1180,6 +1181,8 @@ test('authentication admission handles future expiry, contracted delivery and ex
   assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(boundaryToken)).kind, 'incomplete');
   const prefixIssuance = {text: 'Your verification code is 123456. Brand coupon code SAVE20' + ' x'.repeat(30000), incomplete: false};
   assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(prefixIssuance)).kind, 'issued');
+  const semicolonCutoff = {text: 'x'.repeat(59970) + ' Your verification code is 123456; for example', incomplete: false};
+  assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(semicolonCutoff)).kind, 'incomplete');
   const subjectWithOversizedBody = {subject: 'Your verification code: 123456', text: 'x'.repeat(60001), incomplete: false};
   assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(subjectWithOversizedBody)).kind, 'issued');
   let subjectCalls = 0;
