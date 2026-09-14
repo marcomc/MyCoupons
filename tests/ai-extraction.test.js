@@ -523,11 +523,11 @@ for (const punctuation of ['.', '!']) {
   });
 }
 
-test('R30 inline instruction still defers an attached non-sentence recipient tail', () => {
+for (const tail of ['for a discount', 'at checkout']) test('R30 inline instruction still defers an attached promotional tail: ' + tail, () => {
   const {ctx} = harness();
   let calls = 0;
   ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
-  const outcome = ctx.extractCouponOutcome_({text: 'Use this code to sign in: 123456 for a discount. Brand coupon code SAVE20', incomplete: false});
+  const outcome = ctx.extractCouponOutcome_({text: 'Use this code to sign in: 123456! ' + tail + '. Brand coupon code SAVE20', incomplete: false});
   assert.notEqual(outcome.excludedReason, 'authentication_code_message');
   assert.equal(calls, 1);
 });
