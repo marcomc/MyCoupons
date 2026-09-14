@@ -47,6 +47,10 @@
   generic subject authority or weakening alphabetic-presentation requirements.
   Preserve possessive conditional discussion and require affirmative assignment,
   delivery, or use context before specialized labels exclude a message.
+  Recognize bounded requested-code qualifiers as affirmative issuance evidence,
+  while retaining reported requested-code discussion as ordinary content.
+  Persist replay admission failures as per-message checkpoints and advance the
+  mailbox cursor without mutating retained candidate payloads or coupon rows.
   Complete punctuated inline code-use instructions before evaluating a following
   promotion sentence, without weakening bare-word or attached-tail safeguards.
   Associate subject/body issuance, labels in either direction, alphabetic

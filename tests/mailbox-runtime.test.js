@@ -555,6 +555,43 @@ test('R16 excluded partial batches are not retried or fetched from retained pend
   assert.deepEqual(JSON.parse(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE).pendingIds, []);
 });
 
+test('replay admission failures checkpoint the message and advance to later mailbox IDs', () => {
+  const f = fixture(2);
+  const partial = f.ctx.newMessageState_('1'); partial.candidateStates = [];
+  const candidate = {merchant: '', website: '', code: 'SAVE20', discountType: '', discountValue: '', minimumSpend: '',
+    validOn: '', exclusions: '', expiry: '', usageLimits: '', currency: '', notes: '', confidence: 'high', review: true,
+    imageEvidence: {}};
+  partial.status = 'processing'; f.ctx.saveMessageState_(f.state.journalSheet, partial);
+  f.ctx.createBatchIntent_(partial, {candidates: [candidate], archiveAllowed: false});
+  f.ctx.saveMessageState_(f.state.journalSheet, partial);
+  f.ctx.reviewAuthenticationAdmission_ = () => { throw new Error('REVIEW'); };
+
+  const result = f.ctx.runScheduledImport();
+  const failed = f.ctx.getMessageState_(f.state.journalSheet, '1');
+  assert.ok(f.fetched.filter(id => id === '1').length >= 1);
+  assert.ok(f.fetched.includes('2'));
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.failureStage, 'extract');
+  assert.equal(failed.lastError, 'INTERNAL');
+  assert.ok(failed.retryCount >= 1);
+  assert.deepEqual(failed.rowNumbers, []);
+  assert.equal(f.state.couponSheet.rows.length, 1);
+  assert.ok(result.errors.some(error => error.messageId === '1' && error.code === 'INTERNAL'));
+  assert.deepEqual(JSON.parse(f.properties.MYCOUPONS_MAILBOX_SCAN_STATE).pendingIds, []);
+});
+
+test('replay failure checkpoint preserves a durable authentication exclusion', () => {
+  const f = fixture();
+  const excluded = f.ctx.newMessageState_('1');
+  excluded.status = 'ignored'; excluded.outcome = 'authentication_code_message';
+  f.ctx.saveMessageState_(f.state.journalSheet, excluded);
+  const before = JSON.stringify(f.ctx.getMessageState_(f.state.journalSheet, '1'));
+  const returned = f.ctx.mailboxReplayFailure_(f.state.journalSheet, '1', new Error('REVIEW'));
+  assert.equal(returned.status, 'ignored');
+  assert.equal(returned.outcome, 'authentication_code_message');
+  assert.equal(JSON.stringify(f.ctx.getMessageState_(f.state.journalSheet, '1')), before);
+});
+
 test('a retained pending ID honors extraction backoff after the deadline interrupts page advancement', () => {
   const f = fixture(1); let extracted = 0;
   f.state.extractCouponOutcome = () => {

@@ -253,9 +253,29 @@ function mailboxProcessMessage_(state, scan, messageId, enforceWindow, onMessage
     return true;
   }
   if (mailboxDeadlineReached_(state._deadlineMs)) return false;
-  const outcome = onMessage(message);
+  const replayAdmission = journal && journal.version === 3 && !completeCandidateBatch_(journal);
+  let outcome;
+  try {
+    outcome = onMessage(message);
+  } catch (e) {
+    if (!replayAdmission || !e || e.replayAdmissionFailure_ !== true) throw e;
+    const failed = mailboxReplayFailure_(state.journalSheet, messageId, e);
+    if (!authenticationExcludedState_(failed)) {
+      result.errors.push({messageId: messageId, code: failed.lastError, retryable: true});
+    }
+    return true;
+  }
   if (outcome) result.messages.push(outcome);
   return true;
+}
+
+function mailboxReplayFailure_(journalSheet, messageId, error) {
+  const journal = getMessageState_(journalSheet, messageId) || newMessageState_(messageId);
+  if (authenticationExcludedState_(journal)) return journal;
+  journal.status = 'failed'; journal.retryCount++; journal.failureStage = 'extract';
+  journal.lastError = errorCode_(error); journal.updatedAt = new Date().toISOString();
+  saveMessageState_(journalSheet, journal);
+  return journal;
 }
 
 function mailboxReadFailure_(journalSheet, messageId, scan, enforceWindow) {

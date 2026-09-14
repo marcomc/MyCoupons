@@ -62,9 +62,17 @@ function processCouponMessage_(state, message) {
   // precedes every pending-row write; complete batches recheck fresh images at
   // finalization. Neither path replaces immutable retained candidate facts.
   if (existing && existing.version === 3) {
-    const excluded = completeCandidateBatch_(existing) ? authenticationMessage_(candidateSource_(message)) :
-      reviewAuthenticationAdmission_(message);
-    if (excluded) return checkpointAuthenticationExclusion_(state.journalSheet, existing);
+    try {
+      const excluded = completeCandidateBatch_(existing) ? authenticationMessage_(candidateSource_(message)) :
+        reviewAuthenticationAdmission_(message);
+      if (excluded) return checkpointAuthenticationExclusion_(state.journalSheet, existing);
+    } catch (e) {
+      // The mailbox scanner converts only this pre-write admission failure into
+      // a durable per-message checkpoint; later replay/write failures retain
+      // their existing exception semantics.
+      if (e && typeof e === 'object') e.replayAdmissionFailure_ = true;
+      throw e;
+    }
   }
   if (existing && completeCandidateBatch_(existing) && existing.outcome === 'archive' && existing.candidateStates &&
       existing.candidateStates.length && existing.candidateStates.every(function (item) { return item.status === 'confirmed'; })) {

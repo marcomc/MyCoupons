@@ -220,7 +220,7 @@ function authenticationSpecializedLabelPattern_() {
 }
 function authenticationLabelQualifier_() {
   return '(?:\\s+(?:to|for|per)\\s+' + authenticationActionPattern_(true) + ')?' +
-    '(?:\\s+(?:' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+sent(?:\\s+to\\s+you)?|monouso|below|shown\\s+below|riportato\\s+sotto|seguente|' +
+    '(?:\\s+(?:(?:you|the\\s+user)\\s+(?:requested|asked\\s+for)|' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+sent(?:\\s+to\\s+you)?|monouso|below|shown\\s+below|riportato\\s+sotto|seguente|' +
     '(?:expires?\\s+in|(?:is\\s+)?valid\\s+for|scad(?:e|rà)\\s+(?:tra|fra)|(?:è\\s+)?valid[oa]\\s+per)\\s+\\p{Nd}{1,4}\\s+(?:seconds?|minutes?|hours?|secondi|minuti|ore)(?=\\s*[:=])))*';
 }
 function authenticationCopulaPattern_() {
@@ -419,7 +419,7 @@ function authenticationIssuance_(before, after) {
   const genericInstruction = qualifiedGeneric && /\b(?:use|enter|type|usa|inserisci|digita)\s+(?:(?:this|the|your|questo|il|il\s+tuo)\s+)?$/iu.test(labelPrefix);
   const issuingLabel = Boolean(precedingLabel && !reversed && !promotional && !negatedLabel && !genericInstruction && !nonAffirmativeLabel);
   const followingPrefix = '^\\s+' + authenticationCopulaPattern_() + '\\s+(?:(?:your|the|il\\s+tuo|il|tuo)\\s+)?';
-  const followingLabel = new RegExp(followingPrefix + label + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
+  const followingLabel = new RegExp(followingPrefix + label + qualifier + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
   const noun = authenticationCodeNoun_();
   const followingGeneric = new RegExp(followingPrefix + noun + '(?![\\p{L}\\p{N}\\p{M}_])', 'iu').exec(after);
   const followingOrdinary = followingGeneric && !/\b(?:coupon|promo(?:tional)?|discount|sconto)\b/iu.test(followingGeneric[0]);

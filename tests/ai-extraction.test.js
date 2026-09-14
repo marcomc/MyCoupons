@@ -532,6 +532,34 @@ for (const tail of ['for a discount', 'at checkout']) test('R30 inline instructi
   assert.equal(calls, 1);
 });
 
+for (const phrase of ['you requested', 'you asked for']) test('R31 requested-code qualifier establishes affirmative issuance: ' + phrase, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const text = 'Here is the verification code ' + phrase + ': 123456. Brand coupon code SAVE20';
+  const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+test('R31 requested-code qualifier also covers the value-before-label form', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: '123456 is the verification code you requested. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+test('R31 reporting a requested-code qualifier remains ordinary discussion', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'The article discusses the verification code you requested: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
 for (const label of ['email confirmation code', 'MFA code']) {
   test('R11 explicit authentication label at actual extraction consumer: ' + label, () => {
     const {ctx} = harness();
