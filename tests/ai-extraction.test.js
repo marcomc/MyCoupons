@@ -510,6 +510,28 @@ for (const text of ['Acme: Your verification code will be 123456.', 'Use this co
   });
 }
 
+for (const punctuation of ['.', '!']) {
+  test('R30 inline authentication instruction ends at token punctuation before promotion: ' + punctuation, () => {
+    const {ctx} = harness();
+    let calls = 0;
+    ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+    const text = 'Use this code to sign in: 123456' + punctuation + ' Brand coupon code SAVE20';
+    const outcome = ctx.extractCouponOutcome_({text, incomplete: false});
+    assert.equal(outcome.excludedReason, 'authentication_code_message');
+    assert.equal(calls, 0);
+    assert.equal(outcome.archiveAllowed, false);
+  });
+}
+
+test('R30 inline instruction still defers an attached non-sentence recipient tail', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'Use this code to sign in: 123456 for a discount. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
 for (const label of ['email confirmation code', 'MFA code']) {
   test('R11 explicit authentication label at actual extraction consumer: ' + label, () => {
     const {ctx} = harness();

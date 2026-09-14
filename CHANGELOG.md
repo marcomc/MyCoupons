@@ -47,6 +47,8 @@
   generic subject authority or weakening alphabetic-presentation requirements.
   Preserve possessive conditional discussion and require affirmative assignment,
   delivery, or use context before specialized labels exclude a message.
+  Complete punctuated inline code-use instructions before evaluating a following
+  promotion sentence, without weakening bare-word or attached-tail safeguards.
   Associate subject/body issuance, labels in either direction, alphabetic
   values, and heading/instruction/value layouts without relaxing factual quote
   boundaries. Keep verification actions tied to authentication targets and

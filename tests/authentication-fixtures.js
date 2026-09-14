@@ -546,7 +546,9 @@ authenticationMessages.push(
   {text: 'Il tuo codice di verifica sarà 123456'},
   {text: '123456 sarà il tuo codice di verifica'},
   {text: 'Your verification code for MFA will be 123456'},
-  {text: 'If your old verification code will be 123456, your verification code is 654321'}
+  {text: 'If your old verification code will be 123456, your verification code is 654321'},
+  {text: 'Use this code to sign in: 123456. Brand coupon code SAVE20'},
+  {text: 'Use this code to sign in: 123456! Brand coupon code SAVE20'}
 );
 ordinaryMessages.push(
   {text: 'Il tuo codice di verifica sarà riservato. Brand coupon code SAVE20'},

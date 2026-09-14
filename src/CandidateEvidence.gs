@@ -495,7 +495,9 @@ function authenticationInstruction_(before, after, code, frame, allowAmbiguousCo
   const valueEnd = relation.valueTail || !relation.invalidRecipientTail && /[.!?]$/u.test(code);
   if (shortValue && (!(relation.specialized || frame && frame.specializedHeading &&
       (frame.leading || relation.generic || relation.genericImperative)) || !valueEnd)) return false;
-  return relation.explicit && valueEnd || relation.direct || relation.governed && !bareWord && valueEnd && relation.frameContinuation ||
+  const punctuatedInlineInstruction = relation.inlineInstruction && !bareWord && valueEnd;
+  return relation.explicit && valueEnd || relation.direct || punctuatedInlineInstruction ||
+    relation.governed && !bareWord && valueEnd && relation.frameContinuation ||
     Boolean(frame && relation.frameContinuation && !relation.promotionalFollowing && (frame.subject && (relation.generic || relation.genericImperative) && valueEnd ||
       frame.heading && valueEnd && (frame.leading || relation.sentenceValue || relation.generic || relation.genericImperative)));
 }
