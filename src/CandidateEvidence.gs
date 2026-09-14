@@ -255,7 +255,7 @@ function authenticationSpecializedLabelPattern_() {
 }
 function authenticationLabelQualifier_() {
   return '(?:\\s+(?:to|for|per)\\s+' + authenticationActionPattern_(true) + ')?' +
-    '(?:\\s+(?:(?:you|the\\s+user)\\s+(?:requested|asked\\s+for)|' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+sent(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|(?:sent|emailed|texted)(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|to\\s+(?:(?:your|the)\\s+)?(?:phone|email|mobile|device|number|address)|monouso|below|shown\\s+below|riportato\\s+sotto|seguente|' +
+    '(?:\\s+(?:(?:you|the\\s+user)\\s+(?:requested|asked\\s+for)|' + authenticationCopulaPattern_() + '|(?:has\\s+been|was)\\s+(?:sent|emailed|texted)(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|(?:sent|emailed|texted)(?:\\s+to\\s+(?:(?:you|your|the)\\s+)?[\\p{L}\\p{N}_-]{1,40})?|to\\s+(?:(?:your|the)\\s+)?(?:phone|email|mobile|device|number|address)|monouso|below|shown\\s+below|riportato\\s+sotto|seguente|' +
     '(?:expires?\\s+in|(?:will\\s+)?expire\\s+in|(?:is\\s+)?valid\\s+for|scad(?:e|rà)\\s+(?:tra|fra)|(?:è\\s+)?valid[oa]\\s+per)\\s+\\p{Nd}{1,4}\\s+(?:seconds?|minutes?|hours?|secondi|minuti|ore)(?=\\s*[:=])))*';
 }
 function authenticationCopulaPattern_() {
@@ -467,7 +467,8 @@ function authenticationIssuance_(before, after, code) {
   // text, so a speculative lead-in such as "Maybe we sent ..." can otherwise
   // be reinterpreted as a two-word provider name. Keep those reports ordinary.
   const speculativeDelivery = /(?:^|[.!?;:\\n]\\s*)(?:maybe|perhaps|i\\s+(?:think|guess))\\s+(?:we(?:[\\x27’]ve)?|i|you|they)\\s+(?:have|has)?\\s+sent\\b/iu.test(labelPrefix);
-  const activeDeliveryLabel = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\s+(?:you\\s+)?(?:your|the|a|an)?\\s*(?:to\\s+you\\s+)?$', 'iu').test(labelPrefix) && !dottedReportedDelivery && !speculativeDelivery;
+  const nonAffirmativeDelivery = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+(?:never|not|may|might|could|would|should|probably|possibly)(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\b', 'iu').test(labelPrefix);
+  const activeDeliveryLabel = new RegExp('(?:^|[.!?;:\\n]\\s*)\\s*' + deliverySubject + '(?:\\s+(?:have|has))?\\s+' + deliveryVerb + '\\s+(?:you\\s+)?(?:your|the|a|an)?\\s*(?:to\\s+you\\s+)?$', 'iu').test(labelPrefix) && !dottedReportedDelivery && !speculativeDelivery && !nonAffirmativeDelivery;
   const historicalLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:previous|prior|old|former|last|earlier|historical|past)\s*$/iu.test(labelPrefix.trim());
   const statusLabel = /(?:^|[.!?;:]\s*)(?:(?:(?:here|this)['’]s|(?:here|this)\s+is|welcome)\s+)?(?:(?:your|the|a|an|il|la|tuo|il\s+tuo)\s+)?(?:invalid|expired|used|wrong|incorrect|cancelled|canceled|obsolete|inactive|void|unusable)\s*$/iu.test(labelPrefix.trim());
   const affirmativeLabelContext = Boolean(precedingLabel && (directLabelContext ||

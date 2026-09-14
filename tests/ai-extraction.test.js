@@ -858,6 +858,24 @@ for (const verb of ['emailed', 'texted']) test('R32 active ' + verb + ' delivery
   assert.equal(calls, 0);
 });
 
+for (const delivery of ['has been emailed', 'has been texted']) test('R32 passive ' + delivery + ' delivery binds authentication', () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: 'Your verification code ' + delivery + ' to you: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 0);
+});
+
+for (const prefix of ['We never sent', 'We have not sent', 'We may have sent']) test('R32 non-affirmative delivery remains ordinary: ' + prefix, () => {
+  const {ctx} = harness();
+  let calls = 0;
+  ctx.callGeminiModel_ = () => { calls++; return aiResponse({code: 'SAVE20', evidence: {merchant: {quote: 'Brand'}, code: {quote: 'SAVE20'}}}); };
+  const outcome = ctx.extractCouponOutcome_({text: prefix + ' you a verification code: 123456. Brand coupon code SAVE20', incomplete: false});
+  assert.notEqual(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(calls, 1);
+});
+
 test('R32 named-provider active delivery binds authentication', () => {
   const {ctx} = harness();
   let calls = 0;
