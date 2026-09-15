@@ -95,7 +95,7 @@ function authenticationTargetNounPattern_() {
 }
 
 function authenticationAssignmentPattern_() {
-  return '(?:is|are|è|e[’\\x27]|=|:)';
+  return '(?:(?:is|are)(?=\\s|$)|è(?=\\s|$)|e[’\\x27](?=\\s|$)|=|:)';
 }
 
 function authenticationValue_(value) {
@@ -117,7 +117,7 @@ function authenticationValue_(value) {
   if (points < 1 || points > 40 || !/[\p{L}\p{N}\p{M}]/u.test(token)) return '';
   const numericPart = '[\\p{Nd}][\\p{Nd}.,٫٬]*';
   if (/^[+\-−][\p{Nd}][\p{Nd}.,٫٬]*$/u.test(token)) return '';
-  if (new RegExp('^' + numericPart + '\\s*[-–—−/:]\\s*' + numericPart + '$', 'u').test(token)) return '';
+  if (new RegExp('^' + numericPart + '\\s*[-–—−/:∕⁄]\\s*' + numericPart + '$', 'u').test(token)) return '';
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token)) return '';
   if (/^(?:[a-z][a-z\d+.-]*:|www\.|\/\/)/iu.test(token)) return '';
   if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|today|yesterday|tomorrow|now|soon|later|already|successfully|immediately|here|there|x{3,})$/iu.test(token)) return '';

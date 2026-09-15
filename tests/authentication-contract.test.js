@@ -12,13 +12,15 @@ function journalSheet() {
   return {
     getLastRow: () => rows.length,
     getLastColumn: () => 2,
-    getDataRange: () => ({getValues: () => rows.map(row => row.slice())}),
+    getDataRange: () => ({getValues: () => rows.map(row => row.slice()),
+      getDisplayValues: () => rows.map(row => row.map(value => String(value))) }),
     getRange: (row, column, rowCount = 1, columnCount = 1) => ({
       getValues: () => Array.from({length: rowCount}, (_, rowOffset) =>
         Array.from({length: columnCount}, (_, columnOffset) => rows[row - 1 + rowOffset]?.[column - 1 + columnOffset] ?? '')),
       getDisplayValues: () => Array.from({length: rowCount}, (_, rowOffset) =>
         Array.from({length: columnCount}, (_, columnOffset) => String(rows[row - 1 + rowOffset]?.[column - 1 + columnOffset] ?? ''))),
       getFormulas: () => Array.from({length: rowCount}, () => Array(columnCount).fill('')),
+      getNote: () => '',
       setValues: values => values.forEach((valueRow, rowOffset) => {
         rows[row - 1 + rowOffset] ||= [];
         valueRow.forEach((value, columnOffset) => { rows[row - 1 + rowOffset][column - 1 + columnOffset] = value; });
@@ -186,11 +188,15 @@ test('existing archive intent is rechecked before any Gmail mutation', () => {
   const journal = journalSheet();
   const coupon = journalSheet();
   const mutations = [];
+  const key = 'a'.repeat(64);
   const prior = Object.assign(ctx.newMessageState_('abc123'), {
-    version: 2, status: 'failed', candidateKeys: ['candidate-key'], rowNumbers: [2],
-    dedupeKeys: ['candidate-key'], failureStage: 'mail', outcome: 'archive'
+    version: 2, status: 'failed', candidateKeys: [key], rowNumbers: [2],
+    dedupeKeys: [key], failureStage: 'mail', outcome: 'archive'
   });
   journal._rows.push(['abc123', JSON.stringify(prior)]);
+  const row = Array(26).fill('');
+  row[13] = 'https://mail.google.com/mail/#all/abc123'; row[16] = key; row[17] = 'Needs review';
+  coupon._rows.push(row);
   ctx.Gmail.Users.Messages = {modify: body => { mutations.push(body); throw new Error('Gmail must not mutate'); }};
   const result = ctx.runImportWorkflow_({config, couponSheet: coupon, journalSheet: journal,
     messages: [{id: 'abc123', receivedAtMs: 0, subject: 'Sign in to Acme', sender: 'acme@example.com',

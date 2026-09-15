@@ -56,24 +56,7 @@ function processReviewAction_(sheet, rowNumber, action, c) {
   }
   const message = getReviewMessage_(state.messageId);
   const admission = authenticationAdmission_(candidateSource_(message));
-  if (admission.kind === 'issued') {
-    const rows = state.candidateStates.map(function (item, index) {
-      const row = resolveCandidateRow_(sheet, state.messageId, item.key, state.rowNumbers[index]);
-      if (!Number.isInteger(row) || row < 2) fail_('STATE');
-      return row;
-    });
-    try {
-      rows.forEach(function (row) { setReviewStatus_(sheet, row, EN.statuses.ignored, ''); });
-      state.candidateStates.forEach(function (item) { item.status = 'ignored'; });
-      return checkpointAuthenticationExclusion_(journalSheet, state);
-    } catch (e) {
-      state.candidateStates.forEach(function (item) { item.status = 'review'; });
-      rows.forEach(function (row) {
-        try { setReviewStatus_(sheet, row, EN.statuses.review, EN.actions.confirm); } catch (ignored) {}
-      });
-      throw e;
-    }
-  }
+  if (admission.kind === 'issued') return checkpointAuthenticationExclusionWithRows_(sheet, journalSheet, state);
   if (action === EN.actions.retry_ai) return retryReviewCandidate_(sheet, rowNumber, state, candidate[0], message, journalSheet, c);
   if (!validateReviewRow_(row, message, displayRow, candidate[0].imageEvidence, formulas, c, key, legacyTechnicalNotes)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   setReviewStatus_(sheet, rowNumber, EN.statuses.confirmed, '');

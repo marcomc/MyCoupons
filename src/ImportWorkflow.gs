@@ -42,7 +42,7 @@ function processCouponMessage_(state, message) {
   if (!message || typeof message.id !== 'string' || !validGmailApiId_(message.id)) fail_('MAIL');
   const existing = getMessageState_(state.journalSheet, message.id);
   if (existing && authenticationAdmission_(candidateSource_(message)).kind === 'issued') {
-    return checkpointAuthenticationExclusion_(state.journalSheet, existing);
+    return checkpointAuthenticationExclusionWithRows_(state.couponSheet, state.journalSheet, existing);
   }
   if (legacyMailReviewBatch_(existing)) {
     reconcileCandidateRows_(state.couponSheet, existing);
@@ -93,13 +93,13 @@ function processCouponMessage_(state, message) {
       // Exclusion only changes journal metadata; it never deletes rows or
       // grants a Gmail mutation checkpoint.
       const replayAdmission = authenticationAdmission_(candidateSource_(message));
-      if (replayAdmission.kind === 'issued') return checkpointAuthenticationExclusion_(state.journalSheet, journal);
+      if (replayAdmission.kind === 'issued') return checkpointAuthenticationExclusionWithRows_(state.couponSheet, state.journalSheet, journal);
     }
     const extraction = resumingBatch ? {candidates: journal.batchIntent.candidates,
       archiveAllowed: false, verifiedNonOffer: false} : extractCouponOutcomeForState_(state, message);
     const candidates = extraction.candidates;
     if (extraction.excludedReason === 'authentication_code_message') {
-      return checkpointAuthenticationExclusion_(state.journalSheet, journal);
+      return checkpointAuthenticationExclusionWithRows_(state.couponSheet, state.journalSheet, journal);
     }
     if (extraction.verifiedNonOffer) {
       if (journal.candidateStates.length) {
@@ -330,6 +330,36 @@ function extractCouponOutcomeForState_(state, message) {
   const hooks = Object.assign({}, state && state.extractionHooks || {});
   if (state && state._deadlineMs) hooks.deadlineMs = state._deadlineMs;
   return extractCouponOutcome_(message, hooks);
+}
+
+function checkpointAuthenticationExclusionWithRows_(sheet, journalSheet, journal) {
+  if (!journal || !Array.isArray(journal.candidateKeys) || !Array.isArray(journal.rowNumbers)) fail_('STATE');
+  const entries = journal.candidateKeys.map(function (key, index) {
+    const row = resolveCandidateRow_(sheet, journal.messageId, key, journal.rowNumbers[index]);
+    if (!Number.isInteger(row) || row < 2) fail_('STATE');
+    return {key: key, row: row};
+  });
+  const snapshots = entries.map(function (entry) {
+    return {row: entry.row, status: sheet.getRange(entry.row, 18).getValues()[0][0],
+      action: sheet.getRange(entry.row, 25).getValues()[0][0]};
+  });
+  const candidateStatuses = Array.isArray(journal.candidateStates) ? journal.candidateStates.map(function (item) { return item.status; }) : null;
+  try {
+    entries.forEach(function (entry) { setReviewStatus_(sheet, entry.row, EN.statuses.ignored, ''); });
+    if (Array.isArray(journal.candidateStates)) journal.candidateStates.forEach(function (item) { item.status = 'ignored'; });
+    return checkpointAuthenticationExclusion_(journalSheet, journal);
+  } catch (e) {
+    if (Array.isArray(journal.candidateStates) && candidateStatuses) {
+      journal.candidateStates.forEach(function (item, index) { item.status = candidateStatuses[index]; });
+    }
+    snapshots.forEach(function (snapshot) {
+      try {
+        sheet.getRange(snapshot.row, 25).setValues([[snapshot.action]]);
+        sheet.getRange(snapshot.row, 18).setValues([[snapshot.status]]);
+      } catch (ignored) {}
+    });
+    throw e;
+  }
 }
 
 function reconcileCandidateRows_(sheet, journal) {
