@@ -36,6 +36,11 @@ The baseline settings are:
 | `trashExpiredImported` | `true` | Enable retention cleanup. |
 | `dailyHour` | `8` | Approximate local daily trigger hour. |
 
+The configured timezone must be a valid bounded IANA timezone. When installed,
+the daily trigger's handler, hour, timezone and target identity are retained as
+private schedule metadata; a legacy or mismatched trigger fails closed rather
+than being silently adopted or recreated.
+
 ## Data contract
 
 The existing coupon tab and its headers remain the database. A baseline row
@@ -87,9 +92,9 @@ portion fails.
 ## Exclusions
 
 The baseline does not mutate email that has no explicit code, contains only a
-referral link, is an authentication/OTP message, requires image/OCR analysis,
-or is otherwise ambiguous. An extraction miss is acceptable; a false positive
-that archives unrelated email is not.
+referral link or referral-campaign wording, is an authentication/OTP message,
+requires image/OCR analysis, or is otherwise ambiguous. An extraction miss is
+acceptable; a false positive that archives unrelated email is not.
 
 ## Acceptance evidence
 

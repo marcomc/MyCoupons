@@ -3,6 +3,9 @@ var MYCOUPONS_WATERMARK_PROPERTY = 'MYCOUPONS_WATERMARK';
 var MYCOUPONS_WATERMARK_IDENTITY_PROPERTY = 'MYCOUPONS_WATERMARK_TARGET_IDENTITY';
 var MYCOUPONS_SCAN_STATE_PROPERTY = 'MYCOUPONS_SCAN_STATE';
 var MYCOUPONS_SCAN_STATE_VERSION = 1;
+var MYCOUPONS_DAILY_SCHEDULE_PROPERTY = 'MYCOUPONS_DAILY_SCHEDULE';
+var MYCOUPONS_DAILY_SCHEDULE_VERSION = 1;
+var MYCOUPONS_DAILY_HANDLER = 'runMyCouponsDaily';
 var MYCOUPONS_SEARCH_PAGE_SIZE = 100;
 
 var MYCOUPONS_DEFAULTS = {
@@ -95,20 +98,25 @@ function installMyCouponsDailyTrigger() {
     var config = getMyCouponsConfig_();
     assertMyCouponsOwner_(config);
     var matching = ScriptApp.getProjectTriggers().filter(function(trigger) {
-      return trigger.getHandlerFunction() === 'runMyCouponsDaily';
+      return trigger.getHandlerFunction() === MYCOUPONS_DAILY_HANDLER;
     });
     if (matching.length > 1) {
       throw new Error('Multiple daily triggers exist for runMyCouponsDaily. Resolve them manually.');
     }
     if (matching.length === 1) {
+      assertDailyScheduleIdentity_(config);
       return {created: false, dailyHour: config.dailyHour};
     }
-    ScriptApp.newTrigger('runMyCouponsDaily')
+    if (PropertiesService.getScriptProperties().getProperty(MYCOUPONS_DAILY_SCHEDULE_PROPERTY)) {
+      throw new Error('Stored MyCoupons daily schedule does not match a trigger. Resolve it deliberately.');
+    }
+    ScriptApp.newTrigger(MYCOUPONS_DAILY_HANDLER)
       .timeBased()
       .inTimezone(config.timeZone)
       .atHour(config.dailyHour)
       .everyDays(1)
       .create();
+    saveDailyScheduleIdentity_(config);
     return {created: true, dailyHour: config.dailyHour};
   });
 }
@@ -125,10 +133,15 @@ function getMyCouponsInstallationStatus() {
   resolveImportedLabel_(config);
   readCouponSheetState_(resolveCouponSheet_(config), config);
   var matching = ScriptApp.getProjectTriggers().filter(function(trigger) {
-    return trigger.getHandlerFunction() === 'runMyCouponsDaily';
+      return trigger.getHandlerFunction() === MYCOUPONS_DAILY_HANDLER;
   });
   if (matching.length > 1) {
     throw new Error('Multiple daily triggers exist for runMyCouponsDaily. Resolve them manually.');
+  }
+  if (matching.length === 1) {
+    assertDailyScheduleIdentity_(config);
+  } else if (PropertiesService.getScriptProperties().getProperty(MYCOUPONS_DAILY_SCHEDULE_PROPERTY)) {
+    throw new Error('Stored MyCoupons daily schedule does not match a trigger. Resolve it deliberately.');
   }
   return {dailyTrigger: matching.length === 1 ? 'installed' : 'missing', ready: true};
 }
@@ -274,6 +287,9 @@ function getMyCouponsConfig_() {
     }
   });
   config.initialDate = parseInitialDate_(config.initialDate);
+  if (!validIanaTimeZone_(config.timeZone)) {
+    throw new Error('MYCOUPONS_CONFIG.timeZone must be a valid IANA time zone.');
+  }
   config.watermarkOverlapDays = integerInRange_(config.watermarkOverlapDays, 'watermarkOverlapDays', 0, 30);
   config.retentionDays = integerInRange_(config.retentionDays, 'retentionDays', 1, 3650);
   config.dailyHour = integerInRange_(config.dailyHour, 'dailyHour', 0, 23);
@@ -283,6 +299,45 @@ function getMyCouponsConfig_() {
     }
   });
   return config;
+}
+
+function validIanaTimeZone_(value) {
+  if (typeof value !== 'string' || value.length > 100 ||
+      !/^(?:UTC|[A-Za-z][A-Za-z0-9_+\-]*(?:\/[A-Za-z][A-Za-z0-9_+\-]*)+)$/u.test(value)) {
+    return false;
+  }
+  try {
+    var formatted = Utilities.formatDate(new Date('2000-01-01T00:00:00.000Z'), value, 'yyyy-MM-dd');
+    return typeof formatted === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(formatted);
+  } catch (error) {
+    return false;
+  }
+}
+
+function dailyScheduleIdentity_(config) {
+  return JSON.stringify([config.ownerEmail.toLowerCase(), config.spreadsheetId, config.sheetName,
+    config.labelName, MYCOUPONS_DAILY_HANDLER, config.dailyHour, config.timeZone]);
+}
+
+function saveDailyScheduleIdentity_(config) {
+  PropertiesService.getScriptProperties().setProperty(MYCOUPONS_DAILY_SCHEDULE_PROPERTY, JSON.stringify({
+    version: MYCOUPONS_DAILY_SCHEDULE_VERSION, identity: dailyScheduleIdentity_(config),
+  }));
+}
+
+function assertDailyScheduleIdentity_(config) {
+  var raw = PropertiesService.getScriptProperties().getProperty(MYCOUPONS_DAILY_SCHEDULE_PROPERTY);
+  var schedule;
+  try {
+    schedule = raw && JSON.parse(raw);
+  } catch (error) {
+    throw new Error('Stored MyCoupons daily schedule is invalid. Resolve it deliberately.');
+  }
+  if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule) ||
+      Object.keys(schedule).sort().join(',') !== 'identity,version' ||
+      schedule.version !== MYCOUPONS_DAILY_SCHEDULE_VERSION || schedule.identity !== dailyScheduleIdentity_(config)) {
+    throw new Error('Stored MyCoupons daily schedule does not match the configured trigger. Resolve it deliberately.');
+  }
 }
 
 function parseInitialDate_(value) {
@@ -682,7 +737,7 @@ function messageHasSystemExclusionLabel_(message) {
 function extractCouponCodes_(subject, plainText) {
   var content = [subject || '', plainText || ''];
   if (content.some(function(text) {
-    return /\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b/iu.test(text);
+    return /\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b|\b(?:share|refer|invite)\s+(?:your\s+)?(?:promo(?:tional)?|referral)\s+code\b/iu.test(text);
   })) {
     return [];
   }

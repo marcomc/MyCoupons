@@ -57,6 +57,7 @@ function createRuntime({
   listedMessageIds = messages.map(value => value.id),
   profileEmail = 'owner@example.com',
   triggers = [],
+  dailyScheduleMetadata = undefined,
   watermark = null,
   watermarkTargetIdentity = undefined,
 } = {}) {
@@ -83,6 +84,15 @@ function createRuntime({
     ...config,
   };
   properties.set('MYCOUPONS_CONFIG', JSON.stringify(installedConfig));
+  if (triggers.length && dailyScheduleMetadata !== null) {
+    properties.set('MYCOUPONS_DAILY_SCHEDULE', dailyScheduleMetadata === undefined ? JSON.stringify({
+      version: 1,
+      identity: JSON.stringify([
+        installedConfig.ownerEmail.toLowerCase(), installedConfig.spreadsheetId, installedConfig.sheetName,
+        installedConfig.labelName, 'runMyCouponsDaily', installedConfig.dailyHour ?? 8, installedConfig.timeZone,
+      ]),
+    }) : dailyScheduleMetadata);
+  }
   if (watermark) {
     properties.set('MYCOUPONS_WATERMARK', watermark);
     if (watermarkTargetIdentity !== null) {
@@ -252,6 +262,12 @@ function createRuntime({
       },
     },
     Utilities: {
+      formatDate: (_, timeZone) => {
+        if (!['Europe/Rome', 'UTC', 'America/New_York'].includes(timeZone)) {
+          throw new Error('Unknown time zone');
+        }
+        return '2000-01-01';
+      },
       base64DecodeWebSafe: encoded => {
         if (!/^[A-Za-z0-9_-]*={0,2}$/.test(encoded)) {
           throw new Error('Could not decode string.');
@@ -453,6 +469,7 @@ test('preserves case, Unicode, and supported punctuation only after an explicit 
 test('does not mutate referral-only, authentication, ambiguous, or already imported messages', () => {
   const runtime = createRuntime({messages: [
     message({id: 'referral', body: 'Share https://example.com/referral'}),
+    message({id: 'referral-code', body: 'Share your promo code: FRIEND20 with a friend'}),
     message({id: 'otp', body: 'Your verification code: 123456'}),
     message({id: 'generic', body: 'Use SAVE20 at checkout'}),
     message({id: 'ordinary-prose', body: 'No coupon code is required.'}),
@@ -800,6 +817,34 @@ test('reports only non-secret installation readiness and fails closed for owner 
   assert.throws(() => duplicates.context.getMyCouponsInstallationStatus(), /multiple daily triggers/i);
 });
 
+test('fails closed for legacy or mismatched daily trigger schedule metadata without mutating triggers', () => {
+  const legacy = createRuntime({
+    triggers: [{getHandlerFunction: () => 'runMyCouponsDaily'}],
+    dailyScheduleMetadata: null,
+  });
+  assert.throws(() => legacy.context.getMyCouponsInstallationStatus(), /daily schedule/i);
+  assert.equal(legacy.createdTriggers.length, 0);
+
+  const mismatched = createRuntime({
+    triggers: [{getHandlerFunction: () => 'runMyCouponsDaily'}],
+    dailyScheduleMetadata: JSON.stringify({version: 1, identity: 'other-trigger'}),
+  });
+  assert.throws(() => mismatched.context.installMyCouponsDailyTrigger(), /daily schedule/i);
+  assert.equal(mismatched.createdTriggers.length, 0);
+});
+
+test('rejects invalid IANA time zones before trigger creation and accepts a valid configured zone', () => {
+  const invalid = createRuntime({config: {timeZone: 'Invalid/Zone'}});
+  assert.throws(() => invalid.context.getMyCouponsInstallationStatus(), /valid IANA time zone/i);
+  assert.throws(() => invalid.context.installMyCouponsDailyTrigger(), /valid IANA time zone/i);
+  assert.equal(invalid.createdTriggers.length, 0);
+
+  const valid = createRuntime({config: {timeZone: 'America/New_York'}});
+  assert.deepEqual(JSON.parse(JSON.stringify(valid.context.getMyCouponsInstallationStatus())), {
+    dailyTrigger: 'missing', ready: true,
+  });
+});
+
 test('requires the imported label to be one unambiguous user label', () => {
   const system = createRuntime({
     config: {labelName: 'INBOX'},
@@ -870,6 +915,7 @@ test('installs one daily trigger and rejects an ambiguous duplicate trigger set'
 
   runtime.context.installMyCouponsDailyTrigger();
   assert.deepEqual(runtime.createdTriggers, [{handler: 'runMyCouponsDaily', hour: 8, timeZone: 'Europe/Rome'}]);
+  assert.equal(JSON.parse(runtime.properties.get('MYCOUPONS_DAILY_SCHEDULE')).version, 1);
 
   const duplicate = createRuntime({triggers: [
     {getHandlerFunction: () => 'runMyCouponsDaily'},
