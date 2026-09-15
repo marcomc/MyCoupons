@@ -272,8 +272,8 @@ function authenticationAdmission_(source) {
       if (authenticationIssuedClause_(clause, bridge)) { issued = true; continue; }
       if (span.kind !== 'subject' && authenticationGenericAssignment_(clause, bridge)) { issued = true; continue; }
       if (authenticationDiscussionClause_(clause)) { discussion = true; discussionFrame = true; continue; }
-      if (span.kind !== 'subject' && (new RegExp(authenticationTargetSearchPattern_(), 'iu').test(clause) ||
-          authenticationLikeSource_({sourceSpans: [{text: clause}]}))) unsupported = true;
+      if (new RegExp(authenticationTargetSearchPattern_(), 'iu').test(clause) ||
+          (!authenticationSubjectPurpose_(clause) && authenticationLikeSource_({sourceSpans: [{text: clause}]}))) unsupported = true;
     }
   }
   return authenticationAdmissionResult_(issued && !discussion && !unsupported ? 'issued' : discussion ? 'discussion' : 'ambiguous', issued || authenticationLike);

@@ -107,6 +107,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'Acme coupon code A\u0301pin\u0301.'}],
     ['ambiguous', {text: 'Acme coupon code SAVE-PIN-20.'}],
     ['ambiguous', {text: 'Coupon code SAVE20. Your verification code is 123456. The security code appears as 654321.'}],
+    ['ambiguous', {subject: 'The security code appears as 654321', text: 'Your verification code is 123456. Coupon code SAVE20.'}],
     ['discussion', {html: '<p>Coupon code SAVE20</p><blockquote>Your verification code is 123456.</blockquote>'}],
     ['discussion', {subject: 'Sign in to Acme', html: '<blockquote>Your code is 123456.</blockquote>'}],
     ['discussion', {text: 'Coupon code SAVE20\n---------- Forwarded message ---------\nYour verification code is 123456.'}],
