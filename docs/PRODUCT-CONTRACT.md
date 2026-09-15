@@ -29,7 +29,7 @@ The baseline settings are:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `initialDate` | `2026-01-01` | First successful scan begins on this date. |
+| `initialDate` | `2026-01-01` | First successful scan includes this UTC date boundary. |
 | `watermarkOverlapDays` | `1` | Re-scan this overlap before the last successful scan. |
 | `retentionDays` | `180` | Age after which imported labeled emails move to Trash. |
 | `archiveImported` | `true` | Remove imported messages from Inbox after a verified write. |
@@ -43,18 +43,22 @@ populates, at minimum, email date, coupon code, source subject, sender, Gmail
 link, notes/deduplication key and status. Existing richer columns remain in
 place and blank when the baseline cannot establish their values.
 
-The durable watermark is stored independently in Script Properties. It is the
-pre-list scan boundary of the latest fully successful scan, not a Sheet-row
+The durable watermark is stored independently in Script Properties together
+with its target identity: owner, Sheet ID, tab and imported Gmail label. It is
+the pre-list scan boundary of the latest fully successful scan, not a Sheet-row
 date or the completion time. Each query is bounded above by that snapshot, so
 messages that arrive while an import is running remain eligible next time. A
-separate validated private scan state retains the fixed range, Gmail page
-cursor and pending message IDs when a history scan is interrupted by a Gmail
-per-user limit. It is cleared only after that fixed range completes.
+watermark missing that identity, or belonging to a changed target, is discarded
+and the next scan restarts from `initialDate`. A separate validated private scan
+state retains the fixed range, Gmail page cursor and pending message IDs when a
+history scan is interrupted by a Gmail per-user limit. It is cleared only after
+that fixed range completes.
 
 ## Import contract
 
-1. On first run, search all non-spam/non-trash Gmail messages from
-   `initialDate`. Later runs search from the watermark minus its overlap.
+1. On first run, search all non-spam/non-trash Gmail messages from the exact
+   UTC beginning of `initialDate`. Later runs search from the watermark minus
+   its overlap.
 2. Exclude messages already carrying the configured imported label.
 3. Inspect only subject and plain-text message content.
 4. Import only a complete code immediately introduced by an explicit form such

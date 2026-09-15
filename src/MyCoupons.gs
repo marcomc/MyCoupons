@@ -1,5 +1,6 @@
 var MYCOUPONS_CONFIG_PROPERTY = 'MYCOUPONS_CONFIG';
 var MYCOUPONS_WATERMARK_PROPERTY = 'MYCOUPONS_WATERMARK';
+var MYCOUPONS_WATERMARK_IDENTITY_PROPERTY = 'MYCOUPONS_WATERMARK_TARGET_IDENTITY';
 var MYCOUPONS_SCAN_STATE_PROPERTY = 'MYCOUPONS_SCAN_STATE';
 var MYCOUPONS_SCAN_STATE_VERSION = 1;
 var MYCOUPONS_SEARCH_PAGE_SIZE = 100;
@@ -187,6 +188,8 @@ function runMyCouponsImport_(config) {
     if (!scan.pageToken && scan.listedFinalPage) {
       var watermark = scan.boundary;
       PropertiesService.getScriptProperties().setProperty(MYCOUPONS_WATERMARK_PROPERTY, watermark);
+      PropertiesService.getScriptProperties().setProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY,
+        watermarkTargetIdentity_(config));
       PropertiesService.getScriptProperties().deleteProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
       return {complete: true, imported: imported, scanned: scanned, watermark: watermark};
     }
@@ -397,8 +400,11 @@ function sheetSemanticText_(value) {
 }
 
 function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
-  var range = sheet.getRange(sheet.getLastRow() + 1, 1, 1, row.length);
-  range.setNumberFormat('@');
+  var rowNumber = sheet.getLastRow() + 1;
+  populatedCouponColumns_(columns).forEach(function(column) {
+    sheet.getRange(rowNumber, column + 1, 1, 1).setNumberFormat('@');
+  });
+  var range = sheet.getRange(rowNumber, 1, 1, row.length);
   range.setValues([row]);
   var written = range.getValues()[0];
   var formulas = range.getFormulas()[0];
@@ -413,6 +419,11 @@ function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
       formulas[columns.gmailLink] || formulas[columns.sourceSubject] || formulas[columns.sender] || formulas[columns.status]) {
     throw new Error('Coupon row verification failed before Gmail mutation.');
   }
+}
+
+function populatedCouponColumns_(columns) {
+  return [columns.emailDate, columns.couponCode, columns.sourceSubject, columns.sender,
+    columns.gmailLink, columns.deduplicationKey, columns.status];
 }
 
 function gmailLinkForStoredRow_(row, columns) {
@@ -438,9 +449,15 @@ function buildRetentionQuery_(config, threshold) {
 }
 
 function scanStart_(config) {
-  var rawWatermark = PropertiesService.getScriptProperties().getProperty(MYCOUPONS_WATERMARK_PROPERTY);
+  var properties = PropertiesService.getScriptProperties();
+  var rawWatermark = properties.getProperty(MYCOUPONS_WATERMARK_PROPERTY);
   if (!rawWatermark) {
-    return config.initialDate;
+    return initialScanStart_(config);
+  }
+  if (properties.getProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY) !== watermarkTargetIdentity_(config)) {
+    properties.deleteProperty(MYCOUPONS_WATERMARK_PROPERTY);
+    properties.deleteProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY);
+    return initialScanStart_(config);
   }
   var watermark = new Date(rawWatermark);
   if (isNaN(watermark.getTime()) || watermark.toISOString() !== rawWatermark) {
@@ -451,6 +468,16 @@ function scanStart_(config) {
     watermark.setUTCSeconds(watermark.getUTCSeconds() - 1);
   }
   return watermark;
+}
+
+function initialScanStart_(config) {
+  var start = new Date(config.initialDate.getTime());
+  start.setUTCSeconds(start.getUTCSeconds() - 1);
+  return start;
+}
+
+function watermarkTargetIdentity_(config) {
+  return JSON.stringify([config.ownerEmail.toLowerCase(), config.spreadsheetId, config.sheetName, config.labelName]);
 }
 
 function scanConfigIdentity_(config) {

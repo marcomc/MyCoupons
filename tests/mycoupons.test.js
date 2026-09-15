@@ -55,6 +55,7 @@ function createRuntime({
   profileEmail = 'owner@example.com',
   triggers = [],
   watermark = null,
+  watermarkTargetIdentity = undefined,
 } = {}) {
   let clock = now;
   const values = [headers, ...existingRows];
@@ -67,7 +68,7 @@ function createRuntime({
   let listMessageCount = 0;
   const numberFormats = [];
   const properties = new Map();
-  properties.set('MYCOUPONS_CONFIG', JSON.stringify({
+  const installedConfig = {
     ownerEmail: 'owner@example.com',
     spreadsheetId: 'sheet-id',
     spreadsheetName: 'My Coupons',
@@ -75,9 +76,16 @@ function createRuntime({
     labelName: 'Coupon Code Discount',
     timeZone: 'Europe/Rome',
     ...config,
-  }));
+  };
+  properties.set('MYCOUPONS_CONFIG', JSON.stringify(installedConfig));
   if (watermark) {
     properties.set('MYCOUPONS_WATERMARK', watermark);
+    if (watermarkTargetIdentity !== null) {
+      properties.set('MYCOUPONS_WATERMARK_TARGET_IDENTITY', watermarkTargetIdentity === undefined ? JSON.stringify([
+        installedConfig.ownerEmail.toLowerCase(), installedConfig.spreadsheetId,
+        installedConfig.sheetName, installedConfig.labelName,
+      ]) : watermarkTargetIdentity);
+    }
   }
 
   const sheet = {
@@ -257,7 +265,10 @@ test('imports an explicitly introduced code, then labels and archives its exact 
     id: 'message-1',
   }]);
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK'), '2026-01-11T10:00:00.000Z');
-  assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2026-01-01T00:00:00.000Z') / 1000)}`));
+  assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY'), JSON.stringify([
+    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount',
+  ]));
+  assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
 });
 
 test('skips an undecodable MIME text part without aborting later valid messages', () => {
@@ -275,6 +286,18 @@ test('skips an undecodable MIME text part without aborting later valid messages'
     userId: 'me',
     id: 'valid',
   }]);
+});
+
+test('includes a message exactly at the initial UTC boundary', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'initial-boundary',
+    body: 'Coupon code: MIDNIGHT20',
+    date: new Date('2026-01-01T00:00:00.000Z'),
+  })]});
+
+  const outcome = runtime.context.runMyCouponsImport();
+  assert.equal(outcome.imported, 1);
+  assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
 });
 
 test('keeps the watermark unchanged after a Gmail rate limit while committing the verified partial batch', () => {
@@ -375,6 +398,8 @@ test('preserves the 26-column legacy sheet layout and writes legacy aliases at t
   assert.equal(row[20], 'legacy-message::SAVE20');
   assert.equal(row[21], 'imported');
   assert.equal(row[25], '');
+  assert.deepEqual(runtime.numberFormats.map(format => format.column), [4, 5, 6, 7, 14, 21, 22]);
+  assert.ok(runtime.numberFormats.every(format => format.columnCount === 1));
 });
 
 test('preserves case, Unicode, and supported punctuation only after an explicit introducer', () => {
@@ -455,7 +480,9 @@ test('treats untrusted Gmail text as literal Sheet text rather than a formula', 
 
   assert.equal(runtime.rows[1][2], '=IMPORTXML("https://example.com")');
   assert.equal(runtime.rows[1][3], '+attacker@example.com');
-  assert.equal(runtime.numberFormats[0].format, '@');
+  assert.deepEqual(runtime.numberFormats.map(format => [format.column, format.columnCount, format.format]), [
+    [1, 1, '@'], [2, 1, '@'], [3, 1, '@'], [4, 1, '@'], [5, 1, '@'], [6, 1, '@'], [7, 1, '@'],
+  ]);
   assert.deepEqual(JSON.parse(JSON.stringify(runtime.formulas[1].slice(1, 6))), ['', '', '', '', '']);
 });
 
@@ -532,7 +559,7 @@ test('uses exact epoch boundaries and persists the pre-list snapshot watermark',
 
   const legacyBlankInitialDate = createRuntime({config: {initialDate: ''}});
   legacyBlankInitialDate.context.runMyCouponsImport();
-  assert.match(legacyBlankInitialDate.queries[0], new RegExp(`after:${Math.floor(Date.parse('2026-01-01T00:00:00.000Z') / 1000)}`));
+  assert.match(legacyBlankInitialDate.queries[0], new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
 
   const failedWrite = createRuntime({
     corruptLastWrite: true,
@@ -550,6 +577,24 @@ test('covers the watermark boundary even when configured overlap is zero', () =>
   });
   runtime.context.runMyCouponsImport();
   assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2026-01-10T09:59:59.000Z') / 1000)}`));
+});
+
+test('restarts from initialDate when a watermark belongs to a different target', () => {
+  const runtime = createRuntime({
+    config: {labelName: 'Replacement Label'},
+    labels: [
+      {id: 'Label_Imported', name: 'Coupon Code Discount'},
+      {id: 'Label_Replacement', name: 'Replacement Label'},
+    ],
+    watermark: '2026-01-10T10:00:00.000Z',
+    watermarkTargetIdentity: JSON.stringify(['owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount']),
+  });
+
+  runtime.context.runMyCouponsImport();
+  assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
+  assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY'), JSON.stringify([
+    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Replacement Label',
+  ]));
 });
 
 test('rejects a provider read-back that coerces the coupon code before Gmail mutation', () => {
