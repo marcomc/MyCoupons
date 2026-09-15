@@ -1,5 +1,7 @@
 var MYCOUPONS_CONFIG_PROPERTY = 'MYCOUPONS_CONFIG';
 var MYCOUPONS_WATERMARK_PROPERTY = 'MYCOUPONS_WATERMARK';
+var MYCOUPONS_SCAN_STATE_PROPERTY = 'MYCOUPONS_SCAN_STATE';
+var MYCOUPONS_SCAN_STATE_VERSION = 1;
 var MYCOUPONS_SEARCH_PAGE_SIZE = 100;
 
 var MYCOUPONS_DEFAULTS = {
@@ -44,10 +46,27 @@ function runMyCouponsDaily() {
   return withMyCouponsLock_(function() {
     var config = getMyCouponsConfig_();
     assertMyCouponsOwner_(config);
-    return {
-      import: runMyCouponsImport_(config),
-      retention: cleanupExpiredImportedMessages_(config),
-    };
+    var imported;
+    var importError = null;
+    try {
+      imported = runMyCouponsImport_(config);
+    } catch (error) {
+      importError = error;
+    }
+    var retention;
+    var retentionError = null;
+    try {
+      retention = cleanupExpiredImportedMessages_(config);
+    } catch (error) {
+      retentionError = error;
+    }
+    if (importError) {
+      throw importError;
+    }
+    if (retentionError) {
+      throw retentionError;
+    }
+    return {import: imported, retention: retention};
   });
 }
 
@@ -85,6 +104,7 @@ function installMyCouponsDailyTrigger() {
     }
     ScriptApp.newTrigger('runMyCouponsDaily')
       .timeBased()
+      .inTimezone(config.timeZone)
       .atHour(config.dailyHour)
       .everyDays(1)
       .create();
@@ -116,12 +136,12 @@ function runMyCouponsImport_(config) {
   var label = resolveImportedLabel_(config);
   var sheet = resolveCouponSheet_(config);
   var sheetState = readCouponSheetState_(sheet);
-  var boundary = new Date();
-  var listing = listGmailMessages_(buildImportQuery_(config, boundary));
-  var messages = listing.messages;
+  var scan = loadOrStartScanState_(config, new Date());
   var imported = 0;
+  var scanned = 0;
 
-  messages.forEach(function(message) {
+  function processMessage_(message) {
+    scanned += 1;
     if (messageHasLabel_(message, label.id)) {
       return;
     }
@@ -144,14 +164,60 @@ function runMyCouponsImport_(config) {
     if (hasVerifiedCode) {
       mutateImportedMessage_(message.id, label.id, config.archiveImported);
     }
-  });
-
-  var watermark = null;
-  if (listing.complete) {
-    watermark = boundary.toISOString();
-    PropertiesService.getScriptProperties().setProperty(MYCOUPONS_WATERMARK_PROPERTY, watermark);
   }
-  return {complete: listing.complete, imported: imported, scanned: messages.length, watermark: watermark};
+
+  while (true) {
+    while (scan.pendingIds.length) {
+      var messageId = scan.pendingIds[0];
+      var message;
+      try {
+        message = toMyCouponsMessage_(Gmail.Users.Messages.get('me', messageId, {format: 'full'}));
+      } catch (error) {
+        if (isGmailRateLimitError_(error)) {
+          saveScanState_(scan);
+          return {complete: false, imported: imported, scanned: scanned, watermark: null};
+        }
+        throw error;
+      }
+      processMessage_(message);
+      scan.pendingIds.shift();
+      saveScanState_(scan);
+    }
+
+    if (!scan.pageToken && scan.listedFinalPage) {
+      var watermark = scan.boundary;
+      PropertiesService.getScriptProperties().setProperty(MYCOUPONS_WATERMARK_PROPERTY, watermark);
+      PropertiesService.getScriptProperties().deleteProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
+      return {complete: true, imported: imported, scanned: scanned, watermark: watermark};
+    }
+
+    var page;
+    try {
+      page = Gmail.Users.Messages.list('me', gmailListOptions_(buildImportQuery_(scan), scan.pageToken));
+    } catch (error) {
+      if (isGmailRateLimitError_(error)) {
+        saveScanState_(scan);
+        return {complete: false, imported: imported, scanned: scanned, watermark: null};
+      }
+      throw error;
+    }
+    var references = page && Array.isArray(page.messages) ? page.messages : [];
+    if (references.some(function(reference) {
+      return !reference || typeof reference.id !== 'string' || !reference.id;
+    })) {
+      throw new Error('Gmail returned an invalid message list.');
+    }
+    scan.pendingIds = references.map(function(reference) { return reference.id; });
+    if (new Set(scan.pendingIds).size !== scan.pendingIds.length) {
+      throw new Error('Gmail returned duplicate message IDs in one page.');
+    }
+    scan.pageToken = page && page.nextPageToken || '';
+    if (typeof scan.pageToken !== 'string') {
+      throw new Error('Gmail returned an invalid next page token.');
+    }
+    scan.listedFinalPage = !scan.pageToken;
+    saveScanState_(scan);
+  }
 }
 
 function cleanupExpiredImportedMessages_(config) {
@@ -162,7 +228,7 @@ function cleanupExpiredImportedMessages_(config) {
   threshold.setUTCDate(threshold.getUTCDate() - config.retentionDays);
   var trashed = 0;
   var label = resolveImportedLabel_(config);
-  listGmailMessages_(buildRetentionQuery_(config)).messages.forEach(function(message) {
+  listGmailMessages_(buildRetentionQuery_(config, threshold)).messages.forEach(function(message) {
     if (!messageHasLabel_(message, label.id) || message.date.getTime() >= threshold.getTime()) {
       return;
     }
@@ -267,6 +333,9 @@ function readCouponSheetState_(sheet) {
       var parsedKey = parseDeduplicationKey_(key);
       var valid = parsedKey !== null && sheetSemanticText_(row[columns.couponCode]) === parsedKey.code &&
         sheetSemanticText_(row[columns.gmailLink]) === gmailLinkForMessage_(parsedKey.messageId);
+      if (Object.prototype.hasOwnProperty.call(deduplicationRecords, key)) {
+        throw new Error('Coupon sheet contains a duplicate deduplication key.');
+      }
       deduplicationRecords[key] = {valid: valid};
     }
   });
@@ -334,12 +403,14 @@ function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
   var written = range.getValues()[0];
   var formulas = range.getFormulas()[0];
   if (sheetSemanticText_(written[columns.deduplicationKey]) !== deduplicationKey ||
+      sheetSemanticText_(written[columns.emailDate]) !== sheetSemanticText_(row[columns.emailDate]) ||
       sheetSemanticText_(written[columns.couponCode]) !== sheetSemanticText_(row[columns.couponCode]) ||
       sheetSemanticText_(written[columns.gmailLink]) !== gmailLinkForStoredRow_(row, columns) ||
       sheetSemanticText_(written[columns.sourceSubject]) !== sheetSemanticText_(row[columns.sourceSubject]) ||
       sheetSemanticText_(written[columns.sender]) !== sheetSemanticText_(row[columns.sender]) ||
-      formulas[columns.deduplicationKey] || formulas[columns.couponCode] || formulas[columns.gmailLink] ||
-      formulas[columns.sourceSubject] || formulas[columns.sender]) {
+      sheetSemanticText_(written[columns.status]) !== sheetSemanticText_(row[columns.status]) ||
+      formulas[columns.deduplicationKey] || formulas[columns.emailDate] || formulas[columns.couponCode] ||
+      formulas[columns.gmailLink] || formulas[columns.sourceSubject] || formulas[columns.sender] || formulas[columns.status]) {
     throw new Error('Coupon row verification failed before Gmail mutation.');
   }
 }
@@ -355,14 +426,15 @@ function mutateImportedMessage_(messageId, labelId, archiveImported) {
   }, 'me', messageId);
 }
 
-function buildImportQuery_(config, boundary) {
-  return 'after:' + Math.floor(scanStart_(config).getTime() / 1000) +
-    ' before:' + Math.floor(boundary.getTime() / 1000) +
-    ' -in:spam -in:trash -label:"' + escapeGmailQueryString_(config.labelName) + '"';
+function buildImportQuery_(scan) {
+  return 'after:' + Math.floor(new Date(scan.start).getTime() / 1000) +
+    ' before:' + Math.floor(new Date(scan.boundary).getTime() / 1000) +
+    ' -in:spam -in:trash -label:"' + escapeGmailQueryString_(scan.labelName) + '"';
 }
 
-function buildRetentionQuery_(config) {
-  return 'label:"' + escapeGmailQueryString_(config.labelName) + '" -in:trash';
+function buildRetentionQuery_(config, threshold) {
+  return 'label:"' + escapeGmailQueryString_(config.labelName) + '" before:' +
+    Math.floor(threshold.getTime() / 1000) + ' -in:trash';
 }
 
 function scanStart_(config) {
@@ -375,7 +447,60 @@ function scanStart_(config) {
     throw new Error('Stored MyCoupons watermark is invalid. Repair it deliberately before importing.');
   }
   watermark.setUTCDate(watermark.getUTCDate() - config.watermarkOverlapDays);
+  if (config.watermarkOverlapDays === 0) {
+    watermark.setUTCSeconds(watermark.getUTCSeconds() - 1);
+  }
   return watermark;
+}
+
+function scanConfigIdentity_(config) {
+  return JSON.stringify([config.labelName, config.spreadsheetId, config.sheetName,
+    config.archiveImported, config.initialDate.toISOString(), config.watermarkOverlapDays]);
+}
+
+function validScanTimestamp_(value) {
+  var date = new Date(value);
+  return typeof value === 'string' && !isNaN(date.getTime()) && date.toISOString() === value;
+}
+
+function loadOrStartScanState_(config, boundary) {
+  var properties = PropertiesService.getScriptProperties();
+  var raw = properties.getProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
+  if (!raw) {
+    return {version: MYCOUPONS_SCAN_STATE_VERSION, configIdentity: scanConfigIdentity_(config),
+      labelName: config.labelName, start: scanStart_(config).toISOString(), boundary: boundary.toISOString(),
+      pageToken: '', pendingIds: [], listedFinalPage: false};
+  }
+  var scan;
+  try {
+    scan = JSON.parse(raw);
+  } catch (error) {
+    throw new Error('Stored MyCoupons scan state is invalid. Repair it deliberately before importing.');
+  }
+  if (!scan || typeof scan !== 'object' || Array.isArray(scan) ||
+      Object.keys(scan).sort().join(',') !== 'boundary,configIdentity,labelName,listedFinalPage,pageToken,pendingIds,start,version' ||
+      scan.version !== MYCOUPONS_SCAN_STATE_VERSION || scan.configIdentity !== scanConfigIdentity_(config) ||
+      scan.labelName !== config.labelName || !validScanTimestamp_(scan.start) || !validScanTimestamp_(scan.boundary) ||
+      new Date(scan.start).getTime() > new Date(scan.boundary).getTime() || typeof scan.pageToken !== 'string' ||
+      scan.pageToken.length > 1000 || !Array.isArray(scan.pendingIds) || scan.pendingIds.length > MYCOUPONS_SEARCH_PAGE_SIZE ||
+      scan.pendingIds.some(function(id) { return typeof id !== 'string' || !id; }) ||
+      new Set(scan.pendingIds).size !== scan.pendingIds.length || typeof scan.listedFinalPage !== 'boolean' ||
+      scan.listedFinalPage && !!scan.pageToken) {
+    throw new Error('Stored MyCoupons scan state is invalid. Repair it deliberately before importing.');
+  }
+  return scan;
+}
+
+function saveScanState_(scan) {
+  PropertiesService.getScriptProperties().setProperty(MYCOUPONS_SCAN_STATE_PROPERTY, JSON.stringify(scan));
+}
+
+function gmailListOptions_(query, pageToken) {
+  var options = {maxResults: MYCOUPONS_SEARCH_PAGE_SIZE, q: query};
+  if (pageToken) {
+    options.pageToken = pageToken;
+  }
+  return options;
 }
 
 function escapeGmailQueryString_(value) {
@@ -386,14 +511,7 @@ function listGmailMessages_(query) {
   var messages = [];
   var pageToken;
   do {
-    var options = {
-      maxResults: MYCOUPONS_SEARCH_PAGE_SIZE,
-      q: query,
-    };
-    if (pageToken) {
-      options.pageToken = pageToken;
-    }
-    var page = Gmail.Users.Messages.list('me', options);
+    var page = Gmail.Users.Messages.list('me', gmailListOptions_(query, pageToken));
     var references = page.messages || [];
     for (var index = 0; index < references.length; index += 1) {
       try {
@@ -503,7 +621,7 @@ function collectExplicitCouponTokens_(text, found) {
   [quoted, delimited].forEach(function(expression) {
     var match;
     while ((match = expression.exec(text)) !== null) {
-      var code = acceptCouponToken_(match[1], expression === quoted);
+      var code = acceptCouponToken_(match[1], expression === quoted, /\s+\p{L}/u.test(text.slice(expression.lastIndex)));
       if (code && found.indexOf(code) === -1) {
         found.push(code);
       }
@@ -511,7 +629,7 @@ function collectExplicitCouponTokens_(text, found) {
   });
 }
 
-function acceptCouponToken_(token, quoted) {
+function acceptCouponToken_(token, quoted, hasFollowingWord) {
   if (!token || /^(?:https?:\/\/|www\.)/iu.test(token) || !/[\p{L}\p{N}]/u.test(token)) {
     return null;
   }
@@ -522,6 +640,9 @@ function acceptCouponToken_(token, quoted) {
     return null;
   }
   if (!quoted && /[.!?,;:]$/u.test(token)) {
+    return null;
+  }
+  if (!quoted && !/[\p{N}\p{P}\p{S}]/u.test(token) && (token === token.toLowerCase() || hasFollowingWord)) {
     return null;
   }
   return token;

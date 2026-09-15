@@ -46,7 +46,10 @@ place and blank when the baseline cannot establish their values.
 The durable watermark is stored independently in Script Properties. It is the
 pre-list scan boundary of the latest fully successful scan, not a Sheet-row
 date or the completion time. Each query is bounded above by that snapshot, so
-messages that arrive while an import is running remain eligible next time.
+messages that arrive while an import is running remain eligible next time. A
+separate validated private scan state retains the fixed range, Gmail page
+cursor and pending message IDs when a history scan is interrupted by a Gmail
+per-user limit. It is cleared only after that fixed range completes.
 
 ## Import contract
 
@@ -60,15 +63,18 @@ messages that arrive while an import is running remain eligible next time.
    mutating Gmail.
 6. Label the exact source message and, when configured, remove only that
    message from Inbox.
-7. Persist the pre-list scan boundary only after every scanned message
-   completes without a runtime failure.
+7. Persist the pre-list scan boundary only after every page and message in the
+   fixed range completes. A Gmail rate limit preserves the private continuation
+   state and resumes later without advancing the watermark or repeating the
+   already processed prefix.
 
 ## Retention contract
 
-Retention searches only messages with the imported label. When enabled, a
-message older than `retentionDays` moves to Gmail Trash. It is not permanently
+Retention searches only already imported messages older than `retentionDays`.
+When enabled, each matched message moves to Gmail Trash. It is not permanently
 deleted. The retention action is independent from code extraction and cannot
-touch unlabelled email.
+touch unlabelled email; the daily handler still attempts it if the import
+portion fails.
 
 ## Exclusions
 

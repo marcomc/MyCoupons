@@ -41,10 +41,14 @@ function createRuntime({
   ],
   existingRows = [],
   corruptLastWrite = false,
+  corruptLastWriteColumns = [],
   coerceLastWrite = false,
+  formulaLastWriteColumns = [],
   attachmentText = '',
   advanceClockOnList = false,
   fetchFailureAfter = null,
+  listFailureAfter = null,
+  listPageSize = 100,
   now = new Date('2026-01-11T10:00:00.000Z'),
   labels = [{id: 'Label_Imported', name: 'Coupon Code Discount'}],
   listedMessageIds = messages.map(value => value.id),
@@ -60,6 +64,7 @@ function createRuntime({
   const queries = [];
   const createdTriggers = [];
   let getMessageCount = 0;
+  let listMessageCount = 0;
   const numberFormats = [];
   const properties = new Map();
   properties.set('MYCOUPONS_CONFIG', JSON.stringify({
@@ -97,8 +102,6 @@ function createRuntime({
           });
           return this;
         },
-        getFormulas: () => formulas.slice(row - 1, row - 1 + rowCount)
-          .map(value => value.slice(column - 1, column - 1 + columnCount)),
         getValues: () => values.slice(row - 1, row - 1 + rowCount)
           .map(value => {
             const copy = value.slice(column - 1, column - 1 + columnCount);
@@ -107,6 +110,17 @@ function createRuntime({
             }
             if (coerceLastWrite && row === values.length) {
               copy[1] = 'SAVE2O';
+            }
+            if (row === values.length) {
+              corruptLastWriteColumns.forEach(column => { copy[column] = ''; });
+            }
+            return copy;
+          }),
+        getFormulas: () => formulas.slice(row - 1, row - 1 + rowCount)
+          .map(value => {
+            const copy = value.slice(column - 1, column - 1 + columnCount);
+            if (row === values.length) {
+              formulaLastWriteColumns.forEach(column => { copy[column] = '=CORRUPTED'; });
             }
             return copy;
           }),
@@ -160,10 +174,20 @@ function createRuntime({
           list: (userId, options) => {
             assert.equal(userId, 'me');
             queries.push(options.q);
+            if (listFailureAfter !== null && listMessageCount >= listFailureAfter) {
+              throw new Error("Quota exceeded for quota metric 'Total Query Cost'.");
+            }
+            listMessageCount += 1;
             if (advanceClockOnList) {
               clock = new Date(clock.getTime() + 60_000);
             }
-            return {messages: listedMessageIds.map(id => ({id}))};
+            const offset = Number(options.pageToken || 0);
+            const page = listedMessageIds.slice(offset, offset + listPageSize).map(id => ({id}));
+            const next = offset + page.length;
+            return {
+              messages: page,
+              ...(next < listedMessageIds.length ? {nextPageToken: String(next)} : {}),
+            };
           },
           modify: (resource, userId, id) => mutations.push({resource, userId, id}),
           trash: (userId, id) => trashed.push({userId, id}),
@@ -177,14 +201,17 @@ function createRuntime({
       getScriptProperties: () => ({
         getProperty: key => properties.get(key) || null,
         setProperty: (key, value) => properties.set(key, value),
+        deleteProperty: key => properties.delete(key),
       }),
     },
     ScriptApp: {
       atHour: hour => ({everyDays: () => ({create: () => createdTriggers.push(hour)})}),
       getProjectTriggers: () => triggers,
-      newTrigger: handler => ({timeBased: () => ({atHour: hour => ({everyDays: () => ({
-        create: () => createdTriggers.push({handler, hour}),
-      })})})}),
+      newTrigger: handler => ({timeBased: () => ({
+        inTimezone: timeZone => ({atHour: hour => ({everyDays: () => ({
+          create: () => createdTriggers.push({handler, hour, timeZone}),
+        })})}),
+      })}),
     },
     SpreadsheetApp: {
       openById: id => {
@@ -205,7 +232,11 @@ function createRuntime({
   };
   vm.createContext(context);
   vm.runInContext(source, context, {filename: 'src/MyCoupons.gs'});
-  return {context, createdTriggers, formulas, mutations, numberFormats, properties, queries, rows: values, trashed};
+  return {
+    context, createdTriggers, formulas, mutations, numberFormats, properties, queries, rows: values, trashed,
+    setFetchFailureAfter: value => { fetchFailureAfter = value; },
+    setListFailureAfter: value => { listFailureAfter = value; },
+  };
 }
 
 test('imports an explicitly introduced code, then labels and archives its exact message', () => {
@@ -266,6 +297,54 @@ test('keeps the watermark unchanged after a Gmail rate limit while committing th
     userId: 'me',
     id: 'first',
   }]);
+  assert.ok(runtime.properties.has('MYCOUPONS_SCAN_STATE'));
+});
+
+test('resumes a durable page cursor after a list rate limit instead of repeating an irrelevant prefix', () => {
+  const runtime = createRuntime({
+    listFailureAfter: 1,
+    listPageSize: 2,
+    messages: [
+      message({id: 'ordinary-1', body: 'Nothing to import here'}),
+      message({id: 'ordinary-2', body: 'Referral link https://example.com/referral'}),
+      message({id: 'coupon-after-prefix', body: 'Coupon code: SAVE20'}),
+    ],
+  });
+
+  const first = runtime.context.runMyCouponsImport();
+  assert.equal(first.complete, false);
+  assert.equal(first.scanned, 2);
+  assert.equal(runtime.properties.has('MYCOUPONS_WATERMARK'), false);
+  assert.equal(JSON.parse(runtime.properties.get('MYCOUPONS_SCAN_STATE')).pageToken, '2');
+
+  runtime.setListFailureAfter(null);
+  const resumed = runtime.context.runMyCouponsImport();
+  assert.equal(resumed.complete, true);
+  assert.equal(resumed.imported, 1);
+  assert.equal(runtime.rows[1][1], 'SAVE20');
+  assert.equal(runtime.properties.has('MYCOUPONS_SCAN_STATE'), false);
+  assert.equal(runtime.queries.at(-1), runtime.queries[0]);
+});
+
+test('resumes pending page IDs after a message read rate limit without duplicating a committed row', () => {
+  const runtime = createRuntime({
+    fetchFailureAfter: 1,
+    messages: [
+      message({id: 'first', body: 'Coupon code: FIRST20'}),
+      message({id: 'second', body: 'Coupon code: SECOND20'}),
+    ],
+  });
+
+  const first = runtime.context.runMyCouponsImport();
+  assert.equal(first.complete, false);
+  assert.equal(first.imported, 1);
+  assert.deepEqual(JSON.parse(runtime.properties.get('MYCOUPONS_SCAN_STATE')).pendingIds, ['second']);
+
+  runtime.setFetchFailureAfter(null);
+  const resumed = runtime.context.runMyCouponsImport();
+  assert.equal(resumed.complete, true);
+  assert.equal(resumed.imported, 1);
+  assert.deepEqual(runtime.rows.slice(1).map(row => row[1]), ['FIRST20', 'SECOND20']);
 });
 
 test('preserves the 26-column legacy sheet layout and writes legacy aliases at their exact indices', () => {
@@ -319,6 +398,10 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'ordinary-prose', body: 'No coupon code is required.'}),
     message({id: 'expiry-prose', body: 'Coupon code expires tomorrow'}),
     message({id: 'needed-prose', body: 'Coupon code is not needed'}),
+    message({id: 'available-prose', body: 'Coupon code: available after signup'}),
+    message({id: 'expires-prose', body: 'Coupon code: expires tomorrow'}),
+    message({id: 'click-prose', body: 'Promo code: click here'}),
+    message({id: 'uppercase-prose', body: 'Coupon code: FREE shipping'}),
     message({id: 'ambiguous-punctuation', body: 'Coupon code: SAVE20.'}),
     message({
       id: 'imported',
@@ -408,6 +491,20 @@ test('fails closed when an existing dedupe key does not prove its code and Gmail
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK'), undefined);
 });
 
+test('fails closed when the coupon sheet contains a duplicate deduplication key', () => {
+  const row = [
+    '2026-01-10T08:00:00.000Z', 'SAVE20', 'Earlier', 'offers@example.com',
+    'https://mail.google.com/mail/u/0/#all/message-1', 'message-1::SAVE20', 'imported',
+  ];
+  const runtime = createRuntime({
+    existingRows: [row, [...row]],
+    messages: [message({id: 'message-1', body: 'Coupon code: SAVE20'})],
+  });
+
+  assert.throws(() => runtime.context.runMyCouponsImport(), /duplicate deduplication key/i);
+  assert.equal(runtime.mutations.length, 0);
+});
+
 test('writes all codes before making one exact Gmail mutation for their source message', () => {
   const runtime = createRuntime({messages: [message({
     id: 'message-2',
@@ -446,6 +543,15 @@ test('uses exact epoch boundaries and persists the pre-list snapshot watermark',
   assert.equal(failedWrite.properties.get('MYCOUPONS_WATERMARK'), undefined);
 });
 
+test('covers the watermark boundary even when configured overlap is zero', () => {
+  const runtime = createRuntime({
+    config: {watermarkOverlapDays: 0},
+    watermark: '2026-01-10T10:00:00.000Z',
+  });
+  runtime.context.runMyCouponsImport();
+  assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2026-01-10T09:59:59.000Z') / 1000)}`));
+});
+
 test('rejects a provider read-back that coerces the coupon code before Gmail mutation', () => {
   const runtime = createRuntime({
     coerceLastWrite: true,
@@ -455,6 +561,28 @@ test('rejects a provider read-back that coerces the coupon code before Gmail mut
   assert.throws(() => runtime.context.runMyCouponsImport(), /verification failed/i);
   assert.equal(runtime.mutations.length, 0);
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK'), undefined);
+});
+
+test('rejects a provider read-back that alters a required date or status field before Gmail mutation', () => {
+  for (const column of [0, 6]) {
+    const runtime = createRuntime({
+      corruptLastWriteColumns: [column],
+      messages: [message({id: 'corrupt-' + column, body: 'Coupon code: SAVE20'})],
+    });
+    assert.throws(() => runtime.context.runMyCouponsImport(), /verification failed/i);
+    assert.equal(runtime.mutations.length, 0);
+  }
+});
+
+test('rejects a provider formula in every required row field before Gmail mutation', () => {
+  for (const column of [0, 1, 2, 3, 4, 5, 6]) {
+    const runtime = createRuntime({
+      formulaLastWriteColumns: [column],
+      messages: [message({id: 'formula-' + column, body: 'Coupon code: SAVE20'})],
+    });
+    assert.throws(() => runtime.context.runMyCouponsImport(), /verification failed/i);
+    assert.equal(runtime.mutations.length, 0);
+  }
 });
 
 test('processes only exact message IDs returned by Gmail search, never unlisted thread neighbours', () => {
@@ -525,6 +653,22 @@ test('moves only old imported messages to Gmail Trash during retention', () => {
 
   assert.equal(outcome.trashed, 1);
   assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-imported'}]);
+  assert.match(runtime.queries[0], new RegExp(`before:${Math.floor(Date.parse('2025-07-15T10:00:00.000Z') / 1000)}`));
+});
+
+test('runs retention even when import fails', () => {
+  const duplicate = [
+    '2026-01-10T08:00:00.000Z', 'SAVE20', 'Earlier', 'offers@example.com',
+    'https://mail.google.com/mail/u/0/#all/message-1', 'message-1::SAVE20', 'imported',
+  ];
+  const runtime = createRuntime({
+    existingRows: [duplicate, [...duplicate]],
+    messages: [message({
+      id: 'old-imported', date: new Date('2025-01-01T00:00:00.000Z'), labels: ['Coupon Code Discount'],
+    })],
+  });
+  assert.throws(() => runtime.context.runMyCouponsDaily(), /duplicate deduplication key/i);
+  assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-imported'}]);
 });
 
 test('does not extract a code found only in a text attachment', () => {
@@ -543,7 +687,7 @@ test('installs one daily trigger and rejects an ambiguous duplicate trigger set'
   const runtime = createRuntime();
 
   runtime.context.installMyCouponsDailyTrigger();
-  assert.deepEqual(runtime.createdTriggers, [{handler: 'runMyCouponsDaily', hour: 8}]);
+  assert.deepEqual(runtime.createdTriggers, [{handler: 'runMyCouponsDaily', hour: 8, timeZone: 'Europe/Rome'}]);
 
   const duplicate = createRuntime({triggers: [
     {getHandlerFunction: () => 'runMyCouponsDaily'},
