@@ -105,7 +105,7 @@ function htmlContent_(html) {
     if (block) stack.push({exit: 'block'});
     if (buttonBoundary) { flushEvidence(); stack.push({exit: 'button'}); }
     if (activeUnmodeled || visibleInput) replacementBoundary();
-    else if (suppressed && !entry.suppressed) flushEvidence();
+    else if (suppressed && !entry.suppressed) { flushEvidence(); flushAuthentication(); }
     if (!suppressed && isHtml && tag === 'img') {
       replacementBoundary();
       const imageAttrs = Object.create(null);

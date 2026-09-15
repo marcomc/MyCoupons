@@ -241,6 +241,15 @@ test('authentication checkpoint failures stay inside per-message handling', () =
   assert.equal(result.messages[1].status, 'review');
 });
 
+test('incomplete v3 authentication batches cannot bypass row binding', () => {
+  const {ctx} = harness();
+  const message = {id: 'abc123', receivedAtMs: 0, subject: 'Sign in to Acme', sender: '',
+    link: 'https://mail.google.com/mail/#all/abc123', text: 'Your code is 123456.', html: '', incomplete: false};
+  const state = ctx.newMessageState_(message.id);
+  state.version = 3; state.batchIntent = {archiveAllowed: true, candidates: [confirmedCandidate()]};
+  assert.equal(ctx.authenticationExclusionBindingsComplete_(state), false);
+});
+
 test('resumed archive intent revalidates rows before Gmail mutation', () => {
   const {ctx, config} = harness(); config.labelId = 'coupon-label';
   const message = {id: 'abc123', receivedAtMs: Date.parse('2026-09-01T10:00:00Z'), subject: 'Brand offer', sender: '',

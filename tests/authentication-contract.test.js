@@ -166,6 +166,8 @@ test('inline quote context is scoped to authentication spans without fragmenting
   assert.equal(quoted.kind, 'discussion');
   const hidden = admission(ctx, {html: '<template><q>Your verification code is 123456.</q></template><p>Your verification code is 123456.</p>'});
   assert.equal(hidden.kind, 'issued');
+  const split = admission(ctx, {html: '<p>Your verification code is <template>x</template>123456.</p>'});
+  assert.equal(split.kind, 'ambiguous');
 });
 
 test('complete issued authentication bypasses model and image transport', () => {

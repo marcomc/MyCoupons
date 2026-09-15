@@ -338,6 +338,7 @@ function extractCouponOutcomeForState_(state, message) {
 }
 
 function authenticationExclusionBindingsComplete_(journal) {
+  if (!completeCandidateBatch_(journal)) return false;
   if (!journal || !Array.isArray(journal.candidateKeys) || !Array.isArray(journal.rowNumbers) ||
       journal.candidateKeys.length !== journal.rowNumbers.length ||
       !journal.rowNumbers.every(function (rowNumber) {
