@@ -110,6 +110,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'Acme coupon code SAVE-PIN-20.'}],
     ['ambiguous', {text: 'Coupon code SAVE20. Your verification code is 123456. The security code appears as 654321.'}],
     ['ambiguous', {text: 'Coupon code SAVE20. Your verification code is 123456. Your security code is 654321.'}],
+    ['ambiguous', {text: 'Your verification code is AbC.', html: '<p>Your verification code is aBc.</p><p>Coupon code SAVE20.</p>'}],
     ['ambiguous', {text: 'Coupon code SAVE20. Your verification code is ready.'}],
     ['ambiguous', {text: 'Coupon code SAVE20. We sent your security code again.'}],
     ['ambiguous', {text: 'Coupon code SAVE20. Your verification code is 192.0.2.1/reset.'}],

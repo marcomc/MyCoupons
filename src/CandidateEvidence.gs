@@ -272,7 +272,9 @@ function authenticationAdmission_(source) {
         continue;
       }
       if (authenticationTargetlessDiscussionClause_(clause)) { discussion = true; continue; }
-      const relationKey = clause.replace(/\s+/gu, ' ').trim().toLowerCase();
+      // Whitespace is grammar; the value's spelling, including case, is its
+      // identity. Cross-representation mirrors must not merge case variants.
+      const relationKey = clause.replace(/\s+/gu, ' ').trim();
       if (authenticationIssuedClause_(clause, bridge)) {
         issued = true;
         const relation = issuedRelations.find(function (item) { return item.key === relationKey; });
