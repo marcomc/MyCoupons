@@ -56,6 +56,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'Your verification code is ' + 'A'.repeat(41) + '.'}],
     ['ambiguous', {text: 'The verification code appears as 123456.'}],
     ['discussion', {text: 'For example. Your verification code is 123456.'}],
+    ['discussion', {text: 'For example. Documentation. Your verification code is 123456.'}],
     ['discussion', {html: '<p>For example.</p><p>Your verification code is 123456.</p>'}],
     ['ambiguous', {text: 'Your verification code is YOUR_CODE.'}],
     ['ambiguous', {text: 'Your verification code is [CODE].'}],
@@ -67,6 +68,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['discussion', {text: 'User said: your verification code is 123456.'}],
     ['ambiguous', {text: 'Your verification code is 1,000-2,000.'}],
     ['ambiguous', {text: 'Your verification code is 12.3/45.6.'}],
+    ['ambiguous', {text: 'Your verification code is ' + 'A'.repeat(40) + '!'}],
     ['ambiguous', {text: 'Your verification code is [[' + 'A'.repeat(40) + ']].'}],
     ['ambiguous', {text: 'Your verification code is ftp://example.com/code.'}],
     ['ambiguous', {text: 'Your verification code is tel:+15551234567.'}],
@@ -78,6 +80,19 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     assert.equal(result.kind, kind, JSON.stringify(message));
     assert.equal(result.deterministic, false);
   });
+});
+
+test('source bounds and bridge guards fail closed before deterministic exclusion', () => {
+  const {ctx} = harness();
+  const oversized = admission(ctx, {subject: 'Sign in to Acme', text: 'Your code is 123456.' + 'x'.repeat(60001)});
+  assert.equal(oversized.kind, 'incomplete');
+  assert.equal(oversized.deterministic, false);
+
+  [
+    {subject: 'Sign in to Acme', text: 'Your code is 123456?'},
+    {subject: 'Sign in to Acme', text: 'Your code is expired.'},
+    {subject: 'Sign in to Acme', text: 'Maybe your code is 123456.'}
+  ].forEach(message => assert.notEqual(admission(ctx, message).kind, 'issued', JSON.stringify(message)));
 });
 
 test('incomplete coverage dominates an otherwise affirmative relation', () => {

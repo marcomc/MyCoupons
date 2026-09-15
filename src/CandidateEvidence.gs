@@ -109,6 +109,7 @@ function authenticationValue_(value) {
   const first = unwrap(token);
   if (first !== token) removedWrapper = true;
   token = first;
+  if (!wellFormedUtf16_(token) || Array.from(token).length > 40) return '';
   token = token.replace(/[.!?,;:]+$/u, '');
   if (!removedWrapper) token = unwrap(token);
   if (!token || !wellFormedUtf16_(token)) return '';
@@ -148,6 +149,7 @@ function authenticationSubjectPurpose_(text) {
 }
 
 function authenticationGenericAssignment_(clause, bridged) {
+  if (!bridged || authenticationDiscussionClause_(clause, true)) return false;
   const noun = '(?:code|passcode|pin|codice)';
   const prefix = authenticationIssuerPrefixPattern_() + '(?:(?:your|the|a|an|il\\s+tuo|tuo|il|la)\\s+)?' + noun;
   const forward = new RegExp('^' + prefix + '\\s*' + authenticationAssignmentPattern_() + '\\s*(\\S+)[.!?,;:]*$', 'iu').exec(clause);
@@ -156,7 +158,7 @@ function authenticationGenericAssignment_(clause, bridged) {
 }
 
 function authenticationIssuedClause_(clause, bridged) {
-  if (new RegExp(authenticationQuestionMark_(), 'u').test(clause) || authenticationDiscussionClause_(clause)) return false;
+  if (authenticationDiscussionClause_(clause, bridged)) return false;
   const target = authenticationTargetPattern_();
   const label = '(?:(?:your|the|a|an|il\\s+tuo|tuo|il|la)\\s+)?' + target;
   const prefix = authenticationIssuerPrefixPattern_();
@@ -182,14 +184,15 @@ function authenticationIssuedClause_(clause, bridged) {
 
 function authenticationDiscussionClause_(clause) {
   const target = authenticationTargetPattern_();
+  const discussionTarget = arguments.length > 1 && arguments[1] ? '(?:code|passcode|pin|codice|' + target + ')' : target;
   return new RegExp(authenticationQuestionMark_(), 'u').test(clause) ||
     /^(?:if|unless|suppose|assuming|maybe|perhaps|for\s+example|example|documentation|tutorial|according\s+to|they\s+said|it\s+was\s+reported)\b/iu.test(clause) ||
     /^(?:question|report(?:ed)?|status\s+report|hypothesis|hypothetical(?:\s+scenario)?|user\s+said|(?:they|we|i|the\s+system)\s+(?:said|reported|recalled|remembered|mentioned|described|referred))\s*:/iu.test(clause) ||
-    new RegExp('^(?:not|never|no|non)\\b[\\s\\S]*' + target, 'iu').test(clause) ||
-    new RegExp(target + '\\s*' + authenticationAssignmentPattern_() + '\\s*(?:not|never|no|non)\\b', 'iu').test(clause) ||
-    new RegExp(target + '\\s*' + authenticationAssignmentPattern_() + '\\s*(?:pending|required|expired|invalid|used|wrong|incorrect|cancelled|canceled|obsolete|inactive|void)\\b', 'iu').test(clause) ||
-    new RegExp('\\b(?:not|never|no|non|pending|required|expired|invalid|used)\\b[\\s\\S]*' + target, 'iu').test(clause) ||
-    new RegExp('\\b(?:mention(?:ed|s|ing)|discuss(?:ed|es|ing)|describ(?:ed|es|ing)|refer(?:red|s|ring))\\b[\\s\\S]*' + target, 'iu').test(clause);
+    new RegExp('^(?:not|never|no|non)\\b[\\s\\S]*' + discussionTarget, 'iu').test(clause) ||
+    new RegExp(discussionTarget + '\\s*' + authenticationAssignmentPattern_() + '\\s*(?:not|never|no|non)\\b', 'iu').test(clause) ||
+    new RegExp(discussionTarget + '\\s*' + authenticationAssignmentPattern_() + '\\s*(?:pending|required|expired|invalid|used|wrong|incorrect|cancelled|canceled|obsolete|inactive|void)\\b', 'iu').test(clause) ||
+    new RegExp('\\b(?:not|never|no|non|pending|required|expired|invalid|used)\\b[\\s\\S]*' + discussionTarget, 'iu').test(clause) ||
+    new RegExp('\\b(?:mention(?:ed|s|ing)|discuss(?:ed|es|ing)|describ(?:ed|es|ing)|refer(?:red|s|ring))\\b[\\s\\S]*' + discussionTarget, 'iu').test(clause);
 }
 
 function authenticationLikeSource_(source) {
@@ -206,19 +209,25 @@ function authenticationAdmission_(source) {
   const authenticationLike = authenticationLikeSource_(source);
   if (source.incomplete) return authenticationAdmissionResult_('incomplete', authenticationLike);
   let total = 0;
+  for (const span of source.sourceSpans) {
+    if (!span || typeof span.text !== 'string') return authenticationAdmissionResult_('incomplete');
+    total += span.text.length;
+    if (total > MC_AUTHENTICATION_SOURCE_LIMIT) return authenticationAdmissionResult_('incomplete', authenticationLike);
+  }
   const subject = source.sourceSpans.find(function (span) { return span && span.kind === 'subject'; });
   const bridge = !!(subject && authenticationSubjectPurpose_(subject.text));
   let discussion = false;
   let discussionFrame = false;
   let representation = '';
   for (const span of source.sourceSpans) {
-    if (!span || typeof span.text !== 'string') return authenticationAdmissionResult_('incomplete');
     if (span.kind !== representation) { discussionFrame = false; representation = span.kind; }
-    total += span.text.length;
-    if (total > MC_AUTHENTICATION_SOURCE_LIMIT) return authenticationAdmissionResult_('incomplete');
     const clauses = authenticationClauseParts_(span.text);
     for (const clause of clauses) {
-      if (discussionFrame) { discussion = true; discussionFrame = false; continue; }
+      if (discussionFrame) {
+        discussion = true;
+        discussionFrame = authenticationDiscussionClause_(clause, bridge);
+        continue;
+      }
       if (authenticationIssuedClause_(clause, bridge)) return authenticationAdmissionResult_('issued', true);
       if (span.kind !== 'subject' && authenticationGenericAssignment_(clause, bridge)) return authenticationAdmissionResult_('issued', true);
       if (authenticationDiscussionClause_(clause)) { discussion = true; discussionFrame = true; }
