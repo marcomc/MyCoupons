@@ -112,6 +112,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['discussion', {text: 'Your verification code is 123456⁈'}],
     ['discussion', {text: 'Your verification code is 123456﹖'}],
     ['discussion', {text: 'Your verification code is 123456. It is expired.'}],
+    ['discussion', {text: 'Your verification code is 123456. It has expired.'}],
   ];
   cases.forEach(([kind, message]) => {
     const result = admission(ctx, message);
