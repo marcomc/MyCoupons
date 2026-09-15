@@ -87,7 +87,7 @@ function authenticationAdmissionResult_(kind, authenticationLike) {
 }
 
 function authenticationTargetPattern_() {
-  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|login|log[ -]?in|sign[ -]?in|email|account|identity|two[ -]?factor|multi[ -]?factor|mfa|2fa|otp)\\s+(?:code|passcode|pin|password)|one[ -]?time\\s+password|passcode|otp|pin|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso))';
+  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|login|log[ -]?in|sign[ -]?in|email|account|identity|two[ -]?factor|multi[ -]?factor|mfa|2fa|otp)\\s+(?:code|passcode|pin|password)|one[ -]?time\\s+password|passcode|otp|pin|account\\s+code|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso))';
 }
 
 function authenticationTargetNounPattern_() {
@@ -101,16 +101,20 @@ function authenticationAssignmentPattern_() {
 function authenticationValue_(value) {
   if (typeof value !== 'string' || !value) return '';
   let token = value;
-  const closing = {'"': '"', "'": "'", '<': '>', '“': '”', '‘': '’'}[token.charAt(0)];
-  if (closing && token.charAt(token.length - 1) === closing && token.length > 2) token = token.slice(1, -1);
+  const unwrap = function (input) {
+    const closing = {'"': '"', "'": "'", '<': '>', '[': ']', '(': ')', '{': '}', '“': '”', '‘': '’'}[input.charAt(0)];
+    return closing && input.charAt(input.length - 1) === closing && input.length > 2 ? input.slice(1, -1) : input;
+  };
+  token = unwrap(token);
   token = token.replace(/[.!?,;:]+$/u, '');
+  token = unwrap(token);
   if (!token || !wellFormedUtf16_(token)) return '';
   const points = Array.from(token).length;
   if (points < 1 || points > 40 || !/[\p{L}\p{N}\p{M}]/u.test(token)) return '';
   if (/^\p{Nd}+\s*[-–—−/:]\s*\p{Nd}+$/u.test(token)) return '';
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token)) return '';
   if (/^(?:https?:|www\.|\/\/)/iu.test(token)) return '';
-  if (/^(?:example|sample|placeholder|demo|code_here|otp|pin|passcode)$/iu.test(token)) return '';
+  if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|x{3,})$/iu.test(token)) return '';
   return token;
 }
 
@@ -129,6 +133,10 @@ function authenticationClauseParts_(text) {
   }).filter(function (part) { return !!part; });
 }
 
+function authenticationQuestionMark_() {
+  return '[?？؟⸮՟]';
+}
+
 function authenticationSubjectPurpose_(text) {
   const value = String(text || '').trim();
   if (!value || /[?;]|(?:for|to)\s+(?:discount|coupon|save|shop|redeem|sconto|risparmiare)\b/iu.test(value)) return false;
@@ -144,7 +152,7 @@ function authenticationGenericAssignment_(clause, bridged) {
 }
 
 function authenticationIssuedClause_(clause, bridged) {
-  if (/[?]/u.test(clause) || authenticationDiscussionClause_(clause)) return false;
+  if (new RegExp(authenticationQuestionMark_(), 'u').test(clause) || authenticationDiscussionClause_(clause)) return false;
   const target = authenticationTargetPattern_();
   const label = '(?:(?:your|the|a|an|il\\s+tuo|tuo|il|la)\\s+)?' + target;
   const prefix = authenticationIssuerPrefixPattern_();
@@ -159,15 +167,18 @@ function authenticationIssuedClause_(clause, bridged) {
     '(?:(?:your|the|a|an|il\\s+tuo|tuo|il|la)\\s+)?' + authenticationTargetNounPattern_() + '[.!?,;:]*$', 'iu').exec(clause);
   if (use && authenticationValue_(use[1])) return true;
 
-  const delivery = new RegExp('^' + prefix + '(?:we|i|the\\s+system|the\\s+service|il\\s+sistema)\\s+' +
+  const deliveryPrefix = '^' + prefix + '(?:we|i|the\\s+system|the\\s+service|il\\s+sistema)\\s+' +
     '(?:sent|emailed|texted|generated|created|inviato|inviata|generato|generata)\\s+' +
-    '(?:(?:your|the|il\\s+tuo|tuo|il|la)\\s+)?' + target + '\\s*(?:to\\s+(?:you|your)|a\\s+(?:te|lei))?\\s*(?:is|è|=|:)?\\s*(\\S+)[.!?,;:]*$', 'iu').exec(clause);
-  return !!(delivery && authenticationValue_(delivery[1]));
+    '(?:(?:your|the|il\\s+tuo|tuo|il|la)\\s+)?' + target + '\\s+';
+  const directDelivery = new RegExp(deliveryPrefix + '(\\S+)[.!?,;:]*$', 'iu').exec(clause);
+  if (directDelivery && authenticationValue_(directDelivery[1])) return true;
+  const addressedDelivery = new RegExp(deliveryPrefix + '(?:to\\s+(?:you|your\\s+(?:email|phone|number|device)|a\\s+(?:you|te|lei))|a\\s+(?:te|lei))\\s*(?:is|è|=|:)\\s*(\\S+)[.!?,;:]*$', 'iu').exec(clause);
+  return !!(addressedDelivery && authenticationValue_(addressedDelivery[1]));
 }
 
 function authenticationDiscussionClause_(clause) {
   const target = authenticationTargetPattern_();
-  return /[?]/u.test(clause) ||
+  return new RegExp(authenticationQuestionMark_(), 'u').test(clause) ||
     /^(?:if|unless|suppose|assuming|maybe|perhaps|for\s+example|example|documentation|tutorial|according\s+to|they\s+said|it\s+was\s+reported)\b/iu.test(clause) ||
     /^(?:question|report(?:ed)?|(?:they|we|i|the\s+system)\s+(?:said|reported|recalled|remembered|mentioned|described|referred))\s*:/iu.test(clause) ||
     new RegExp('^(?:not|never|no|non)\\b[\\s\\S]*' + target, 'iu').test(clause) ||
@@ -178,7 +189,10 @@ function authenticationDiscussionClause_(clause) {
 
 function authenticationLikeSource_(source) {
   const pattern = /\b(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|two[ -]?factor|verify(?:ing)?\s+(?:your|the)?\s*(?:account|email|identity)|confirm(?:ing)?\s+(?:your|the)?\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\s+(?:al\s+)?(?:tuo\s+)?account)\b/iu;
-  return source.sourceSpans.some(function (span) { return span && typeof span.text === 'string' && pattern.test(span.text); });
+  const target = new RegExp(authenticationTargetPattern_(), 'iu');
+  return source.sourceSpans.some(function (span) {
+    return span && typeof span.text === 'string' && (pattern.test(span.text) || target.test(span.text));
+  });
 }
 
 function authenticationAdmission_(source) {
@@ -190,15 +204,19 @@ function authenticationAdmission_(source) {
   const subject = source.sourceSpans.find(function (span) { return span && span.kind === 'subject'; });
   const bridge = !!(subject && authenticationSubjectPurpose_(subject.text));
   let discussion = false;
+  let discussionFrame = false;
+  let representation = '';
   for (const span of source.sourceSpans) {
     if (!span || typeof span.text !== 'string') return authenticationAdmissionResult_('incomplete');
+    if (span.kind !== representation) { discussionFrame = false; representation = span.kind; }
     total += span.text.length;
     if (total > MC_AUTHENTICATION_SOURCE_LIMIT) return authenticationAdmissionResult_('incomplete');
     const clauses = authenticationClauseParts_(span.text);
     for (const clause of clauses) {
+      if (discussionFrame) { discussion = true; discussionFrame = false; continue; }
       if (authenticationIssuedClause_(clause, bridge)) return authenticationAdmissionResult_('issued', true);
       if (span.kind !== 'subject' && authenticationGenericAssignment_(clause, bridge)) return authenticationAdmissionResult_('issued', true);
-      if (authenticationDiscussionClause_(clause)) discussion = true;
+      if (authenticationDiscussionClause_(clause)) { discussion = true; discussionFrame = true; }
     }
   }
   return authenticationAdmissionResult_(discussion ? 'discussion' : 'ambiguous', authenticationLike);

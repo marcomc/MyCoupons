@@ -35,6 +35,7 @@ test('closed admission accepts only complete affirmative authentication relation
     {text: 'aBcDeF is your authentication passcode.'},
     {text: 'Use code ÈTÉ+20! to verify your account.'},
     {text: 'We sent your security code 123456.'},
+    {text: 'We sent your security code to you: 123456.'},
     {subject: 'Your verification code is 123456.'},
     {subject: 'Sign in to Acme', text: 'Your code is 123456.'},
     {text: 'Sample Bank: your verification code is 123456.'}
@@ -53,7 +54,14 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['discussion', {text: 'Your verification code is not 123456.'}],
     ['ambiguous', {text: 'Your verification code is. 123456.'}],
     ['ambiguous', {text: 'Your verification code is ' + 'A'.repeat(41) + '.'}],
-    ['ambiguous', {text: 'The verification code appears as 123456.'}]
+    ['ambiguous', {text: 'The verification code appears as 123456.'}],
+    ['discussion', {text: 'For example. Your verification code is 123456.'}],
+    ['discussion', {html: '<p>For example.</p><p>Your verification code is 123456.</p>'}],
+    ['ambiguous', {text: 'Your verification code is YOUR_CODE.'}],
+    ['ambiguous', {text: 'Your verification code is [CODE].'}],
+    ['ambiguous', {text: 'We sent your verification code to your email.'}],
+    ['ambiguous', {text: 'We sent your security code to you yesterday.'}],
+    ['discussion', {text: 'Your verification code is 123456？'}]
   ];
   cases.forEach(([kind, message]) => {
     const result = admission(ctx, message);
