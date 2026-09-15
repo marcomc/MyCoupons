@@ -105,15 +105,19 @@ function authenticationValue_(value) {
     const closing = {'"': '"', "'": "'", '<': '>', '[': ']', '(': ')', '{': '}', '“': '”', '‘': '’'}[input.charAt(0)];
     return closing && input.charAt(input.length - 1) === closing && input.length > 2 ? input.slice(1, -1) : input;
   };
-  token = unwrap(token);
+  let removedWrapper = false;
+  const first = unwrap(token);
+  if (first !== token) removedWrapper = true;
+  token = first;
   token = token.replace(/[.!?,;:]+$/u, '');
-  token = unwrap(token);
+  if (!removedWrapper) token = unwrap(token);
   if (!token || !wellFormedUtf16_(token)) return '';
   const points = Array.from(token).length;
   if (points < 1 || points > 40 || !/[\p{L}\p{N}\p{M}]/u.test(token)) return '';
-  if (/^\p{Nd}+\s*[-–—−/:]\s*\p{Nd}+$/u.test(token)) return '';
+  const numericPart = '[\\p{Nd}][\\p{Nd}.,٫٬]*';
+  if (new RegExp('^' + numericPart + '\\s*[-–—−/:]\\s*' + numericPart + '$', 'u').test(token)) return '';
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token)) return '';
-  if (/^(?:https?:|www\.|\/\/)/iu.test(token)) return '';
+  if (/^(?:[a-z][a-z\d+.-]*:|www\.|\/\/)/iu.test(token)) return '';
   if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|x{3,})$/iu.test(token)) return '';
   return token;
 }
@@ -180,9 +184,10 @@ function authenticationDiscussionClause_(clause) {
   const target = authenticationTargetPattern_();
   return new RegExp(authenticationQuestionMark_(), 'u').test(clause) ||
     /^(?:if|unless|suppose|assuming|maybe|perhaps|for\s+example|example|documentation|tutorial|according\s+to|they\s+said|it\s+was\s+reported)\b/iu.test(clause) ||
-    /^(?:question|report(?:ed)?|(?:they|we|i|the\s+system)\s+(?:said|reported|recalled|remembered|mentioned|described|referred))\s*:/iu.test(clause) ||
+    /^(?:question|report(?:ed)?|status\s+report|hypothesis|hypothetical(?:\s+scenario)?|user\s+said|(?:they|we|i|the\s+system)\s+(?:said|reported|recalled|remembered|mentioned|described|referred))\s*:/iu.test(clause) ||
     new RegExp('^(?:not|never|no|non)\\b[\\s\\S]*' + target, 'iu').test(clause) ||
     new RegExp(target + '\\s*' + authenticationAssignmentPattern_() + '\\s*(?:not|never|no|non)\\b', 'iu').test(clause) ||
+    new RegExp(target + '\\s*' + authenticationAssignmentPattern_() + '\\s*(?:pending|required|expired|invalid|used|wrong|incorrect|cancelled|canceled|obsolete|inactive|void)\\b', 'iu').test(clause) ||
     new RegExp('\\b(?:not|never|no|non|pending|required|expired|invalid|used)\\b[\\s\\S]*' + target, 'iu').test(clause) ||
     new RegExp('\\b(?:mention(?:ed|s|ing)|discuss(?:ed|es|ing)|describ(?:ed|es|ing)|refer(?:red|s|ring))\\b[\\s\\S]*' + target, 'iu').test(clause);
 }
