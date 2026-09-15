@@ -224,7 +224,7 @@ function authenticationDiscussionClause_(clause, includeGeneric) {
 }
 
 function authenticationTargetlessDiscussionClause_(clause) {
-  return /^(?:it|this|that|code|passcode|pin|codice)\s+(?:is|was|seems?|has|have|had)(?:\s+not)?\s+(?:pending|required|expired|invalid|used|wrong|incorrect|cancelled|canceled|obsolete|inactive|void)\b/iu.test(clause);
+  return /^(?:it|this|that|code|passcode|pin|codice)\s+(?:is|was|seems?|has|have|had)(?:\s+not)?\s+(?:pending|required|expired|invalid|used|wrong|incorrect|cancelled|canceled|obsolete|inactive|void|valid|accepted|active|correct|usable)\b/iu.test(clause);
 }
 
 function authenticationLikeSource_(source) {

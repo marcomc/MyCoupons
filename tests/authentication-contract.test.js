@@ -160,6 +160,12 @@ test('incomplete coverage dominates an otherwise affirmative relation', () => {
   assert.equal(result.authenticationLike, true);
 });
 
+test('targetless validity continuations remain discussion', () => {
+  const {ctx} = harness();
+  const result = admission(ctx, {text: 'Coupon code SAVE20. Your verification code is 123456. It is not valid.'});
+  assert.equal(result.kind, 'discussion');
+});
+
 test('inline quote context is scoped to authentication spans without fragmenting coupon evidence', () => {
   const {ctx} = harness();
   const quoted = admission(ctx, {html: '<p><q>Your verification code is 123456.</q></p><p>Coupon code SAVE20.</p>'});
