@@ -378,6 +378,8 @@ function checkpointAuthenticationExclusionWithRows_(sheet, journalSheet, journal
       durableKnown = true;
     } catch (ignored) {}
     const committed = durable && durable.status === 'ignored' && durable.outcome === 'authentication_code_message';
+    if (committed) return {messageId: journal.messageId, status: 'ignored',
+      rows: Array.isArray(durable.rowNumbers) ? durable.rowNumbers.slice() : [], excludedReason: 'authentication_code_message'};
     // If the journal readback is itself ambiguous, keep rows ignored: restoring
     // them could leave actionable rows while the durable state is terminal.
     if (durableKnown && !committed) {

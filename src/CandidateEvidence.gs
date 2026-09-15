@@ -96,7 +96,11 @@ function authenticationTargetNounPattern_() {
 }
 
 function authenticationTargetSearchPattern_() {
-  return '(?:^|[^\\p{L}\\p{N}\\p{M}_])(?:' + authenticationTargetPattern_() + ')(?=$|[^\\p{L}\\p{N}\\p{M}_])';
+  return authenticationWholeTokenPattern_(authenticationTargetPattern_());
+}
+
+function authenticationWholeTokenPattern_(pattern) {
+  return '(?:^|[\\s([{<\"“‘])(?:' + pattern + ')(?=$|[\\s.,;:?!)}\\]>\"”’])';
 }
 
 function authenticationAssignmentPattern_() {
@@ -141,7 +145,7 @@ function authenticationClauseParts_(text) {
   // `!` is not a boundary here: it may be part of a complete Unicode code
   // token. Unsupported punctuation/layout remains ambiguous instead of being
   // reinterpreted as a shorter value.
-  return String(text || '').split(/(?<=[.?;])(?=\s|$)|\n/u).map(function (part) {
+  return String(text || '').split(/(?<=[.?;])(?=\s|$)|[\r\n\u2028\u2029]/u).map(function (part) {
     return part.trim();
   }).filter(function (part) { return !!part; });
 }
@@ -214,7 +218,7 @@ function authenticationTargetlessDiscussionClause_(clause) {
 }
 
 function authenticationLikeSource_(source) {
-  const pattern = /(?:^|[^\p{L}\p{N}\p{M}_])(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|two[ -]?factor|verify(?:ing)?\s+(?:your|the)?\s*(?:account|email|identity)|confirm(?:ing)?\s+(?:your|the)?\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\s+(?:al\s+)?(?:tuo\s+)?account)(?=$|[^\p{L}\p{N}\p{M}_])/iu;
+  const pattern = new RegExp(authenticationWholeTokenPattern_('(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|two[ -]?factor|verify(?:ing)?\\s+(?:your|the)?\\s*(?:account|email|identity)|confirm(?:ing)?\\s+(?:your|the)?\\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\\s+(?:al\\s+)?(?:tuo\\s+)?account)'), 'iu');
   const target = new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])(?:' + authenticationTargetPattern_() +
     ')(?=$|[^\\p{L}\\p{N}\\p{M}_])', 'iu');
   return source.sourceSpans.some(function (span) {
@@ -238,9 +242,11 @@ function authenticationAdmission_(source) {
   let discussion = false;
   let discussionFrame = false;
   let issued = false;
+  let unsupported = false;
+  let forwardedHeaderFrame = 0;
   let representation = '';
   for (const span of source.sourceSpans) {
-    if (span.kind !== representation) { discussionFrame = false; representation = span.kind; }
+    if (span.kind !== representation) { discussionFrame = false; forwardedHeaderFrame = 0; representation = span.kind; }
     const clauses = authenticationClauseParts_(span.text);
     const quotedAuthentication = span.quoted && (authenticationLikeSource_({sourceSpans: [span]}) ||
       clauses.some(function (clause) {
@@ -250,6 +256,13 @@ function authenticationAdmission_(source) {
       }));
     if (quotedAuthentication) { discussion = true; continue; }
     for (const clause of clauses) {
+      if (forwardedHeaderFrame) {
+        if (forwardedHeaderFrame === 1 && /^sent\s*:/iu.test(clause)) { discussion = true; forwardedHeaderFrame = 2; continue; }
+        if (forwardedHeaderFrame === 2 && /^subject\s*:/iu.test(clause)) { discussion = true; forwardedHeaderFrame = 3; continue; }
+        if (forwardedHeaderFrame === 3) { discussion = true; forwardedHeaderFrame = 0; continue; }
+        forwardedHeaderFrame = 0;
+      }
+      if (/^from\s*:/iu.test(clause)) { discussion = true; forwardedHeaderFrame = 1; continue; }
       if (discussionFrame) {
         discussion = true;
         discussionFrame = authenticationDiscussionClause_(clause, bridge);
@@ -258,10 +271,12 @@ function authenticationAdmission_(source) {
       if (authenticationTargetlessDiscussionClause_(clause)) { discussion = true; continue; }
       if (authenticationIssuedClause_(clause, bridge)) { issued = true; continue; }
       if (span.kind !== 'subject' && authenticationGenericAssignment_(clause, bridge)) { issued = true; continue; }
-      if (authenticationDiscussionClause_(clause)) { discussion = true; discussionFrame = true; }
+      if (authenticationDiscussionClause_(clause)) { discussion = true; discussionFrame = true; continue; }
+      if (span.kind !== 'subject' && (new RegExp(authenticationTargetSearchPattern_(), 'iu').test(clause) ||
+          authenticationLikeSource_({sourceSpans: [{text: clause}]}))) unsupported = true;
     }
   }
-  return authenticationAdmissionResult_(issued && !discussion ? 'issued' : discussion ? 'discussion' : 'ambiguous', issued || authenticationLike);
+  return authenticationAdmissionResult_(issued && !discussion && !unsupported ? 'issued' : discussion ? 'discussion' : 'ambiguous', issued || authenticationLike);
 }
 
 function authenticationAdmissionForMessage_(message) {
