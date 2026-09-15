@@ -230,7 +230,7 @@ function authenticationTargetlessDiscussionClause_(clause) {
 function authenticationLikeSource_(source) {
   const sourceSpans = source && (source.authenticationSourceSpans || source.sourceSpans);
   if (!Array.isArray(sourceSpans)) return false;
-  const pattern = new RegExp(authenticationWholeTokenPattern_('(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|2[ -]?factor|two[ -]?factor|verify(?:ing)?\\s+(?:your|the)?\\s*(?:account|email|identity)|confirm(?:ing)?\\s+(?:your|the)?\\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\\s+(?:al\\s+)?(?:tuo\\s+)?account)'), 'iu');
+  const pattern = new RegExp(authenticationWholeTokenPattern_('(?:verification|authentication|security|access[ -]?code|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|2[ -]?factor|two[ -]?factor|verify(?:ing)?\\s+(?:your|the)?\\s*(?:account|email|identity)|confirm(?:ing)?\\s+(?:your|the)?\\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\\s+(?:al\\s+)?(?:tuo\\s+)?account)'), 'iu');
   const target = new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])(?:' + authenticationTargetPattern_() +
     ')(?=$|[^\\p{L}\\p{N}\\p{M}_])', 'iu');
   return sourceSpans.some(function (span) {

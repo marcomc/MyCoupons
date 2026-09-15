@@ -103,7 +103,7 @@ function htmlContent_(html) {
     const block = !suppressed && isHtml && /^(?:address|article|aside|blockquote|caption|center|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|hr|legend|li|listing|main|menu|nav|ol|p|plaintext|pre|search|section|summary|table|tbody|td|tfoot|th|thead|tr|ul|xmp)$/.test(tag);
     if (block || !suppressed && isHtml && tag === 'br') newline(block);
     if (block) stack.push({exit: 'block'});
-    if (buttonBoundary) { flushEvidence(); stack.push({exit: 'button'}); }
+    if (buttonBoundary) { flushEvidence(); flushAuthentication(); stack.push({exit: 'button'}); }
     if (activeUnmodeled || visibleInput) replacementBoundary();
     else if (suppressed && !entry.suppressed) { flushEvidence(); flushAuthentication(); }
     if (!suppressed && isHtml && tag === 'img') {

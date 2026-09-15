@@ -166,6 +166,13 @@ test('targetless validity continuations remain discussion', () => {
   assert.equal(result.kind, 'discussion');
 });
 
+test('access-code wording remains authentication-like for manual review', () => {
+  const {ctx} = harness();
+  const result = admission(ctx, {text: 'Your access code is 123456. Acme coupon code SAVE20.'});
+  assert.equal(result.kind, 'ambiguous');
+  assert.equal(result.authenticationLike, true);
+});
+
 test('inline quote context is scoped to authentication spans without fragmenting coupon evidence', () => {
   const {ctx} = harness();
   const quoted = admission(ctx, {html: '<p><q>Your verification code is 123456.</q></p><p>Coupon code SAVE20.</p>'});
@@ -174,6 +181,8 @@ test('inline quote context is scoped to authentication spans without fragmenting
   assert.equal(hidden.kind, 'issued');
   const split = admission(ctx, {html: '<p>Your verification code is <template>x</template>123456.</p>'});
   assert.equal(split.kind, 'ambiguous');
+  const button = admission(ctx, {html: '<p>Coupon code SAVE20. Your verification code is <button>123456</button></p>'});
+  assert.equal(button.kind, 'ambiguous');
 });
 
 test('complete issued authentication bypasses model and image transport', () => {
