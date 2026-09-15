@@ -202,7 +202,7 @@ function authenticationDiscussionClause_(clause, includeGeneric) {
     /^(?:can|could|would|will|do|does|did|is|are|am|have|has|please|why|how|what|when|where|who)\b[\s\S]{0,100}:\s/iu.test(clause) ||
     /^(?:this|that)\s+is\s+(?:only\s+)?(?:an?\s+)?(?:example|illustration|documentation|report)\b/iu.test(clause) ||
     /^(?:the\s+)?(?:documentation|docs?|tutorial)\s+(?:says?|shows?|states?|reads?|uses?)\s*:/iu.test(clause) ||
-    /^(?:[\p{L}\p{N}][\p{L}\p{N}._-]{0,39})\s+(?:said|reported|recalled|remembered|mentioned|described|referred)\s*:/iu.test(clause) ||
+    /^(?:(?:[\p{L}\p{N}][\p{L}\p{N}._-]{0,39})\s+){1,3}(?:said|reported|recalled|remembered|mentioned|described|referred)\s*:/iu.test(clause) ||
     /^(?:-{2,}\s*forwarded\s+message\s*-*|begin\s+forwarded\s+message)\s*:?$/iu.test(clause) ||
     /^on\s+.{1,100}\s+wrote\s*:/iu.test(clause) ||
     /^(?:question|report(?:ed)?|status\s+report|hypothesis|hypothetical(?:\s+scenario)?|user\s+said|(?:they|we|i|the\s+system)\s+(?:said|reported|recalled|remembered|mentioned|described|referred))\s*:/iu.test(clause) ||
