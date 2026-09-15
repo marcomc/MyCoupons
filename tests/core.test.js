@@ -1018,6 +1018,11 @@ test('remaining rendered blocks and non-rendered controls preserve evidence boun
   const splitInputCandidate = ctx.normalizeCandidate_({merchant: 'Shop', code: 'SAVE20', confidence: 'high', review: false,
     evidence: {merchant: {quote: 'Shop'}, code: {quote: 'SAVE20'}}}, {html: splitInput, images: [], incomplete: false});
   assert.equal(splitInputCandidate.code, ''); assert.equal(splitInputCandidate.review, true);
+  const inlineQuote = ctx.htmlContent_('<p>Use code <q>SAVE20</q> today</p>');
+  assert.ok(inlineQuote.evidenceSpans.some(function (span) { return span.includes('Use code SAVE20 today'); }));
+  assert.equal(JSON.stringify(ctx.deterministicCandidates_({text: inlineQuote.text, images: [], incomplete: false}).map(function (candidate) {
+    return candidate.code;
+  })), '["SAVE20"]');
   for (const html of [
     '<input type="hidden" value="SAVE30"><p>Shop REAL20</p>',
     '<input type="HIDDEN" value="SAVE30"><p>Shop REAL20</p>',

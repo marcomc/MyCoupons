@@ -16,10 +16,10 @@ function htmlContent_(html) {
       evidenceSpanRecords.push({text: evidence, quoted: evidenceQuoted});
     }
     evidence = '';
+    evidenceQuoted = false;
   }
   function setEvidenceContext(quoted) {
-    if (evidence && evidenceQuoted !== quoted) flushEvidence();
-    evidenceQuoted = quoted;
+    if (quoted) evidenceQuoted = true;
   }
   function newline(block) {
     if (pieces.length && !pieces[pieces.length - 1].endsWith('\n')) pieces.push('\n');

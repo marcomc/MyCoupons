@@ -127,7 +127,8 @@ function authenticationValue_(value) {
   const numericPart = '[\\p{Nd}][\\p{Nd}.,٫٬]*';
   if (new RegExp('^' + NUMERIC_SIGN_TOKEN + numericPart + '$', 'u').test(token)) return '';
   const numericRangeOrRatioSeparator = '(?:' + NUMERIC_RANGE_SEPARATOR + '|∕|⁄|∶)';
-  if (new RegExp('^' + numericPart + '\\s*' + numericRangeOrRatioSeparator + '\\s*' + numericPart + '$', 'u').test(token)) return '';
+  const signedNumericPart = '(?:' + NUMERIC_SIGN_TOKEN + ')?' + numericPart;
+  if (new RegExp('^' + signedNumericPart + '\\s*' + numericRangeOrRatioSeparator + '\\s*' + signedNumericPart + '$', 'u').test(token)) return '';
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token)) return '';
   if (/^(?:[a-z][a-z\d+.-]*:|www\.|\/\/)/iu.test(token)) return '';
   if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|this|that|it|one|same|above|below|today|yesterday|tomorrow|now|soon|later|already|successfully|immediately|here|there|ready|again|n\/?a|tbd|unknown|undefined|null|none|missing|not\s+available|not\s+applicable|x{3,})$/iu.test(token)) return '';
@@ -242,6 +243,8 @@ function authenticationAdmission_(source) {
   let discussion = false;
   let discussionFrame = false;
   let issued = false;
+  let issuedCount = 0;
+  const issuedRelations = [];
   let unsupported = false;
   let forwardedHeaderFrame = 0;
   let representation = '';
@@ -269,14 +272,33 @@ function authenticationAdmission_(source) {
         continue;
       }
       if (authenticationTargetlessDiscussionClause_(clause)) { discussion = true; continue; }
-      if (authenticationIssuedClause_(clause, bridge)) { issued = true; continue; }
-      if (span.kind !== 'subject' && authenticationGenericAssignment_(clause, bridge)) { issued = true; continue; }
+      const relationKey = clause.replace(/\s+/gu, ' ').trim().toLowerCase();
+      if (authenticationIssuedClause_(clause, bridge)) {
+        issued = true;
+        const relation = issuedRelations.find(function (item) { return item.key === relationKey; });
+        if (!relation) { issuedRelations.push({key: relationKey, kinds: [span.kind]}); issuedCount++; }
+        else if (relation.kinds.indexOf(span.kind) >= 0 ||
+            !(span.kind === 'text' || span.kind === 'html') || relation.kinds.some(function (kind) { return kind !== 'text' && kind !== 'html'; })) {
+          issuedCount++;
+        } else relation.kinds.push(span.kind);
+        continue;
+      }
+      if (span.kind !== 'subject' && authenticationGenericAssignment_(clause, bridge)) {
+        issued = true;
+        const relation = issuedRelations.find(function (item) { return item.key === relationKey; });
+        if (!relation) { issuedRelations.push({key: relationKey, kinds: [span.kind]}); issuedCount++; }
+        else if (relation.kinds.indexOf(span.kind) >= 0 ||
+            !(span.kind === 'text' || span.kind === 'html') || relation.kinds.some(function (kind) { return kind !== 'text' && kind !== 'html'; })) {
+          issuedCount++;
+        } else relation.kinds.push(span.kind);
+        continue;
+      }
       if (authenticationDiscussionClause_(clause)) { discussion = true; discussionFrame = true; continue; }
       if (new RegExp(authenticationTargetSearchPattern_(), 'iu').test(clause) ||
           (!authenticationSubjectPurpose_(clause) && authenticationLikeSource_({sourceSpans: [{text: clause}]}))) unsupported = true;
     }
   }
-  return authenticationAdmissionResult_(issued && !discussion && !unsupported ? 'issued' : discussion ? 'discussion' : 'ambiguous', issued || authenticationLike);
+  return authenticationAdmissionResult_(issued && issuedCount === 1 && !discussion && !unsupported ? 'issued' : discussion ? 'discussion' : 'ambiguous', issued || authenticationLike);
 }
 
 function authenticationAdmissionForMessage_(message) {
