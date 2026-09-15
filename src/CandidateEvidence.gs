@@ -37,6 +37,7 @@ function candidateSource_(message) {
   return {spans: sourceSpans.map(function (span) { return span.text; }),
     sourceSpans: sourceSpans,
     evidenceSpans: sourceSpans.map(function (span) { return span.text; }),
+    rawHtml: htmlInput || '',
     sender: sender || '',
     images: images,
     incomplete: incomplete !== false || html.incomplete ||
@@ -120,7 +121,8 @@ function authenticationValue_(value) {
   if (new RegExp('^' + numericPart + '\\s*[-–—−/:∕⁄]\\s*' + numericPart + '$', 'u').test(token)) return '';
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token)) return '';
   if (/^(?:[a-z][a-z\d+.-]*:|www\.|\/\/)/iu.test(token)) return '';
-  if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|today|yesterday|tomorrow|now|soon|later|already|successfully|immediately|here|there|x{3,})$/iu.test(token)) return '';
+  if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|this|that|it|one|same|above|below|today|yesterday|tomorrow|now|soon|later|already|successfully|immediately|here|there|x{3,})$/iu.test(token)) return '';
+  if (/^(?:[a-z\d](?:[a-z\d-]{0,62}\.)+[a-z]{2,})(?:[/?#:].*)?$/iu.test(token) || /^(?:\/|\.{1,2}\/|#|\?)/u.test(token)) return '';
   return token;
 }
 
@@ -216,6 +218,9 @@ function authenticationAdmission_(source) {
     if (!span || typeof span.text !== 'string') return authenticationAdmissionResult_('incomplete');
     total += span.text.length;
     if (total > MC_AUTHENTICATION_SOURCE_LIMIT) return authenticationAdmissionResult_('incomplete', authenticationLike);
+  }
+  if (authenticationLike && /<(?:blockquote|q)\b/iu.test(source.rawHtml || '')) {
+    return authenticationAdmissionResult_('discussion', true);
   }
   const subject = source.sourceSpans.find(function (span) { return span && span.kind === 'subject'; });
   const bridge = !!(subject && authenticationSubjectPurpose_(subject.text));
