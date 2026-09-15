@@ -160,6 +160,14 @@ test('incomplete coverage dominates an otherwise affirmative relation', () => {
   assert.equal(result.authenticationLike, true);
 });
 
+test('inline quote context is scoped to authentication spans without fragmenting coupon evidence', () => {
+  const {ctx} = harness();
+  const quoted = admission(ctx, {html: '<p><q>Your verification code is 123456.</q></p><p>Coupon code SAVE20.</p>'});
+  assert.equal(quoted.kind, 'discussion');
+  const hidden = admission(ctx, {html: '<template><q>Your verification code is 123456.</q></template><p>Your verification code is 123456.</p>'});
+  assert.equal(hidden.kind, 'issued');
+});
+
 test('complete issued authentication bypasses model and image transport', () => {
   const {ctx} = harness();
   let modelCalls = 0;

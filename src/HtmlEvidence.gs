@@ -4,8 +4,11 @@ function htmlContent_(html) {
   const pieces = [];
   const evidenceSpans = [];
   const evidenceSpanRecords = [];
+  const authenticationSpans = [];
   let evidence = '';
   let evidenceQuoted = false;
+  let authenticationEvidence = '';
+  let authenticationQuoted = false;
   const images = [];
   let incomplete = false;
   let activeImageCount = 0;
@@ -21,41 +24,56 @@ function htmlContent_(html) {
   function setEvidenceContext(quoted) {
     if (quoted) evidenceQuoted = true;
   }
+  function flushAuthentication() {
+    if (authenticationEvidence) authenticationSpans.push({text: authenticationEvidence, quoted: authenticationQuoted});
+    authenticationEvidence = '';
+    authenticationQuoted = false;
+  }
+  function setAuthenticationContext(quoted) {
+    if (authenticationEvidence && authenticationQuoted !== quoted) flushAuthentication();
+    authenticationQuoted = quoted;
+  }
   function newline(block) {
     if (pieces.length && !pieces[pieces.length - 1].endsWith('\n')) pieces.push('\n');
     pendingImageBoundary = false;
     if (block) {
       flushEvidence();
+      flushAuthentication();
     } else if (evidence && !evidence.endsWith('\n')) evidence += '\n';
   }
   function replacementBoundary() {
     flushEvidence();
+    flushAuthentication();
     pendingImageBoundary = pendingImageBoundary || pieces.length && !pieces[pieces.length - 1].endsWith('\n');
   }
   function appendProjectedText(value) {
     if (pendingImageBoundary) { pieces.push('\n'); pendingImageBoundary = false; }
-    pieces.push(value); evidence += value;
+    pieces.push(value); evidence += value; authenticationEvidence += value;
   }
   while (stack.length) {
     const entry = stack.pop();
     if (entry.exit) {
       if (entry.exit === 'block') newline(true);
-      else flushEvidence();
+      else { flushEvidence(); flushAuthentication(); }
       continue;
     }
     const node = entry.node;
     if (node.nodeName === '#text') {
-      setEvidenceContext(!!entry.quoted);
-      if (!entry.suppressed && node.value) appendProjectedText(node.value);
+      if (!entry.suppressed && node.value) {
+        setEvidenceContext(!!entry.quoted);
+        setAuthenticationContext(!!entry.quoted || !!entry.inlineQuoted);
+        appendProjectedText(node.value);
+      }
       continue;
     }
     if (node.nodeName === '#comment') {
-      if (!entry.suppressed) flushEvidence();
+      if (!entry.suppressed) { flushEvidence(); flushAuthentication(); }
       continue;
     }
     const tag = node.tagName || '';
     const isHtml = node.namespaceURI === 'http://www.w3.org/1999/xhtml';
-    const quoted = !!entry.quoted || isHtml && /^(?:blockquote|q)$/.test(tag);
+    const quoted = !!entry.quoted || isHtml && tag === 'blockquote';
+    const inlineQuoted = !!entry.inlineQuoted || isHtml && tag === 'q';
     const foreign = Boolean(tag && !isHtml);
     if (foreign) incomplete = true;
     const nodeAttrs = node.attrs || [];
@@ -100,8 +118,10 @@ function htmlContent_(html) {
       const alt = nodeAttrs.find(function (attr) { return attr.name === 'alt'; });
       if (!hasSrc && alt && /\S/u.test(String(alt.value))) {
         setEvidenceContext(quoted);
+        setAuthenticationContext(quoted || inlineQuoted);
         appendProjectedText(alt.value);
         flushEvidence();
+        flushAuthentication();
         pendingImageBoundary = pieces.length && !pieces[pieces.length - 1].endsWith('\n');
       }
     }
@@ -116,12 +136,14 @@ function htmlContent_(html) {
       }
     }
     for (let i = children.length - 1; i >= 0; i--) {
-      stack.push({node: children[i], suppressed: suppressed || closedDetails && children[i] !== visibleSummary, quoted: quoted});
+      stack.push({node: children[i], suppressed: suppressed || closedDetails && children[i] !== visibleSummary,
+        quoted: quoted, inlineQuoted: inlineQuoted});
     }
   }
   flushEvidence();
-  return {text: pieces.join(''), evidenceSpans: evidenceSpans, evidenceSpanRecords: evidenceSpanRecords, images: images,
-    activeImageCount: activeImageCount, incomplete: incomplete};
+  flushAuthentication();
+  return {text: pieces.join(''), evidenceSpans: evidenceSpans, evidenceSpanRecords: evidenceSpanRecords,
+    authenticationSpans: authenticationSpans, images: images, activeImageCount: activeImageCount, incomplete: incomplete};
 }
 function htmlText_(html) {
   return htmlContent_(html).text;

@@ -25,18 +25,27 @@ function candidateSource_(message) {
   if (text !== undefined && typeof text !== 'string' || htmlInput !== undefined && typeof htmlInput !== 'string' ||
     subject !== undefined && typeof subject !== 'string' || sender !== undefined && typeof sender !== 'string' ||
     suppliedImages !== undefined && !Array.isArray(suppliedImages)) fail_('AI');
-  const html = htmlInput === undefined ? {text: '', evidenceSpans: [], activeImageCount: 0, incomplete: false} : htmlContent_(htmlInput);
+  const html = htmlInput === undefined ? {text: '', evidenceSpans: [], authenticationSpans: [], activeImageCount: 0, incomplete: false} : htmlContent_(htmlInput);
   const images = suppliedImages === undefined ? [] : suppliedImages;
   const incomplete = ownEnumerableDataValue_(message, 'incomplete');
   // Sender is provenance metadata, never factual offer evidence. Subject is an
   // independent source span so its tokens cannot be joined to body/HTML spans.
   const sourceSpans = [];
+  const authenticationSourceSpans = [];
   if (subject) sourceSpans.push({kind: 'subject', text: subject});
   if (text) sourceSpans.push({kind: 'text', text: text});
+  if (subject) authenticationSourceSpans.push({kind: 'subject', text: subject});
+  if (text) authenticationSourceSpans.push({kind: 'text', text: text});
   const htmlSpans = html.evidenceSpanRecords || html.evidenceSpans.map(function (span) { return {text: span, quoted: false}; });
+  const authenticationHtmlSpans = html.authenticationSpans || htmlSpans;
   htmlSpans.forEach(function (span) { if (span && span.text) sourceSpans.push({kind: 'html', text: span.text, quoted: !!span.quoted}); });
+  authenticationHtmlSpans.forEach(function (span) {
+    if (span && span.text) authenticationSourceSpans.push({kind: 'html', text: span.text, quoted: !!span.quoted});
+  });
   return {spans: sourceSpans.map(function (span) { return span.text; }),
     sourceSpans: sourceSpans,
+    authenticationSpans: authenticationSourceSpans.map(function (span) { return span.text; }),
+    authenticationSourceSpans: authenticationSourceSpans,
     evidenceSpans: sourceSpans.map(function (span) { return span.text; }),
     sender: sender || '',
     images: images,
@@ -219,26 +228,30 @@ function authenticationTargetlessDiscussionClause_(clause) {
 }
 
 function authenticationLikeSource_(source) {
+  const sourceSpans = source && (source.authenticationSourceSpans || source.sourceSpans);
+  if (!Array.isArray(sourceSpans)) return false;
   const pattern = new RegExp(authenticationWholeTokenPattern_('(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|2[ -]?factor|two[ -]?factor|verify(?:ing)?\\s+(?:your|the)?\\s*(?:account|email|identity)|confirm(?:ing)?\\s+(?:your|the)?\\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\\s+(?:al\\s+)?(?:tuo\\s+)?account)'), 'iu');
   const target = new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])(?:' + authenticationTargetPattern_() +
     ')(?=$|[^\\p{L}\\p{N}\\p{M}_])', 'iu');
-  return source.sourceSpans.some(function (span) {
+  return sourceSpans.some(function (span) {
     return span && typeof span.text === 'string' && (pattern.test(span.text) || target.test(span.text));
   });
 }
 
 function authenticationAdmission_(source) {
-  if (!source || !Array.isArray(source.sourceSpans) || !Array.isArray(source.spans)) return authenticationAdmissionResult_('incomplete');
-  if (!MC_AUTHENTICATION_ADMISSION_KINDS.length || source.sourceSpans.length !== source.spans.length) return authenticationAdmissionResult_('incomplete');
+  const sourceSpans = source && (source.authenticationSourceSpans || source.sourceSpans);
+  const sourceTexts = source && (source.authenticationSpans || source.spans);
+  if (!source || !Array.isArray(sourceSpans) || !Array.isArray(sourceTexts)) return authenticationAdmissionResult_('incomplete');
+  if (!MC_AUTHENTICATION_ADMISSION_KINDS.length || sourceSpans.length !== sourceTexts.length) return authenticationAdmissionResult_('incomplete');
   const authenticationLike = authenticationLikeSource_(source);
   if (source.incomplete) return authenticationAdmissionResult_('incomplete', authenticationLike);
   let total = 0;
-  for (const span of source.sourceSpans) {
+  for (const span of sourceSpans) {
     if (!span || typeof span.text !== 'string') return authenticationAdmissionResult_('incomplete');
     total += span.text.length;
     if (total > MC_AUTHENTICATION_SOURCE_LIMIT) return authenticationAdmissionResult_('incomplete', authenticationLike);
   }
-  const subject = source.sourceSpans.find(function (span) { return span && span.kind === 'subject'; });
+  const subject = sourceSpans.find(function (span) { return span && span.kind === 'subject'; });
   const bridge = !!(subject && authenticationSubjectPurpose_(subject.text));
   let discussion = false;
   let discussionFrame = false;
@@ -248,7 +261,7 @@ function authenticationAdmission_(source) {
   let unsupported = false;
   let forwardedHeaderFrame = 0;
   let representation = '';
-  for (const span of source.sourceSpans) {
+  for (const span of sourceSpans) {
     if (span.kind !== representation) { discussionFrame = false; forwardedHeaderFrame = 0; representation = span.kind; }
     const clauses = authenticationClauseParts_(span.text);
     const quotedAuthentication = span.quoted && (authenticationLikeSource_({sourceSpans: [span]}) ||
