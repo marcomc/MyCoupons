@@ -69,10 +69,12 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'Your verification code is 1,000-2,000.'}],
     ['ambiguous', {text: 'Your verification code is 12.3/45.6.'}],
     ['ambiguous', {text: 'Your verification code is ' + 'A'.repeat(40) + '!'}],
+    ['ambiguous', {text: 'Your verification code is −123.'}],
     ['ambiguous', {text: 'Your verification code is [[' + 'A'.repeat(40) + ']].'}],
     ['ambiguous', {text: 'Your verification code is ftp://example.com/code.'}],
     ['ambiguous', {text: 'Your verification code is tel:+15551234567.'}],
-    ['discussion', {text: 'Your verification code is 123456？'}]
+    ['discussion', {text: 'Your verification code is 123456？'}],
+    ['discussion', {text: 'Your verification code is 123456⁉'}]
   ];
   cases.forEach(([kind, message]) => {
     const result = admission(ctx, message);
@@ -164,4 +166,25 @@ test('workflow checkpoints exclusion without rows or Gmail mutation', () => {
   assert.equal(saved.outcome, 'authentication_code_message');
   assert.equal(saved.archived, false);
   assert.equal(saved.labelApplied, false);
+});
+
+test('existing archive intent is rechecked before any Gmail mutation', () => {
+  const {ctx, config} = harness();
+  const journal = journalSheet();
+  const coupon = journalSheet();
+  const mutations = [];
+  const prior = Object.assign(ctx.newMessageState_('abc123'), {
+    version: 2, status: 'failed', candidateKeys: ['candidate-key'], rowNumbers: [2],
+    dedupeKeys: ['candidate-key'], failureStage: 'mail', outcome: 'archive'
+  });
+  journal._rows.push(['abc123', JSON.stringify(prior)]);
+  ctx.Gmail.Users.Messages = {modify: body => { mutations.push(body); throw new Error('Gmail must not mutate'); }};
+  const result = ctx.runImportWorkflow_({config, couponSheet: coupon, journalSheet: journal,
+    messages: [{id: 'abc123', receivedAtMs: 0, subject: 'Sign in to Acme', sender: 'acme@example.com',
+      link: 'https://mail.google.com/mail/#all/abc123', text: 'Your code is 123456.', html: '', incomplete: false}]});
+  assert.equal(result.messages[0].status, 'ignored');
+  assert.deepEqual(mutations, []);
+  const saved = ctx.getMessageState_(journal, 'abc123');
+  assert.equal(saved.outcome, 'authentication_code_message');
+  assert.equal(saved.archived, false);
 });

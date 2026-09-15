@@ -41,6 +41,9 @@ function runImportWorkflowInSession_(state) {
 function processCouponMessage_(state, message) {
   if (!message || typeof message.id !== 'string' || !validGmailApiId_(message.id)) fail_('MAIL');
   const existing = getMessageState_(state.journalSheet, message.id);
+  if (existing && authenticationAdmission_(candidateSource_(message)).kind === 'issued') {
+    return checkpointAuthenticationExclusion_(state.journalSheet, existing);
+  }
   if (legacyMailReviewBatch_(existing)) {
     reconcileCandidateRows_(state.couponSheet, existing);
     existing.status = 'review'; existing.failureStage = ''; existing.lastError = ''; existing.nextRetryAt = '';
