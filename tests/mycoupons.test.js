@@ -40,6 +40,7 @@ function createRuntime({
     'Status',
   ],
   existingRows = [],
+  existingFormulas = [],
   corruptLastWrite = false,
   corruptLastWriteColumns = [],
   coerceLastWrite = false,
@@ -49,6 +50,7 @@ function createRuntime({
   fetchFailureAfter = null,
   listFailureAfter = null,
   listPageSize = 100,
+  missingMessageIds = [],
   now = new Date('2026-01-11T10:00:00.000Z'),
   labels = [{id: 'Label_Imported', name: 'Coupon Code Discount'}],
   listedMessageIds = messages.map(value => value.id),
@@ -59,7 +61,8 @@ function createRuntime({
 } = {}) {
   let clock = now;
   const values = [headers, ...existingRows];
-  const formulas = values.map(row => row.map(() => ''));
+  const formulas = values.map((row, index) => index > 0 && existingFormulas[index - 1] ?
+    [...existingFormulas[index - 1]] : row.map(() => ''));
   const mutations = [];
   const trashed = [];
   const queries = [];
@@ -90,7 +93,10 @@ function createRuntime({
 
   const sheet = {
     getDataRange() {
-      return {getValues: () => values.map(row => [...row])};
+      return {
+        getValues: () => values.map(row => [...row]),
+        getFormulas: () => formulas.map(row => [...row]),
+      };
     },
     getLastColumn: () => headers.length,
     getLastRow: () => values.length,
@@ -173,6 +179,9 @@ function createRuntime({
         Messages: {
           get: (userId, id) => {
             assert.equal(userId, 'me');
+            if (missingMessageIds.includes(id)) {
+              throw {code: 404, message: 'Requested entity was not found.'};
+            }
             if (fetchFailureAfter !== null && getMessageCount >= fetchFailureAfter) {
               throw new Error("Quota exceeded for quota metric 'Total Query Cost'.");
             }
@@ -394,7 +403,7 @@ test('preserves the 26-column legacy sheet layout and writes legacy aliases at t
   assert.equal(row.length, 26);
   assert.equal(row[4], 'SAVE20');
   assert.equal(row[5], 'Your coupon');
-  assert.equal(row[13], 'https://mail.google.com/mail/u/0/#all/legacy-message');
+  assert.equal(row[13], 'https://mail.google.com/mail/u/?authuser=owner%40example.com#all/legacy-message');
   assert.equal(row[20], 'legacy-message::SAVE20');
   assert.equal(row[21], 'imported');
   assert.equal(row[25], '');
@@ -426,6 +435,8 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'available-prose', body: 'Coupon code: available after signup'}),
     message({id: 'expires-prose', body: 'Coupon code: expires tomorrow'}),
     message({id: 'click-prose', body: 'Promo code: click here'}),
+    message({id: 'percentage-discount', body: 'Coupon code: 20% off'}),
+    message({id: 'currency-discount', body: 'Coupon code: $20 off'}),
     message({id: 'uppercase-prose', body: 'Coupon code: FREE shipping'}),
     message({id: 'ambiguous-punctuation', body: 'Coupon code: SAVE20.'}),
     message({
@@ -492,7 +503,7 @@ test('deduplicates a previous verified row and repairs its missing Gmail mutatio
       '2026-01-10T08:00:00.000Z', 'SAVE20', 'Earlier', 'offers@example.com',
       'https://mail.google.com/mail/u/0/#all/message-1', 'message-1::SAVE20', 'imported',
     ]],
-    messages: [message({id: 'message-1', body: 'Coupon code: SAVE20'})],
+    messages: [message({id: 'message-1', subject: 'Earlier', body: 'Coupon code: SAVE20'})],
   });
 
   const outcome = runtime.context.runMyCouponsImport();
@@ -502,6 +513,36 @@ test('deduplicates a previous verified row and repairs its missing Gmail mutatio
   assert.equal(runtime.mutations.length, 1);
   assert.equal(runtime.mutations[0].id, 'message-1');
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK'), '2026-01-11T10:00:00.000Z');
+});
+
+test('requires all existing deduplicated fields and formulas before repairing Gmail mutation', () => {
+  const base = [
+    '2026-01-10T08:00:00.000Z', 'SAVE20', 'Earlier', 'offers@example.com',
+    'https://mail.google.com/mail/u/?authuser=owner%40example.com#all/message-1', 'message-1::SAVE20', 'imported',
+  ];
+  for (const altered of [0, 2, 3, 6]) {
+    const row = [...base];
+    row[altered] = 'altered';
+    const runtime = createRuntime({
+      existingRows: [row],
+      messages: [message({id: 'message-1', subject: 'Earlier', body: 'Coupon code: SAVE20'})],
+    });
+    assert.throws(() => runtime.context.runMyCouponsImport(), /complete message and code identity/i);
+    assert.equal(runtime.mutations.length, 0);
+  }
+  const runtime = createRuntime({
+    existingRows: [base],
+    existingFormulas: [['', '', '', '', '', '', '=FORMULA']],
+    messages: [message({id: 'message-1', subject: 'Earlier', body: 'Coupon code: SAVE20'})],
+  });
+  assert.throws(() => runtime.context.runMyCouponsImport(), /complete message and code identity/i);
+  assert.equal(runtime.mutations.length, 0);
+});
+
+test('writes owner-stable Gmail links while accepting exact legacy u/0 rows for migration', () => {
+  const runtime = createRuntime({messages: [message({id: 'new-link', body: 'Coupon code: SAVE20'})]});
+  runtime.context.runMyCouponsImport();
+  assert.equal(runtime.rows[1][4], 'https://mail.google.com/mail/u/?authuser=owner%40example.com#all/new-link');
 });
 
 test('fails closed when an existing dedupe key does not prove its code and Gmail link identity', () => {
@@ -645,6 +686,43 @@ test('processes only exact message IDs returned by Gmail search, never unlisted 
   assert.equal(outcome.imported, 1);
   assert.equal(runtime.rows[1][1], 'LISTED20');
   assert.equal(runtime.mutations[0].id, 'listed-message');
+});
+
+test('leaves messages before initialDate and resumed spam/trash messages untouched', () => {
+  const runtime = createRuntime({
+    fetchFailureAfter: 0,
+    messages: [
+      message({id: 'before-initial', date: new Date('2025-12-31T23:59:59.500Z'), body: 'Coupon code: BEFORE20'}),
+      message({id: 'spam-pending', body: 'Coupon code: SPAM20', labels: ['SPAM']}),
+      message({id: 'trash-pending', body: 'Coupon code: TRASH20', labels: ['TRASH']}),
+    ],
+  });
+  const first = runtime.context.runMyCouponsImport();
+  assert.equal(first.complete, false);
+  runtime.setFetchFailureAfter(null);
+  const resumed = runtime.context.runMyCouponsImport();
+  assert.equal(resumed.complete, true);
+  assert.equal(runtime.rows.length, 1);
+  assert.equal(runtime.mutations.length, 0);
+});
+
+test('drops only exact not-found pending message IDs and resumes the scan', () => {
+  const runtime = createRuntime({
+    fetchFailureAfter: 0,
+    missingMessageIds: ['deleted'],
+    messages: [
+      message({id: 'deleted', body: 'Coupon code: GONE20'}),
+      message({id: 'surviving', body: 'Coupon code: LIVE20'}),
+    ],
+  });
+  const first = runtime.context.runMyCouponsImport();
+  assert.equal(first.complete, false);
+  runtime.setFetchFailureAfter(null);
+  const resumed = runtime.context.runMyCouponsImport();
+  assert.equal(resumed.complete, true);
+  assert.equal(resumed.imported, 1);
+  assert.equal(runtime.rows[1][1], 'LIVE20');
+  assert.equal(runtime.properties.has('MYCOUPONS_SCAN_STATE'), false);
 });
 
 test('rejects every mutating entrypoint when the Gmail profile is not the configured owner', () => {

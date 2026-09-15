@@ -123,7 +123,7 @@ function getMyCouponsInstallationStatus() {
   var config = getMyCouponsConfig_();
   assertMyCouponsOwner_(config);
   resolveImportedLabel_(config);
-  readCouponSheetState_(resolveCouponSheet_(config));
+  readCouponSheetState_(resolveCouponSheet_(config), config);
   var matching = ScriptApp.getProjectTriggers().filter(function(trigger) {
     return trigger.getHandlerFunction() === 'runMyCouponsDaily';
   });
@@ -136,27 +136,29 @@ function getMyCouponsInstallationStatus() {
 function runMyCouponsImport_(config) {
   var label = resolveImportedLabel_(config);
   var sheet = resolveCouponSheet_(config);
-  var sheetState = readCouponSheetState_(sheet);
+  var sheetState = readCouponSheetState_(sheet, config);
   var scan = loadOrStartScanState_(config, new Date());
   var imported = 0;
   var scanned = 0;
 
   function processMessage_(message) {
     scanned += 1;
-    if (messageHasLabel_(message, label.id)) {
+    if (message.date.getTime() < config.initialDate.getTime() || messageHasLabel_(message, label.id) ||
+        messageHasSystemExclusionLabel_(message)) {
       return;
     }
     var hasVerifiedCode = false;
     extractCouponCodes_(message.subject, message.plainText).forEach(function(code) {
       var deduplicationKey = message.id + '::' + code;
       if (sheetState.deduplicationRecords[deduplicationKey]) {
-        if (!sheetState.deduplicationRecords[deduplicationKey].valid) {
-          throw new Error('Existing coupon deduplication row does not prove its message and code identity.');
+        if (!verifiedExistingCouponRow_(sheetState.deduplicationRecords[deduplicationKey], message, code,
+          sheetState.columns, config)) {
+          throw new Error('Existing coupon deduplication row does not prove its complete message and code identity.');
         }
         hasVerifiedCode = true;
         return;
       }
-      var row = makeCouponRow_(sheetState.columns, sheetState.columnCount, message, code, deduplicationKey);
+      var row = makeCouponRow_(sheetState.columns, sheetState.columnCount, message, code, deduplicationKey, config);
       appendAndVerifyCouponRow_(sheet, row, sheetState.columns, deduplicationKey);
       sheetState.deduplicationRecords[deduplicationKey] = {valid: true};
       hasVerifiedCode = true;
@@ -177,6 +179,11 @@ function runMyCouponsImport_(config) {
         if (isGmailRateLimitError_(error)) {
           saveScanState_(scan);
           return {complete: false, imported: imported, scanned: scanned, watermark: null};
+        }
+        if (isExactGmailMessageNotFound_(error)) {
+          scan.pendingIds.shift();
+          saveScanState_(scan);
+          continue;
         }
         throw error;
       }
@@ -323,23 +330,21 @@ function resolveCouponSheet_(config) {
   return sheet;
 }
 
-function readCouponSheetState_(sheet) {
+function readCouponSheetState_(sheet, config) {
   var values = sheet.getDataRange().getValues();
+  var formulas = sheet.getDataRange().getFormulas();
   if (!values.length || !values[0].length) {
     throw new Error('Coupon sheet must contain its existing header row.');
   }
   var columns = resolveCouponColumns_(values[0]);
   var deduplicationRecords = {};
-  values.slice(1).forEach(function(row) {
+  values.slice(1).forEach(function(row, index) {
     var key = sheetSemanticText_(row[columns.deduplicationKey]);
     if (key) {
-      var parsedKey = parseDeduplicationKey_(key);
-      var valid = parsedKey !== null && sheetSemanticText_(row[columns.couponCode]) === parsedKey.code &&
-        sheetSemanticText_(row[columns.gmailLink]) === gmailLinkForMessage_(parsedKey.messageId);
       if (Object.prototype.hasOwnProperty.call(deduplicationRecords, key)) {
         throw new Error('Coupon sheet contains a duplicate deduplication key.');
       }
-      deduplicationRecords[key] = {valid: valid};
+      deduplicationRecords[key] = {row: row, formulas: formulas[index + 1]};
     }
   });
   return {columnCount: values[0].length, columns: columns, deduplicationRecords: deduplicationRecords};
@@ -373,19 +378,24 @@ function resolveCouponColumns_(headers) {
   return columns;
 }
 
-function makeCouponRow_(columns, columnCount, message, code, deduplicationKey) {
+function makeCouponRow_(columns, columnCount, message, code, deduplicationKey, config) {
   var row = Array(columnCount).fill('');
   row[columns.emailDate] = message.date.toISOString();
   row[columns.couponCode] = asSheetLiteral_(code);
   row[columns.sourceSubject] = asSheetLiteral_(message.subject);
   row[columns.sender] = asSheetLiteral_(message.from);
-  row[columns.gmailLink] = asSheetLiteral_(gmailLinkForMessage_(message.id));
+  row[columns.gmailLink] = asSheetLiteral_(gmailLinkForMessage_(message.id, config));
   row[columns.deduplicationKey] = asSheetLiteral_(deduplicationKey);
   row[columns.status] = 'imported';
   return row;
 }
 
-function gmailLinkForMessage_(messageId) {
+function gmailLinkForMessage_(messageId, config) {
+  return 'https://mail.google.com/mail/u/?authuser=' + encodeURIComponent(config.ownerEmail) +
+    '#all/' + encodeURIComponent(messageId);
+}
+
+function legacyGmailLinkForMessage_(messageId) {
   return 'https://mail.google.com/mail/u/0/#all/' + encodeURIComponent(messageId);
 }
 
@@ -408,15 +418,7 @@ function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
   range.setValues([row]);
   var written = range.getValues()[0];
   var formulas = range.getFormulas()[0];
-  if (sheetSemanticText_(written[columns.deduplicationKey]) !== deduplicationKey ||
-      sheetSemanticText_(written[columns.emailDate]) !== sheetSemanticText_(row[columns.emailDate]) ||
-      sheetSemanticText_(written[columns.couponCode]) !== sheetSemanticText_(row[columns.couponCode]) ||
-      sheetSemanticText_(written[columns.gmailLink]) !== gmailLinkForStoredRow_(row, columns) ||
-      sheetSemanticText_(written[columns.sourceSubject]) !== sheetSemanticText_(row[columns.sourceSubject]) ||
-      sheetSemanticText_(written[columns.sender]) !== sheetSemanticText_(row[columns.sender]) ||
-      sheetSemanticText_(written[columns.status]) !== sheetSemanticText_(row[columns.status]) ||
-      formulas[columns.deduplicationKey] || formulas[columns.emailDate] || formulas[columns.couponCode] ||
-      formulas[columns.gmailLink] || formulas[columns.sourceSubject] || formulas[columns.sender] || formulas[columns.status]) {
+  if (!verifiedCouponRow_(written, formulas, row, columns, deduplicationKey, null)) {
     throw new Error('Coupon row verification failed before Gmail mutation.');
   }
 }
@@ -426,8 +428,30 @@ function populatedCouponColumns_(columns) {
     columns.gmailLink, columns.deduplicationKey, columns.status];
 }
 
-function gmailLinkForStoredRow_(row, columns) {
-  return sheetSemanticText_(row[columns.gmailLink]);
+function verifiedExistingCouponRow_(record, message, code, columns, config) {
+  if (!record || !Array.isArray(record.row) || !Array.isArray(record.formulas)) {
+    return false;
+  }
+  var deduplicationKey = message.id + '::' + code;
+  var expected = makeCouponRow_(columns, record.row.length, message, code, deduplicationKey, config);
+  return verifiedCouponRow_(record.row, record.formulas, expected, columns, deduplicationKey,
+    legacyGmailLinkForMessage_(message.id));
+}
+
+function verifiedCouponRow_(written, formulas, expected, columns, deduplicationKey, legacyGmailLink) {
+  if (!Array.isArray(written) || !Array.isArray(formulas) ||
+      sheetSemanticText_(written[columns.deduplicationKey]) !== deduplicationKey ||
+      sheetSemanticText_(written[columns.emailDate]) !== sheetSemanticText_(expected[columns.emailDate]) ||
+      sheetSemanticText_(written[columns.couponCode]) !== sheetSemanticText_(expected[columns.couponCode]) ||
+      sheetSemanticText_(written[columns.sourceSubject]) !== sheetSemanticText_(expected[columns.sourceSubject]) ||
+      sheetSemanticText_(written[columns.sender]) !== sheetSemanticText_(expected[columns.sender]) ||
+      sheetSemanticText_(written[columns.status]) !== sheetSemanticText_(expected[columns.status]) ||
+      formulas[columns.deduplicationKey] || formulas[columns.emailDate] || formulas[columns.couponCode] ||
+      formulas[columns.gmailLink] || formulas[columns.sourceSubject] || formulas[columns.sender] || formulas[columns.status]) {
+    return false;
+  }
+  var storedLink = sheetSemanticText_(written[columns.gmailLink]);
+  return storedLink === sheetSemanticText_(expected[columns.gmailLink]) || legacyGmailLink && storedLink === legacyGmailLink;
 }
 
 function mutateImportedMessage_(messageId, labelId, archiveImported) {
@@ -559,6 +583,12 @@ function isGmailRateLimitError_(error) {
   return error && /(?:quota exceeded|rate limit|user-rate limit)/iu.test(String(error.message || error));
 }
 
+function isExactGmailMessageNotFound_(error) {
+  var message = String(error && error.message || '');
+  return message === 'Requested entity was not found.' ||
+    message === 'API call to gmail.users.messages.get failed with error: Requested entity was not found.';
+}
+
 function toMyCouponsMessage_(message) {
   if (!message || typeof message.id !== 'string' || !message.payload) {
     throw new Error('Gmail returned an incomplete message.');
@@ -627,6 +657,10 @@ function messageHasLabel_(message, labelId) {
   return message.labelIds.indexOf(labelId) !== -1;
 }
 
+function messageHasSystemExclusionLabel_(message) {
+  return message.labelIds.indexOf('SPAM') !== -1 || message.labelIds.indexOf('TRASH') !== -1;
+}
+
 function extractCouponCodes_(subject, plainText) {
   var content = [subject || '', plainText || ''];
   if (content.some(function(text) {
@@ -667,6 +701,9 @@ function acceptCouponToken_(token, quoted, hasFollowingWord) {
     return null;
   }
   if (!quoted && /[.!?,;:]$/u.test(token)) {
+    return null;
+  }
+  if (!quoted && /^(?:[$€£¥]\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?[%‰])$/u.test(token)) {
     return null;
   }
   if (!quoted && !/[\p{N}\p{P}\p{S}]/u.test(token) && (token === token.toLowerCase() || hasFollowingWord)) {
