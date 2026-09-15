@@ -2,7 +2,7 @@ var MYCOUPONS_CONFIG_PROPERTY = 'MYCOUPONS_CONFIG';
 var MYCOUPONS_WATERMARK_PROPERTY = 'MYCOUPONS_WATERMARK';
 var MYCOUPONS_WATERMARK_IDENTITY_PROPERTY = 'MYCOUPONS_WATERMARK_TARGET_IDENTITY';
 var MYCOUPONS_SCAN_STATE_PROPERTY = 'MYCOUPONS_SCAN_STATE';
-var MYCOUPONS_SCAN_STATE_VERSION = 1;
+var MYCOUPONS_SCAN_STATE_VERSION = 2;
 var MYCOUPONS_DAILY_SCHEDULE_PROPERTY = 'MYCOUPONS_DAILY_SCHEDULE';
 var MYCOUPONS_DAILY_SCHEDULE_VERSION = 1;
 var MYCOUPONS_DAILY_HANDLER = 'runMyCouponsDaily';
@@ -150,7 +150,7 @@ function runMyCouponsImport_(config) {
   var label = resolveImportedLabel_(config);
   var sheet = resolveCouponSheet_(config);
   var sheetState = readCouponSheetState_(sheet, config);
-  var scan = loadOrStartScanState_(config, new Date());
+  var scan = loadOrStartScanState_(config, label.id, new Date());
   var imported = 0;
   var scanned = 0;
 
@@ -209,7 +209,7 @@ function runMyCouponsImport_(config) {
       var watermark = scan.boundary;
       PropertiesService.getScriptProperties().setProperty(MYCOUPONS_WATERMARK_PROPERTY, watermark);
       PropertiesService.getScriptProperties().setProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY,
-        watermarkTargetIdentity_(config));
+        watermarkTargetIdentity_(config, label.id));
       PropertiesService.getScriptProperties().deleteProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
       return {complete: true, imported: imported, scanned: scanned, watermark: watermark};
     }
@@ -252,7 +252,8 @@ function cleanupExpiredImportedMessages_(config) {
   var trashed = 0;
   var label = resolveImportedLabel_(config);
   listGmailMessages_(buildRetentionQuery_(config, threshold)).messages.forEach(function(message) {
-    if (!messageHasLabel_(message, label.id) || message.date.getTime() >= threshold.getTime()) {
+    if (!messageHasLabel_(message, label.id) || message.date.getTime() >= threshold.getTime() ||
+        messageHasSystemExclusionLabel_(message)) {
       return;
     }
     Gmail.Users.Messages.trash('me', message.id);
@@ -362,7 +363,7 @@ function resolveImportedLabel_(config) {
   var labels = (Gmail.Users.Labels.list('me').labels || []).filter(function(label) {
     return label.name === config.labelName;
   });
-  if (labels.length !== 1 || !labels[0].id || labels[0].type !== 'user') {
+  if (labels.length !== 1 || typeof labels[0].id !== 'string' || !labels[0].id || labels[0].type !== 'user') {
     throw new Error('Configured imported Gmail label must resolve to exactly one user label.');
   }
   return labels[0];
@@ -442,19 +443,24 @@ function makeCouponRow_(columns, columnCount, message, code, deduplicationKey, c
   row[columns.couponCode] = asSheetLiteral_(code);
   row[columns.sourceSubject] = asSheetLiteral_(message.subject);
   row[columns.sender] = asSheetLiteral_(message.from);
-  row[columns.gmailLink] = asSheetLiteral_(gmailLinkForMessage_(message.id, config));
+  row[columns.gmailLink] = asSheetLiteral_(gmailLinkForMessage_(message.threadId, config));
   row[columns.deduplicationKey] = asSheetLiteral_(deduplicationKey);
   row[columns.status] = 'imported';
   return row;
 }
 
-function gmailLinkForMessage_(messageId, config) {
+function gmailLinkForMessage_(threadId, config) {
   return 'https://mail.google.com/mail/u/?authuser=' + encodeURIComponent(config.ownerEmail) +
-    '#all/' + encodeURIComponent(messageId);
+    '#all/' + encodeURIComponent(threadId);
 }
 
 function legacyGmailLinkForMessage_(messageId) {
   return 'https://mail.google.com/mail/u/0/#all/' + encodeURIComponent(messageId);
+}
+
+function ownerStableLegacyGmailLinkForMessage_(messageId, config) {
+  return 'https://mail.google.com/mail/u/?authuser=' + encodeURIComponent(config.ownerEmail) +
+    '#all/' + encodeURIComponent(messageId);
 }
 
 function asSheetLiteral_(value) {
@@ -511,10 +517,10 @@ function verifiedExistingCouponRow_(record, message, code, columns, config) {
   var deduplicationKey = message.id + '::' + code;
   var expected = makeCouponRow_(columns, record.row.length, message, code, deduplicationKey, config);
   return verifiedCouponRow_(record.row, record.formulas, expected, columns, deduplicationKey,
-    legacyGmailLinkForMessage_(message.id));
+    [legacyGmailLinkForMessage_(message.id), ownerStableLegacyGmailLinkForMessage_(message.id, config)]);
 }
 
-function verifiedCouponRow_(written, formulas, expected, columns, deduplicationKey, legacyGmailLink) {
+function verifiedCouponRow_(written, formulas, expected, columns, deduplicationKey, legacyGmailLinks) {
   if (!Array.isArray(written) || !Array.isArray(formulas) ||
       sheetSemanticText_(written[columns.deduplicationKey]) !== deduplicationKey ||
       sheetSemanticText_(written[columns.emailDate]) !== sheetSemanticText_(expected[columns.emailDate]) ||
@@ -527,7 +533,8 @@ function verifiedCouponRow_(written, formulas, expected, columns, deduplicationK
     return false;
   }
   var storedLink = sheetSemanticText_(written[columns.gmailLink]);
-  return storedLink === sheetSemanticText_(expected[columns.gmailLink]) || legacyGmailLink && storedLink === legacyGmailLink;
+  return storedLink === sheetSemanticText_(expected[columns.gmailLink]) || Array.isArray(legacyGmailLinks) &&
+    legacyGmailLinks.indexOf(storedLink) !== -1;
 }
 
 function mutateImportedMessage_(messageId, labelId, archiveImported) {
@@ -548,13 +555,13 @@ function buildRetentionQuery_(config, threshold) {
     Math.floor(threshold.getTime() / 1000) + ' -in:trash';
 }
 
-function scanStart_(config) {
+function scanStart_(config, labelId) {
   var properties = PropertiesService.getScriptProperties();
   var rawWatermark = properties.getProperty(MYCOUPONS_WATERMARK_PROPERTY);
   if (!rawWatermark) {
     return initialScanStart_(config);
   }
-  if (properties.getProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY) !== watermarkTargetIdentity_(config)) {
+  if (properties.getProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY) !== watermarkTargetIdentity_(config, labelId)) {
     properties.deleteProperty(MYCOUPONS_WATERMARK_PROPERTY);
     properties.deleteProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY);
     return initialScanStart_(config);
@@ -576,8 +583,9 @@ function initialScanStart_(config) {
   return start;
 }
 
-function watermarkTargetIdentity_(config) {
-  return JSON.stringify([config.ownerEmail.toLowerCase(), config.spreadsheetId, config.sheetName, config.labelName]);
+function watermarkTargetIdentity_(config, labelId) {
+  return JSON.stringify([config.ownerEmail.toLowerCase(), config.spreadsheetId, config.sheetName,
+    config.labelName, labelId]);
 }
 
 function scanConfigIdentity_(config) {
@@ -590,12 +598,12 @@ function validScanTimestamp_(value) {
   return typeof value === 'string' && !isNaN(date.getTime()) && date.toISOString() === value;
 }
 
-function loadOrStartScanState_(config, boundary) {
+function loadOrStartScanState_(config, labelId, boundary) {
   var properties = PropertiesService.getScriptProperties();
   var raw = properties.getProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
   if (!raw) {
-    return {version: MYCOUPONS_SCAN_STATE_VERSION, configIdentity: scanConfigIdentity_(config),
-      labelName: config.labelName, start: scanStart_(config).toISOString(), boundary: boundary.toISOString(),
+    return {version: MYCOUPONS_SCAN_STATE_VERSION, configIdentity: scanConfigIdentity_(config), labelId: labelId,
+      labelName: config.labelName, start: scanStart_(config, labelId).toISOString(), boundary: boundary.toISOString(),
       pageToken: '', pendingIds: [], listedFinalPage: false};
   }
   var scan;
@@ -605,15 +613,20 @@ function loadOrStartScanState_(config, boundary) {
     throw new Error('Stored MyCoupons scan state is invalid. Repair it deliberately before importing.');
   }
   if (!scan || typeof scan !== 'object' || Array.isArray(scan) ||
-      Object.keys(scan).sort().join(',') !== 'boundary,configIdentity,labelName,listedFinalPage,pageToken,pendingIds,start,version' ||
+      Object.keys(scan).sort().join(',') !== 'boundary,configIdentity,labelId,labelName,listedFinalPage,pageToken,pendingIds,start,version' ||
       scan.version !== MYCOUPONS_SCAN_STATE_VERSION || scan.configIdentity !== scanConfigIdentity_(config) ||
-      scan.labelName !== config.labelName || !validScanTimestamp_(scan.start) || !validScanTimestamp_(scan.boundary) ||
+      scan.labelName !== config.labelName || typeof scan.labelId !== 'string' || !scan.labelId ||
+      !validScanTimestamp_(scan.start) || !validScanTimestamp_(scan.boundary) ||
       new Date(scan.start).getTime() > new Date(scan.boundary).getTime() || typeof scan.pageToken !== 'string' ||
       scan.pageToken.length > 1000 || !Array.isArray(scan.pendingIds) || scan.pendingIds.length > MYCOUPONS_SEARCH_PAGE_SIZE ||
       scan.pendingIds.some(function(id) { return typeof id !== 'string' || !id; }) ||
       new Set(scan.pendingIds).size !== scan.pendingIds.length || typeof scan.listedFinalPage !== 'boolean' ||
       scan.listedFinalPage && !!scan.pageToken) {
     throw new Error('Stored MyCoupons scan state is invalid. Repair it deliberately before importing.');
+  }
+  if (scan.labelId !== labelId) {
+    properties.deleteProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
+    return loadOrStartScanState_(config, labelId, boundary);
   }
   return scan;
 }
@@ -666,7 +679,7 @@ function isExactGmailMessageNotFound_(error) {
 }
 
 function toMyCouponsMessage_(message) {
-  if (!message || typeof message.id !== 'string' || !message.payload) {
+  if (!message || !validOpaqueGmailId_(message.id) || !validOpaqueGmailId_(message.threadId) || !message.payload) {
     throw new Error('Gmail returned an incomplete message.');
   }
   var headers = {};
@@ -687,7 +700,13 @@ function toMyCouponsMessage_(message) {
     labelIds: message.labelIds || [],
     plainText: extractPlainText_(message.payload),
     subject: headers.subject || '',
+    threadId: message.threadId,
   };
+}
+
+function validOpaqueGmailId_(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 1000 &&
+    !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
 function extractPlainText_(payload) {
@@ -734,7 +753,8 @@ function messageHasLabel_(message, labelId) {
 }
 
 function messageHasSystemExclusionLabel_(message) {
-  return message.labelIds.indexOf('SENT') !== -1 || message.labelIds.indexOf('SPAM') !== -1 ||
+  return message.labelIds.indexOf('DRAFT') !== -1 || message.labelIds.indexOf('SENT') !== -1 ||
+    message.labelIds.indexOf('SPAM') !== -1 ||
     message.labelIds.indexOf('TRASH') !== -1;
 }
 

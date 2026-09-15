@@ -7,6 +7,7 @@ const source = await readFile(new URL('../src/MyCoupons.gs', import.meta.url), '
 
 function message({
   id,
+  threadId = id,
   attachmentText = '',
   encodedBody = null,
   subject = '',
@@ -24,6 +25,7 @@ function message({
     labels,
     encodedBody,
     subject,
+    threadId,
   };
 }
 
@@ -99,7 +101,7 @@ function createRuntime({
     if (watermarkTargetIdentity !== null) {
       properties.set('MYCOUPONS_WATERMARK_TARGET_IDENTITY', watermarkTargetIdentity === undefined ? JSON.stringify([
         installedConfig.ownerEmail.toLowerCase(), installedConfig.spreadsheetId,
-        installedConfig.sheetName, installedConfig.labelName,
+        installedConfig.sheetName, installedConfig.labelName, labels[0]?.id,
       ]) : watermarkTargetIdentity);
     }
   }
@@ -188,6 +190,7 @@ function createRuntime({
         mimeType: 'text/plain',
       }] : []),
     },
+    threadId: value.threadId,
   }]));
   const context = {
     Date: class extends Date {
@@ -310,7 +313,7 @@ test('imports an explicitly introduced code, then labels and archives its exact 
   }]);
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK'), '2026-01-11T10:00:00.000Z');
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY'), JSON.stringify([
-    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount',
+    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount', 'Label_Imported',
   ]));
   assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
 });
@@ -402,6 +405,7 @@ test('binds a resumable scan to the normalized configured owner identity', () =>
   runtime.context.runMyCouponsImport();
   const scan = JSON.parse(runtime.properties.get('MYCOUPONS_SCAN_STATE'));
   assert.deepEqual(JSON.parse(scan.configIdentity).slice(0, 2), ['owner@example.com', 'Coupon Code Discount']);
+  assert.equal(scan.labelId, 'Label_Imported');
 });
 
 test('resumes pending page IDs after a message read rate limit without duplicating a committed row', () => {
@@ -638,6 +642,39 @@ test('writes owner-stable Gmail links while accepting exact legacy u/0 rows for 
   const runtime = createRuntime({messages: [message({id: 'new-link', body: 'Coupon code: SAVE20'})]});
   runtime.context.runMyCouponsImport();
   assert.equal(runtime.rows[1][4], 'https://mail.google.com/mail/u/?authuser=owner%40example.com#all/new-link');
+
+  const ownerStableLegacy = createRuntime({
+    existingRows: [[
+      '2026-01-10T08:00:00.000Z', 'SAVE20', '', 'offers@example.com',
+      'https://mail.google.com/mail/u/?authuser=owner%40example.com#all/message-id', 'message-id::SAVE20', 'imported',
+    ]],
+    messages: [message({
+      id: 'message-id', threadId: 'thread-id', body: 'Coupon code: SAVE20',
+    })],
+  });
+  assert.equal(ownerStableLegacy.context.runMyCouponsImport().imported, 0);
+  assert.equal(ownerStableLegacy.mutations[0].id, 'message-id');
+});
+
+test('uses the Gmail thread ID only for links while retaining the message ID for writes and deduplication', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'message-id',
+    threadId: 'thread-id',
+    body: 'Coupon code: SAVE20',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][4], 'https://mail.google.com/mail/u/?authuser=owner%40example.com#all/thread-id');
+  assert.equal(runtime.rows[1][5], 'message-id::SAVE20');
+  assert.equal(runtime.mutations[0].id, 'message-id');
+
+  const malformed = createRuntime({messages: [message({
+    id: 'missing-thread',
+    threadId: '',
+    body: 'Coupon code: SAVE20',
+  })]});
+  assert.throws(() => malformed.context.runMyCouponsImport(), /incomplete message/i);
+  assert.equal(malformed.mutations.length, 0);
 });
 
 test('fails closed when an existing dedupe key does not prove its code and Gmail link identity', () => {
@@ -745,7 +782,28 @@ test('restarts from initialDate when a watermark belongs to a different target',
   runtime.context.runMyCouponsImport();
   assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY'), JSON.stringify([
-    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Replacement Label',
+    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Replacement Label', 'Label_Replacement',
+  ]));
+});
+
+test('restarts from initialDate when a same-name imported label is replaced', () => {
+  const labels = [{id: 'Label_Old', name: 'Coupon Code Discount', type: 'user'}];
+  const runtime = createRuntime({
+    fetchFailureAfter: 0,
+    labels,
+    messages: [message({id: 'pending', body: 'No coupon here'})],
+    watermark: '2026-01-10T10:00:00.000Z',
+  });
+
+  assert.equal(runtime.context.runMyCouponsImport().complete, false);
+  assert.equal(JSON.parse(runtime.properties.get('MYCOUPONS_SCAN_STATE')).labelId, 'Label_Old');
+  labels[0].id = 'Label_New';
+  runtime.setFetchFailureAfter(null);
+
+  assert.equal(runtime.context.runMyCouponsImport().complete, true);
+  assert.match(runtime.queries.at(-1), new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
+  assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY'), JSON.stringify([
+    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount', 'Label_New',
   ]));
 });
 
@@ -845,6 +903,33 @@ test('leaves sent replies and resumed sent messages untouched even if they quote
   assert.equal(resumedOutcome.complete, true);
   assert.equal(resumed.rows.length, 1);
   assert.equal(resumed.mutations.length, 0);
+});
+
+test('leaves draft messages untouched during fresh, resumed, and retention scans', () => {
+  const fresh = createRuntime({messages: [message({
+    id: 'draft-fresh', body: 'Coupon code: SAVE20', labels: ['DRAFT'],
+  })]});
+  assert.equal(fresh.context.runMyCouponsImport().imported, 0);
+  assert.equal(fresh.rows.length, 1);
+  assert.equal(fresh.mutations.length, 0);
+
+  const resumed = createRuntime({
+    fetchFailureAfter: 0,
+    messages: [message({id: 'draft-pending', body: 'Coupon code: SAVE20', labels: ['DRAFT']})],
+  });
+  assert.equal(resumed.context.runMyCouponsImport().complete, false);
+  resumed.setFetchFailureAfter(null);
+  assert.equal(resumed.context.runMyCouponsImport().complete, true);
+  assert.equal(resumed.rows.length, 1);
+  assert.equal(resumed.mutations.length, 0);
+
+  const retention = createRuntime({messages: [message({
+    id: 'draft-expired',
+    date: new Date('2025-01-01T00:00:00.000Z'),
+    labels: ['Label_Imported', 'DRAFT'],
+  })]});
+  assert.equal(retention.context.cleanupExpiredImportedMessages().trashed, 0);
+  assert.equal(retention.trashed.length, 0);
 });
 
 test('drops only exact not-found pending message IDs and resumes the scan', () => {
