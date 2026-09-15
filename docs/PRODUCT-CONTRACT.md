@@ -37,9 +37,9 @@ The baseline settings are:
 | `dailyHour` | `8` | Approximate local daily trigger hour. |
 
 The configured timezone must be a valid bounded IANA timezone. When installed,
-the daily trigger's handler, hour, timezone and target identity are retained as
-private schedule metadata; a legacy or mismatched trigger fails closed rather
-than being silently adopted or recreated.
+the daily trigger's stable ID, handler, hour, timezone and target identity are
+retained as private schedule metadata; a legacy, replaced or mismatched trigger
+fails closed rather than being silently adopted or recreated.
 
 ## Data contract
 
@@ -48,28 +48,30 @@ populates, at minimum, email date, coupon code, source subject, sender, Gmail
 link, notes/deduplication key and status. Existing richer columns remain in
 place and blank when the baseline cannot establish their values. New Gmail links
 select the configured owner account rather than browser slot `u/0`; exact
-legacy `u/0` links remain usable only to verify rows written by the prior
-implementation.
+legacy owner-account message links and `u/0` links remain usable only to verify
+rows written by a prior implementation. New links use the Gmail conversation
+thread ID, while row deduplication and Gmail mutations retain the message ID.
 
 The durable watermark is stored independently in Script Properties together
 with its target identity: owner, Sheet ID, tab and imported Gmail label. It is
 the pre-list scan boundary of the latest fully successful scan, not a Sheet-row
 date or the completion time. Each query is bounded above by that snapshot, so
 messages that arrive while an import is running remain eligible next time. A
-watermark missing that identity, or belonging to a changed target, is discarded
-and the next scan restarts from `initialDate`. A separate validated private scan
-state retains the fixed range, Gmail page cursor and pending message IDs when a
-history scan is interrupted by a Gmail per-user limit. It is cleared only after
-that fixed range completes.
+watermark missing that identity, or belonging to a changed target or resolved
+label ID, is discarded and the next scan restarts from `initialDate`. A separate
+validated private scan state retains the fixed range, Gmail page cursor and
+pending message IDs when a history scan is interrupted by a Gmail per-user
+limit. It is cleared only after that fixed range completes.
 
 ## Import contract
 
 1. On first run, search all non-spam/non-trash Gmail messages from the exact
    UTC beginning of `initialDate`. Later runs search from the watermark minus
-   its overlap.
+   its overlap. The result range remains stable while Gmail labels change.
 2. Resolve the configured imported label to exactly one user-created Gmail
-   label, then exclude messages already carrying it or a Spam/Trash label.
-3. Inspect only subject and plain-text message content.
+   label, then exclude messages already carrying it or a Spam, Trash, Sent or
+   Draft label.
+3. Inspect only subject and non-quoted plain-text message content.
 4. Import only a complete code immediately introduced by an explicit form such
    as `coupon code`, `promo code`, `discount code` or `codice sconto`.
 5. For every imported code, atomically append and verify a deduplicated Sheet
@@ -84,10 +86,12 @@ that fixed range completes.
 ## Retention contract
 
 Retention searches only already imported messages older than `retentionDays`.
-When enabled, each matched message moves to Gmail Trash. It is not permanently
-deleted. The retention action is independent from code extraction and cannot
-touch unlabelled email; the daily handler still attempts it if the import
-portion fails.
+When enabled, it handles one bounded Gmail page per run and returns whether the
+page was complete; already processed messages move to Gmail Trash but are never
+permanently deleted. A partial page or Gmail limit is reported as incomplete so
+the next daily run can continue safely. The retention action is independent
+from code extraction and cannot touch unlabelled, Draft, Sent, Spam or Trash
+email; the daily handler still attempts it if the import portion fails.
 
 ## Exclusions
 

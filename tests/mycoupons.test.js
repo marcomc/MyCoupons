@@ -47,6 +47,7 @@ function createRuntime({
   corruptLastWrite = false,
   corruptLastWriteColumns = [],
   coerceLastWrite = false,
+  beforeLiveDeduplicationRead = null,
   formulaLastWriteColumns = [],
   attachmentText = '',
   advanceClockOnList = false,
@@ -76,6 +77,8 @@ function createRuntime({
   let listMessageCount = 0;
   const numberFormats = [];
   let externalAppendDone = false;
+  let liveDeduplicationReadPending = Boolean(beforeLiveDeduplicationRead);
+  let sheetValueReadCount = 0;
   const properties = new Map();
   const installedConfig = {
     ownerEmail: 'owner@example.com',
@@ -86,14 +89,19 @@ function createRuntime({
     timeZone: 'Europe/Rome',
     ...config,
   };
+  const projectTriggers = triggers.map((trigger, index) => ({
+    getHandlerFunction: () => trigger.getHandlerFunction(),
+    getUniqueId: () => trigger.getUniqueId ? trigger.getUniqueId() : 'existing-trigger-' + index,
+  }));
   properties.set('MYCOUPONS_CONFIG', JSON.stringify(installedConfig));
-  if (triggers.length && dailyScheduleMetadata !== null) {
+  if (projectTriggers.length && dailyScheduleMetadata !== null) {
     properties.set('MYCOUPONS_DAILY_SCHEDULE', dailyScheduleMetadata === undefined ? JSON.stringify({
-      version: 1,
+      version: 2,
       identity: JSON.stringify([
         installedConfig.ownerEmail.toLowerCase(), installedConfig.spreadsheetId, installedConfig.sheetName,
         installedConfig.labelName, 'runMyCouponsDaily', installedConfig.dailyHour ?? 8, installedConfig.timeZone,
       ]),
+      triggerId: projectTriggers[0].getUniqueId(),
     }) : dailyScheduleMetadata);
   }
   if (watermark) {
@@ -109,7 +117,14 @@ function createRuntime({
   const sheet = {
     getDataRange() {
       return {
-        getValues: () => values.map(row => [...row]),
+        getValues: () => {
+          sheetValueReadCount += 1;
+          if (liveDeduplicationReadPending && sheetValueReadCount === 2) {
+            beforeLiveDeduplicationRead({formulas, values});
+            liveDeduplicationReadPending = false;
+          }
+          return values.map(row => [...row]);
+        },
         getFormulas: () => formulas.map(row => [...row]),
       };
     },
@@ -252,10 +267,17 @@ function createRuntime({
     },
     ScriptApp: {
       atHour: hour => ({everyDays: () => ({create: () => createdTriggers.push(hour)})}),
-      getProjectTriggers: () => triggers,
+      getProjectTriggers: () => projectTriggers,
       newTrigger: handler => ({timeBased: () => ({
         inTimezone: timeZone => ({atHour: hour => ({everyDays: () => ({
-          create: () => createdTriggers.push({handler, hour, timeZone}),
+          create: () => {
+            const record = {handler, hour, timeZone};
+            createdTriggers.push(record);
+            return {
+              getHandlerFunction: () => handler,
+              getUniqueId: () => 'created-trigger-' + createdTriggers.length,
+            };
+          },
         })})}),
       })}),
     },
@@ -396,6 +418,22 @@ test('resumes a durable page cursor after a list rate limit instead of repeating
   assert.equal(runtime.queries.at(-1), runtime.queries[0]);
 });
 
+test('keeps a multi-page import query stable after importing and labeling an earlier page', () => {
+  const runtime = createRuntime({
+    listPageSize: 1,
+    messages: [
+      message({id: 'first-page', body: 'Coupon code: FIRST20'}),
+      message({id: 'second-page', body: 'Coupon code: SECOND20'}),
+    ],
+  });
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 2);
+  assert.equal(runtime.queries.length, 2);
+  assert.equal(runtime.queries[0], runtime.queries[1]);
+  assert.doesNotMatch(runtime.queries[0], /-label:/u);
+  assert.equal(runtime.mutations.length, 2);
+});
+
 test('binds a resumable scan to the normalized configured owner identity', () => {
   const runtime = createRuntime({
     config: {ownerEmail: 'OWNER@EXAMPLE.COM'},
@@ -486,6 +524,9 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'available-prose', body: 'Coupon code: available after signup'}),
     message({id: 'expires-prose', body: 'Coupon code: expires tomorrow'}),
     message({id: 'click-prose', body: 'Promo code: click here'}),
+    message({id: 'click-here', body: 'Promo code: click-here'}),
+    message({id: 'tap-here', body: 'Promo code: "Tap_here"'}),
+    message({id: 'learn-more', body: 'Promo code: learn-more'}),
     message({id: 'percentage-discount', body: 'Coupon code: 20% off'}),
     message({id: 'currency-discount', body: 'Coupon code: $20 off'}),
     message({id: 'quoted-percentage-discount', body: 'Coupon code: "20%"'}),
@@ -519,6 +560,11 @@ test('does not import coupon codes found only in quoted reply or forward history
       id: 'leading-quote',
       subject: 'Fwd: promotion',
       body: 'No new offer from me.\n> Coupon code: SAVE20',
+    }),
+    message({
+      id: 'italian-forward',
+      subject: 'Inoltro promozione',
+      body: 'Nessun nuovo codice.\n\nMessaggio inoltrato\nCoupon code: SAVE20',
     }),
     message({
       id: 'new-top-content',
@@ -612,6 +658,29 @@ test('deduplicates a previous verified row and repairs its missing Gmail mutatio
   assert.equal(runtime.mutations.length, 1);
   assert.equal(runtime.mutations[0].id, 'message-1');
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK'), '2026-01-11T10:00:00.000Z');
+});
+
+test('re-reads the live deduplication row before repairing Gmail and fails closed on concurrent changes', () => {
+  const existing = [
+    '2026-01-10T08:00:00.000Z', 'SAVE20', 'Earlier', 'offers@example.com',
+    'https://mail.google.com/mail/u/?authuser=owner%40example.com#all/message-1', 'message-1::SAVE20', 'imported',
+  ];
+  const mutations = [
+    ({formulas, values}) => { values.splice(1, 1); formulas.splice(1, 1); },
+    ({formulas, values}) => { values.push([...values[1]]); formulas.push([...formulas[1]]); },
+    ({formulas}) => { formulas[1][1] = '=CHANGED'; },
+    ({values}) => { values[1][1] = 'CHANGED'; },
+  ];
+
+  mutations.forEach(beforeLiveDeduplicationRead => {
+    const runtime = createRuntime({
+      beforeLiveDeduplicationRead,
+      existingRows: [[...existing]],
+      messages: [message({id: 'message-1', subject: 'Earlier', body: 'Coupon code: SAVE20'})],
+    });
+    assert.throws(() => runtime.context.runMyCouponsImport(), /complete message and code identity|duplicate deduplication key/i);
+    assert.equal(runtime.mutations.length, 0);
+  });
 });
 
 test('requires all existing deduplicated fields and formulas before repairing Gmail mutation', () => {
@@ -996,6 +1065,26 @@ test('fails closed for legacy or mismatched daily trigger schedule metadata with
   assert.equal(mismatched.createdTriggers.length, 0);
 });
 
+test('fails closed when a same-handler daily trigger has a different unique ID', () => {
+  const runtime = createRuntime({
+    triggers: [{
+      getHandlerFunction: () => 'runMyCouponsDaily',
+      getUniqueId: () => 'replacement-trigger',
+    }],
+    dailyScheduleMetadata: JSON.stringify({
+      version: 2,
+      identity: JSON.stringify([
+        'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount',
+        'runMyCouponsDaily', 8, 'Europe/Rome',
+      ]),
+      triggerId: 'original-trigger',
+    }),
+  });
+
+  assert.throws(() => runtime.context.getMyCouponsInstallationStatus(), /daily schedule/i);
+  assert.equal(runtime.createdTriggers.length, 0);
+});
+
 test('rejects invalid time zones before trigger creation and accepts valid slashless IANA zones', () => {
   const invalid = createRuntime({config: {timeZone: 'Invalid/Zone'}});
   assert.throws(() => invalid.context.getMyCouponsInstallationStatus(), /valid IANA time zone/i);
@@ -1047,8 +1136,37 @@ test('moves only old imported messages to Gmail Trash during retention', () => {
   const outcome = runtime.context.cleanupExpiredImportedMessages();
 
   assert.equal(outcome.trashed, 1);
+  assert.equal(outcome.complete, true);
   assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-imported'}]);
   assert.match(runtime.queries[0], new RegExp(`before:${Math.floor(Date.parse('2025-07-15T10:00:00.000Z') / 1000)}`));
+});
+
+test('reports an incomplete retention page after safely trashing its processed messages', () => {
+  const runtime = createRuntime({
+    listPageSize: 1,
+    messages: [
+      message({id: 'old-first', date: new Date('2025-01-01T00:00:00.000Z'), labels: ['Coupon Code Discount']}),
+      message({id: 'old-second', date: new Date('2025-01-02T00:00:00.000Z'), labels: ['Coupon Code Discount']}),
+    ],
+  });
+
+  const outcome = runtime.context.cleanupExpiredImportedMessages();
+  assert.deepEqual(JSON.parse(JSON.stringify(outcome)), {complete: false, trashed: 1});
+  assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-first'}]);
+});
+
+test('surfaces incomplete retention through the daily result', () => {
+  const runtime = createRuntime({
+    listPageSize: 1,
+    messages: [
+      message({id: 'old-first', date: new Date('2025-01-01T00:00:00.000Z'), labels: ['Coupon Code Discount']}),
+      message({id: 'old-second', date: new Date('2025-01-02T00:00:00.000Z'), labels: ['Coupon Code Discount']}),
+    ],
+  });
+
+  const outcome = runtime.context.runMyCouponsDaily();
+  assert.equal(outcome.import.complete, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(outcome.retention)), {complete: false, trashed: 1});
 });
 
 test('runs retention even when import fails', () => {
@@ -1083,7 +1201,14 @@ test('installs one daily trigger and rejects an ambiguous duplicate trigger set'
 
   runtime.context.installMyCouponsDailyTrigger();
   assert.deepEqual(runtime.createdTriggers, [{handler: 'runMyCouponsDaily', hour: 8, timeZone: 'Europe/Rome'}]);
-  assert.equal(JSON.parse(runtime.properties.get('MYCOUPONS_DAILY_SCHEDULE')).version, 1);
+  assert.deepEqual(JSON.parse(runtime.properties.get('MYCOUPONS_DAILY_SCHEDULE')), {
+    version: 2,
+    identity: JSON.stringify([
+      'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount',
+      'runMyCouponsDaily', 8, 'Europe/Rome',
+    ]),
+    triggerId: 'created-trigger-1',
+  });
 
   const duplicate = createRuntime({triggers: [
     {getHandlerFunction: () => 'runMyCouponsDaily'},

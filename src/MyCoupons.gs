@@ -4,7 +4,7 @@ var MYCOUPONS_WATERMARK_IDENTITY_PROPERTY = 'MYCOUPONS_WATERMARK_TARGET_IDENTITY
 var MYCOUPONS_SCAN_STATE_PROPERTY = 'MYCOUPONS_SCAN_STATE';
 var MYCOUPONS_SCAN_STATE_VERSION = 2;
 var MYCOUPONS_DAILY_SCHEDULE_PROPERTY = 'MYCOUPONS_DAILY_SCHEDULE';
-var MYCOUPONS_DAILY_SCHEDULE_VERSION = 1;
+var MYCOUPONS_DAILY_SCHEDULE_VERSION = 2;
 var MYCOUPONS_DAILY_HANDLER = 'runMyCouponsDaily';
 var MYCOUPONS_SEARCH_PAGE_SIZE = 100;
 
@@ -44,7 +44,7 @@ function runMyCouponsImport() {
 /**
  * Runs the scheduled import and retention cleanup in one serialized execution.
  *
- * @return {{import: Object, retention: Object}}
+ * @return {{import: {complete: boolean, imported: number, scanned: number, watermark: string|null}, retention: {complete: boolean, trashed: number}}}
  */
 function runMyCouponsDaily() {
   return withMyCouponsLock_(function() {
@@ -77,7 +77,7 @@ function runMyCouponsDaily() {
 /**
  * Moves only expired, previously imported messages to Gmail Trash.
  *
- * @return {{trashed: number}}
+ * @return {{complete: boolean, trashed: number}}
  */
 function cleanupExpiredImportedMessages() {
   return withMyCouponsLock_(function() {
@@ -104,19 +104,19 @@ function installMyCouponsDailyTrigger() {
       throw new Error('Multiple daily triggers exist for runMyCouponsDaily. Resolve them manually.');
     }
     if (matching.length === 1) {
-      assertDailyScheduleIdentity_(config);
+      assertDailyScheduleIdentity_(config, matching[0]);
       return {created: false, dailyHour: config.dailyHour};
     }
     if (PropertiesService.getScriptProperties().getProperty(MYCOUPONS_DAILY_SCHEDULE_PROPERTY)) {
       throw new Error('Stored MyCoupons daily schedule does not match a trigger. Resolve it deliberately.');
     }
-    ScriptApp.newTrigger(MYCOUPONS_DAILY_HANDLER)
+    var createdTrigger = ScriptApp.newTrigger(MYCOUPONS_DAILY_HANDLER)
       .timeBased()
       .inTimezone(config.timeZone)
       .atHour(config.dailyHour)
       .everyDays(1)
       .create();
-    saveDailyScheduleIdentity_(config);
+    saveDailyScheduleIdentity_(config, createdTrigger);
     return {created: true, dailyHour: config.dailyHour};
   });
 }
@@ -139,7 +139,7 @@ function getMyCouponsInstallationStatus() {
     throw new Error('Multiple daily triggers exist for runMyCouponsDaily. Resolve them manually.');
   }
   if (matching.length === 1) {
-    assertDailyScheduleIdentity_(config);
+    assertDailyScheduleIdentity_(config, matching[0]);
   } else if (PropertiesService.getScriptProperties().getProperty(MYCOUPONS_DAILY_SCHEDULE_PROPERTY)) {
     throw new Error('Stored MyCoupons daily schedule does not match a trigger. Resolve it deliberately.');
   }
@@ -164,8 +164,7 @@ function runMyCouponsImport_(config) {
     extractCouponCodes_(message.subject, message.plainText).forEach(function(code) {
       var deduplicationKey = message.id + '::' + code;
       if (sheetState.deduplicationRecords[deduplicationKey]) {
-        if (!verifiedExistingCouponRow_(sheetState.deduplicationRecords[deduplicationKey], message, code,
-          sheetState.columns, config)) {
+        if (!verifiedLiveExistingCouponRow_(sheet, message, code, config)) {
           throw new Error('Existing coupon deduplication row does not prove its complete message and code identity.');
         }
         hasVerifiedCode = true;
@@ -245,13 +244,14 @@ function runMyCouponsImport_(config) {
 
 function cleanupExpiredImportedMessages_(config) {
   if (!config.trashExpiredImported) {
-    return {trashed: 0};
+    return {complete: true, trashed: 0};
   }
   var threshold = new Date();
   threshold.setUTCDate(threshold.getUTCDate() - config.retentionDays);
   var trashed = 0;
   var label = resolveImportedLabel_(config);
-  listGmailMessages_(buildRetentionQuery_(config, threshold)).messages.forEach(function(message) {
+  var listed = listFirstGmailMessagePage_(buildRetentionQuery_(config, threshold));
+  listed.messages.forEach(function(message) {
     if (!messageHasLabel_(message, label.id) || message.date.getTime() >= threshold.getTime() ||
         messageHasSystemExclusionLabel_(message)) {
       return;
@@ -259,7 +259,7 @@ function cleanupExpiredImportedMessages_(config) {
     Gmail.Users.Messages.trash('me', message.id);
     trashed += 1;
   });
-  return {trashed: trashed};
+  return {complete: listed.complete, trashed: trashed};
 }
 
 function getMyCouponsConfig_() {
@@ -320,13 +320,18 @@ function dailyScheduleIdentity_(config) {
     config.labelName, MYCOUPONS_DAILY_HANDLER, config.dailyHour, config.timeZone]);
 }
 
-function saveDailyScheduleIdentity_(config) {
+function saveDailyScheduleIdentity_(config, trigger) {
+  var triggerId = trigger && trigger.getUniqueId && trigger.getUniqueId();
+  if (typeof triggerId !== 'string' || !triggerId) {
+    throw new Error('Created MyCoupons daily trigger has no stable identity. Resolve it deliberately.');
+  }
   PropertiesService.getScriptProperties().setProperty(MYCOUPONS_DAILY_SCHEDULE_PROPERTY, JSON.stringify({
-    version: MYCOUPONS_DAILY_SCHEDULE_VERSION, identity: dailyScheduleIdentity_(config),
+    version: MYCOUPONS_DAILY_SCHEDULE_VERSION, identity: dailyScheduleIdentity_(config), triggerId: triggerId,
   }));
 }
 
-function assertDailyScheduleIdentity_(config) {
+function assertDailyScheduleIdentity_(config, trigger) {
+  var triggerId = trigger && trigger.getUniqueId && trigger.getUniqueId();
   var raw = PropertiesService.getScriptProperties().getProperty(MYCOUPONS_DAILY_SCHEDULE_PROPERTY);
   var schedule;
   try {
@@ -335,8 +340,9 @@ function assertDailyScheduleIdentity_(config) {
     throw new Error('Stored MyCoupons daily schedule is invalid. Resolve it deliberately.');
   }
   if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule) ||
-      Object.keys(schedule).sort().join(',') !== 'identity,version' ||
-      schedule.version !== MYCOUPONS_DAILY_SCHEDULE_VERSION || schedule.identity !== dailyScheduleIdentity_(config)) {
+      Object.keys(schedule).sort().join(',') !== 'identity,triggerId,version' ||
+      schedule.version !== MYCOUPONS_DAILY_SCHEDULE_VERSION || schedule.identity !== dailyScheduleIdentity_(config) ||
+      typeof schedule.triggerId !== 'string' || !schedule.triggerId || schedule.triggerId !== triggerId) {
     throw new Error('Stored MyCoupons daily schedule does not match the configured trigger. Resolve it deliberately.');
   }
 }
@@ -520,6 +526,13 @@ function verifiedExistingCouponRow_(record, message, code, columns, config) {
     [legacyGmailLinkForMessage_(message.id), ownerStableLegacyGmailLinkForMessage_(message.id, config)]);
 }
 
+function verifiedLiveExistingCouponRow_(sheet, message, code, config) {
+  var liveState = readCouponSheetState_(sheet, config);
+  var deduplicationKey = message.id + '::' + code;
+  return verifiedExistingCouponRow_(liveState.deduplicationRecords[deduplicationKey], message, code,
+    liveState.columns, config);
+}
+
 function verifiedCouponRow_(written, formulas, expected, columns, deduplicationKey, legacyGmailLinks) {
   if (!Array.isArray(written) || !Array.isArray(formulas) ||
       sheetSemanticText_(written[columns.deduplicationKey]) !== deduplicationKey ||
@@ -547,7 +560,7 @@ function mutateImportedMessage_(messageId, labelId, archiveImported) {
 function buildImportQuery_(scan) {
   return 'after:' + Math.floor(new Date(scan.start).getTime() / 1000) +
     ' before:' + Math.floor(new Date(scan.boundary).getTime() / 1000) +
-    ' -in:spam -in:trash -label:"' + escapeGmailQueryString_(scan.labelName) + '"';
+    ' -in:spam -in:trash';
 }
 
 function buildRetentionQuery_(config, threshold) {
@@ -647,25 +660,21 @@ function escapeGmailQueryString_(value) {
   return value.replace(/["\\]/g, '\\$&');
 }
 
-function listGmailMessages_(query) {
+function listFirstGmailMessagePage_(query) {
   var messages = [];
-  var pageToken;
-  do {
-    var page = Gmail.Users.Messages.list('me', gmailListOptions_(query, pageToken));
-    var references = page.messages || [];
-    for (var index = 0; index < references.length; index += 1) {
-      try {
-        messages.push(toMyCouponsMessage_(Gmail.Users.Messages.get('me', references[index].id, {format: 'full'})));
-      } catch (error) {
-        if (isGmailRateLimitError_(error)) {
-          return {complete: false, messages: messages};
-        }
-        throw error;
+  var page = Gmail.Users.Messages.list('me', gmailListOptions_(query));
+  var references = page.messages || [];
+  for (var index = 0; index < references.length; index += 1) {
+    try {
+      messages.push(toMyCouponsMessage_(Gmail.Users.Messages.get('me', references[index].id, {format: 'full'})));
+    } catch (error) {
+      if (isGmailRateLimitError_(error)) {
+        return {complete: false, messages: messages};
       }
+      throw error;
     }
-    pageToken = page.nextPageToken;
-  } while (pageToken);
-  return {complete: true, messages: messages};
+  }
+  return {complete: !page.nextPageToken, messages: messages};
 }
 
 function isGmailRateLimitError_(error) {
@@ -791,7 +800,7 @@ function stripQuotedReplyHistory_(plainText) {
 function isQuotedReplyHistoryMarker_(line) {
   return /^\s*>/u.test(line) ||
     /^\s*On\s+.+\bwrote:\s*$/iu.test(line) ||
-    /^\s*(?:-+\s*)?(?:Original Message|Forwarded Message)(?:\s*-+)?\s*:?\s*$/iu.test(line) ||
+    /^\s*(?:-+\s*)?(?:Original Message|Forwarded Message|Messaggio inoltrato)(?:\s*-+)?\s*:?\s*$/iu.test(line) ||
     /^\s*Begin forwarded message:\s*$/iu.test(line);
 }
 
@@ -814,7 +823,7 @@ function acceptCouponToken_(token, quoted, hasFollowingWord) {
   if (!token || /^(?:https?:\/\/|www\.)/iu.test(token) || !/[\p{L}\p{N}]/u.test(token)) {
     return null;
   }
-  if (/^'/u.test(token) || isCouponAbsenceMarker_(token)) {
+  if (/^'/u.test(token) || isCouponPlaceholder_(token)) {
     return null;
   }
   if (!/^[\p{L}\p{N}\p{P}\p{S}]+$/u.test(token) || Array.from(token).length < 3 || Array.from(token).length > 64) {
@@ -832,8 +841,8 @@ function acceptCouponToken_(token, quoted, hasFollowingWord) {
   return token;
 }
 
-function isCouponAbsenceMarker_(token) {
-  return /^(?:not|none|n\/?a|no|null|empty|required|not[-_]?available|no[-_]?code)$/iu.test(token);
+function isCouponPlaceholder_(token) {
+  return /^(?:not|none|n\/?a|no|null|empty|required|not[-_]?available|no[-_]?code|(?:click|tap)[-_]?(?:here|link)|learn[-_]?more|shop[-_]?now|sign[-_]?up|copy[-_]?code|view[-_]?offer)[.!?,;:]*$/iu.test(token);
 }
 
 function withMyCouponsLock_(callback) {
