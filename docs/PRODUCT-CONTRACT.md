@@ -41,7 +41,10 @@ The baseline settings are:
 The existing coupon tab and its headers remain the database. A baseline row
 populates, at minimum, email date, coupon code, source subject, sender, Gmail
 link, notes/deduplication key and status. Existing richer columns remain in
-place and blank when the baseline cannot establish their values.
+place and blank when the baseline cannot establish their values. New Gmail links
+select the configured owner account rather than browser slot `u/0`; exact
+legacy `u/0` links remain usable only to verify rows written by the prior
+implementation.
 
 The durable watermark is stored independently in Script Properties together
 with its target identity: owner, Sheet ID, tab and imported Gmail label. It is
