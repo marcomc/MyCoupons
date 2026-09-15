@@ -36,6 +36,7 @@ test('closed admission accepts only complete affirmative authentication relation
     {text: 'Your verification code is 123456.'},
     {text: 'aBcDeF is your authentication passcode.'},
     {text: 'Use code ÈTÉ+20! to verify your account.'},
+    {text: 'Your verification code is ' + 'A'.repeat(40) + '!'},
     {text: 'We sent your security code 123456.'},
     {text: 'We sent your security code to you: 123456.'},
     {subject: 'Your verification code is 123456.'},
@@ -85,8 +86,11 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'Your verification code is 1,000－2,000.'}],
     ['ambiguous', {text: 'Your verification code is 12.3/45.6.'}],
     ['ambiguous', {text: 'Your verification code is 123∶456.'}],
-    ['ambiguous', {text: 'Your verification code is ' + 'A'.repeat(40) + '!'}],
     ['ambiguous', {text: 'Your verification code is −123.'}],
+    ['ambiguous', {text: 'Your verification code is ﹣123.'}],
+    ['ambiguous', {text: 'Your verification code is －123.'}],
+    ['ambiguous', {text: 'Your verification code is ⁻123.'}],
+    ['ambiguous', {text: 'Your verification code is 123…456.'}],
     ['ambiguous', {text: 'Your verification code is [[' + 'A'.repeat(40) + ']].'}],
     ['ambiguous', {text: 'Your verification code is ftp://example.com/code.'}],
     ['ambiguous', {text: 'Your verification code is tel:+15551234567.'}],
@@ -100,6 +104,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'Acme coupon code ÉPINÉ.'}],
     ['ambiguous', {text: 'Acme coupon code A\u0301pin\u0301.'}],
     ['discussion', {html: '<p>Coupon code SAVE20</p><blockquote>Your verification code is 123456.</blockquote>'}],
+    ['discussion', {subject: 'Sign in to Acme', html: '<blockquote>Your code is 123456.</blockquote>'}],
     ['discussion', {text: 'Coupon code SAVE20\n---------- Forwarded message ---------\nYour verification code is 123456.'}],
     ['discussion', {text: 'Your verification code is 123456？'}],
     ['discussion', {text: 'Your verification code is 123456՞'}],
@@ -148,6 +153,20 @@ test('complete issued authentication bypasses model and image transport', () => 
   assert.equal(outcome.candidates.length, 0);
   assert.equal(outcome.archiveAllowed, false);
   assert.equal(outcome.verifiedNonOffer, false);
+});
+
+test('preliminary authentication admission remains a downstream exclusion', () => {
+  const {ctx} = harness();
+  let modelCalls = 0;
+  ctx.callGeminiModel_ = () => { modelCalls++; throw new Error('model must not run'); };
+  const outcome = ctx.extractCouponOutcome_({
+    text: 'Your verification code is 123456.', html: '<img src=\"https://example.com/offer.png\">',
+    images: [], incomplete: false,
+    authenticationAdmission: {kind: 'issued', deterministic: true, authenticationLike: true}
+  });
+  assert.equal(modelCalls, 0);
+  assert.equal(outcome.excludedReason, 'authentication_code_message');
+  assert.equal(outcome.admission.kind, 'issued');
 });
 
 test('ambiguous authentication remains on the model/manual path', () => {

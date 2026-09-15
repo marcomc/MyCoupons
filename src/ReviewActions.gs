@@ -55,7 +55,7 @@ function processReviewAction_(sheet, rowNumber, action, c) {
     return completeReviewMessage_(state, sheet, journalSheet, c);
   }
   const message = getReviewMessage_(state.messageId);
-  const admission = authenticationAdmission_(candidateSource_(message));
+  const admission = authenticationAdmissionForMessage_(message);
   if (admission.kind === 'issued') {
     if (!authenticationExclusionBindingsComplete_(state)) return reviewFailure_(sheet, rowNumber, 'STATE');
     return checkpointAuthenticationExclusionWithRows_(sheet, journalSheet, state);

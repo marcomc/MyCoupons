@@ -204,7 +204,7 @@ function extractCouponOutcome_(message, hooks) {
   // Validate source ownership before any model or image transport. A complete
   // issued authentication relation is a policy exclusion, not an empty offer.
   const source = candidateSource_(message);
-  const admission = authenticationAdmission_(source);
+  const admission = authenticationAdmissionForMessage_(message);
   if (admission.kind === 'issued') return authenticationExcludedOutcome_(source, admission);
   const prompt = candidatePrompt_(message);
   const images = source.images.map(function (image) {

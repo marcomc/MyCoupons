@@ -41,7 +41,7 @@ function runImportWorkflowInSession_(state) {
 function processCouponMessage_(state, message) {
   if (!message || typeof message.id !== 'string' || !validGmailApiId_(message.id)) fail_('MAIL');
   const existing = getMessageState_(state.journalSheet, message.id);
-  if (existing && authenticationAdmission_(candidateSource_(message)).kind === 'issued' &&
+  if (existing && authenticationAdmissionForMessage_(message).kind === 'issued' &&
       authenticationExclusionBindingsComplete_(existing)) {
     return checkpointAuthenticationExclusionWithRows_(state.couponSheet, state.journalSheet, existing);
   }
@@ -93,7 +93,7 @@ function processCouponMessage_(state, message) {
       // Re-check the original readable source before replaying a staged batch.
       // Exclusion only changes journal metadata; it never deletes rows or
       // grants a Gmail mutation checkpoint.
-      const replayAdmission = authenticationAdmission_(candidateSource_(message));
+      const replayAdmission = authenticationAdmissionForMessage_(message);
       if (replayAdmission.kind === 'issued') {
         if (!authenticationExclusionBindingsComplete_(journal)) fail_('STATE');
         return checkpointAuthenticationExclusionWithRows_(state.couponSheet, state.journalSheet, journal);
@@ -371,19 +371,30 @@ function checkpointAuthenticationExclusionWithRows_(sheet, journalSheet, journal
     if (Array.isArray(journal.candidateStates)) journal.candidateStates.forEach(function (item) { item.status = 'ignored'; });
     return checkpointAuthenticationExclusion_(journalSheet, journal);
   } catch (e) {
-    journal.rowNumbers = priorRowNumbers;
-    if (Array.isArray(journal.candidateStates) && priorCandidateRows) {
-      journal.candidateStates.forEach(function (item, index) { item.rowNumber = priorCandidateRows[index]; });
+    let durable = null;
+    let durableKnown = false;
+    try {
+      durable = loadMessageJournal_(journalSheet).states[journal.messageId] || null;
+      durableKnown = true;
+    } catch (ignored) {}
+    const committed = durable && durable.status === 'ignored' && durable.outcome === 'authentication_code_message';
+    // If the journal readback is itself ambiguous, keep rows ignored: restoring
+    // them could leave actionable rows while the durable state is terminal.
+    if (durableKnown && !committed) {
+      journal.rowNumbers = priorRowNumbers;
+      if (Array.isArray(journal.candidateStates) && priorCandidateRows) {
+        journal.candidateStates.forEach(function (item, index) { item.rowNumber = priorCandidateRows[index]; });
+      }
+      if (Array.isArray(journal.candidateStates) && candidateStatuses) {
+        journal.candidateStates.forEach(function (item, index) { item.status = candidateStatuses[index]; });
+      }
+      snapshots.forEach(function (snapshot) {
+        try {
+          sheet.getRange(snapshot.row, 25).setValues([[snapshot.action]]);
+          sheet.getRange(snapshot.row, 18).setValues([[snapshot.status]]);
+        } catch (ignored) {}
+      });
     }
-    if (Array.isArray(journal.candidateStates) && candidateStatuses) {
-      journal.candidateStates.forEach(function (item, index) { item.status = candidateStatuses[index]; });
-    }
-    snapshots.forEach(function (snapshot) {
-      try {
-        sheet.getRange(snapshot.row, 25).setValues([[snapshot.action]]);
-        sheet.getRange(snapshot.row, 18).setValues([[snapshot.status]]);
-      } catch (ignored) {}
-    });
     throw e;
   }
 }

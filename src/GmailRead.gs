@@ -378,7 +378,11 @@ function canonicalGmailMessage_(raw, deadlineMs) {
   // post-acquisition admission remains fail-closed if HTML coverage is incomplete.
   const preliminarySource = candidateSource_(preliminary);
   preliminarySource.incomplete = payload.incomplete || htmlContent_(payload.html).incomplete;
-  if (authenticationAdmission_(preliminarySource).kind === 'issued') return preliminary;
+  const preliminaryAdmission = authenticationAdmission_(preliminarySource);
+  if (preliminaryAdmission.kind === 'issued') {
+    preliminary.authenticationAdmission = preliminaryAdmission;
+    return preliminary;
+  }
   const acquired = acquireMessageImages_(raw, payload.html, imageDeadline);
   preliminary.incomplete = payload.incomplete || acquired.incomplete;
   preliminary.images = acquired.images;

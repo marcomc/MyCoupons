@@ -96,7 +96,7 @@ function authenticationTargetNounPattern_() {
 }
 
 function authenticationTargetSearchPattern_() {
-  return '(?:^|[^\\p{L}\\p{N}_])(?:' + authenticationTargetPattern_() + ')(?=$|[^\\p{L}\\p{N}_])';
+  return '(?:^|[^\\p{L}\\p{N}\\p{M}_])(?:' + authenticationTargetPattern_() + ')(?=$|[^\\p{L}\\p{N}\\p{M}_])';
 }
 
 function authenticationAssignmentPattern_() {
@@ -114,15 +114,16 @@ function authenticationValue_(value) {
   const first = unwrap(token);
   if (first !== token) removedWrapper = true;
   token = first;
-  if (!wellFormedUtf16_(token) || Array.from(token).length > 40) return '';
+  if (!wellFormedUtf16_(token)) return '';
   token = token.replace(/[.!?,;:]+$/u, '');
   if (!removedWrapper) token = unwrap(token);
-  if (!token || !wellFormedUtf16_(token)) return '';
+  if (!token || !wellFormedUtf16_(token) || Array.from(token).length > 40) return '';
   const points = Array.from(token).length;
   if (points < 1 || points > 40 || !/[\p{L}\p{N}\p{M}]/u.test(token)) return '';
   const numericPart = '[\\p{Nd}][\\p{Nd}.,٫٬]*';
-  if (/^[+\-−][\p{Nd}][\p{Nd}.,٫٬]*$/u.test(token)) return '';
-  if (new RegExp('^' + numericPart + '\\s*[-‐‑‒–—−－/:∕⁄∶]\\s*' + numericPart + '$', 'u').test(token)) return '';
+  if (new RegExp('^' + NUMERIC_SIGN_TOKEN + numericPart + '$', 'u').test(token)) return '';
+  const numericRangeOrRatioSeparator = '(?:' + NUMERIC_RANGE_SEPARATOR + '|∕|⁄|∶)';
+  if (new RegExp('^' + numericPart + '\\s*' + numericRangeOrRatioSeparator + '\\s*' + numericPart + '$', 'u').test(token)) return '';
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token)) return '';
   if (/^(?:[a-z][a-z\d+.-]*:|www\.|\/\/)/iu.test(token)) return '';
   if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|this|that|it|one|same|above|below|today|yesterday|tomorrow|now|soon|later|already|successfully|immediately|here|there|n\/?a|tbd|unknown|undefined|null|none|missing|not\s+available|not\s+applicable|x{3,})$/iu.test(token)) return '';
@@ -214,7 +215,8 @@ function authenticationTargetlessDiscussionClause_(clause) {
 
 function authenticationLikeSource_(source) {
   const pattern = /(?:^|[^\p{L}\p{N}\p{M}_])(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|two[ -]?factor|verify(?:ing)?\s+(?:your|the)?\s*(?:account|email|identity)|confirm(?:ing)?\s+(?:your|the)?\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\s+(?:al\s+)?(?:tuo\s+)?account)(?=$|[^\p{L}\p{N}\p{M}_])/iu;
-  const target = new RegExp(authenticationTargetSearchPattern_(), 'iu');
+  const target = new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])(?:' + authenticationTargetPattern_() +
+    ')(?=$|[^\\p{L}\\p{N}\\p{M}_])', 'iu');
   return source.sourceSpans.some(function (span) {
     return span && typeof span.text === 'string' && (pattern.test(span.text) || target.test(span.text));
   });
@@ -239,8 +241,14 @@ function authenticationAdmission_(source) {
   let representation = '';
   for (const span of source.sourceSpans) {
     if (span.kind !== representation) { discussionFrame = false; representation = span.kind; }
-    if (span.quoted && authenticationLikeSource_({sourceSpans: [span]})) { discussion = true; continue; }
     const clauses = authenticationClauseParts_(span.text);
+    const quotedAuthentication = span.quoted && (authenticationLikeSource_({sourceSpans: [span]}) ||
+      clauses.some(function (clause) {
+        return authenticationIssuedClause_(clause, bridge) ||
+          authenticationGenericAssignment_(clause, bridge) ||
+          authenticationDiscussionClause_(clause, true);
+      }));
+    if (quotedAuthentication) { discussion = true; continue; }
     for (const clause of clauses) {
       if (discussionFrame) {
         discussion = true;
@@ -254,6 +262,12 @@ function authenticationAdmission_(source) {
     }
   }
   return authenticationAdmissionResult_(issued && !discussion ? 'issued' : discussion ? 'discussion' : 'ambiguous', issued || authenticationLike);
+}
+
+function authenticationAdmissionForMessage_(message) {
+  const admission = message && message.authenticationAdmission;
+  if (admission && admission.kind === 'issued' && admission.deterministic === true && admission.authenticationLike === true) return admission;
+  return authenticationAdmission_(candidateSource_(message));
 }
 
 function authenticationExclusion_(source) {
