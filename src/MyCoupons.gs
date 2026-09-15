@@ -434,7 +434,10 @@ function collectPlainTextParts_(part, plainText) {
     return;
   }
   if (String(part.mimeType || '').toLowerCase() === 'text/plain' && part.body && part.body.data) {
-    plainText.push(decodeBase64UrlUtf8_(part.body.data));
+    var decoded = decodeBase64UrlUtf8_(part.body.data);
+    if (decoded !== null) {
+      plainText.push(decoded);
+    }
   }
   (part.parts || []).forEach(function(child) {
     collectPlainTextParts_(child, plainText);
@@ -452,7 +455,11 @@ function isAttachedPart_(part) {
 }
 
 function decodeBase64UrlUtf8_(encoded) {
-  return Utilities.newBlob(Utilities.base64DecodeWebSafe(encoded)).getDataAsString('UTF-8');
+  try {
+    return Utilities.newBlob(Utilities.base64DecodeWebSafe(encoded)).getDataAsString('UTF-8');
+  } catch (error) {
+    return null;
+  }
 }
 
 function messageHasLabel_(message, labelId) {

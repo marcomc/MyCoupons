@@ -8,6 +8,7 @@ const source = await readFile(new URL('../src/MyCoupons.gs', import.meta.url), '
 function message({
   id,
   attachmentText = '',
+  encodedBody = null,
   subject = '',
   body = '',
   date = new Date('2026-01-10T08:00:00.000Z'),
@@ -21,6 +22,7 @@ function message({
     from,
     id,
     labels,
+    encodedBody,
     subject,
   };
 }
@@ -122,7 +124,7 @@ function createRuntime({
       ],
       mimeType: 'multipart/alternative',
       parts: [{
-        body: {data: Buffer.from(value.body).toString('base64url')},
+        body: {data: value.encodedBody ?? Buffer.from(value.body).toString('base64url')},
         mimeType: 'text/plain',
       }].concat(value.attachmentText ? [{
         body: {data: Buffer.from(value.attachmentText).toString('base64url')},
@@ -185,7 +187,12 @@ function createRuntime({
       },
     },
     Utilities: {
-      base64DecodeWebSafe: encoded => Buffer.from(encoded, 'base64url'),
+      base64DecodeWebSafe: encoded => {
+        if (!/^[A-Za-z0-9_-]*={0,2}$/.test(encoded)) {
+          throw new Error('Could not decode string.');
+        }
+        return Buffer.from(encoded, 'base64url');
+      },
       newBlob: bytes => ({getDataAsString: () => Buffer.from(bytes).toString('utf8')}),
     },
     console,
@@ -214,6 +221,23 @@ test('imports an explicitly introduced code, then labels and archives its exact 
   }]);
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK'), '2026-01-11T10:00:00.000Z');
   assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2026-01-01T00:00:00.000Z') / 1000)}`));
+});
+
+test('skips an undecodable MIME text part without aborting later valid messages', () => {
+  const runtime = createRuntime({messages: [
+    message({id: 'malformed', encodedBody: '%not-base64url%'}),
+    message({id: 'valid', body: 'Coupon code: SAVE20'}),
+  ]});
+
+  const outcome = runtime.context.runMyCouponsImport();
+
+  assert.equal(outcome.imported, 1);
+  assert.equal(runtime.rows[1][1], 'SAVE20');
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.mutations)), [{
+    resource: {addLabelIds: ['Label_Imported'], removeLabelIds: ['INBOX']},
+    userId: 'me',
+    id: 'valid',
+  }]);
 });
 
 test('preserves the 26-column legacy sheet layout and writes legacy aliases at their exact indices', () => {
