@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- Replace open-ended authentication interpretation with a closed typed admission
+  contract. Deterministic exclusion now requires a complete same-span,
+  same-clause value, explicit authentication target, and affirmative assignment,
+  delivery, or use predicate, with one explicit subject-to-body purpose bridge.
+  Questions, hypotheses, reports, examples, documentation, negations,
+  speculative language, issuer-name words, cross-clause leakage, and unsupported
+  layouts remain Gemini/manual review cases. Complete exclusions bypass model and
+  image work, checkpoint without rows or Gmail mutation, and remain fail-closed
+  through workflow replay and archive gates.
+
 - Bind Gemini extraction values to typed evidence in a shared JSON response
   schema on both backends. Validate the complete response before projection,
   retain source-grounding and review authority, reject excess offers and

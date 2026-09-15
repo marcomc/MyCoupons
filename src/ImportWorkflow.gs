@@ -85,9 +85,19 @@ function processCouponMessage_(state, message) {
     }
     const resumingBatch = journal.version === 3;
     if (!resumingBatch) journal.version = 2;
+    if (resumingBatch) {
+      // Re-check the original readable source before replaying a staged batch.
+      // Exclusion only changes journal metadata; it never deletes rows or
+      // grants a Gmail mutation checkpoint.
+      const replayAdmission = authenticationAdmission_(candidateSource_(message));
+      if (replayAdmission.kind === 'issued') return checkpointAuthenticationExclusion_(state.journalSheet, journal);
+    }
     const extraction = resumingBatch ? {candidates: journal.batchIntent.candidates,
       archiveAllowed: false, verifiedNonOffer: false} : extractCouponOutcomeForState_(state, message);
     const candidates = extraction.candidates;
+    if (extraction.excludedReason === 'authentication_code_message') {
+      return checkpointAuthenticationExclusion_(state.journalSheet, journal);
+    }
     if (extraction.verifiedNonOffer) {
       if (journal.candidateStates.length) {
         if (!candidateStates_(journal.candidateStates, journal.candidateKeys, journal.rowNumbers)) fail_('STATE');

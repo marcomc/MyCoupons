@@ -52,9 +52,10 @@ function deterministicCandidates_(message) {
   return deterministicCandidateOutcome_(message).candidates;
 }
 function deterministicCandidateOutcome_(message) {
-  // Only explicit code syntax is deterministic. Preserve the full bounded terms
-  // and require review: a regex cannot establish the completeness of an offer.
   const source = candidateSource_(message);
+  const admission = authenticationAdmission_(source);
+  if (admission.kind === 'issued') return {candidates: [], complete: !source.incomplete,
+    excludedReason: 'authentication_code_message', admission: admission};
   const codes = [];
   let complete = true;
   source.spans.forEach(function (text) {
@@ -72,6 +73,156 @@ function deterministicCandidateOutcome_(message) {
     }
   });
   return {candidates: codes.slice(0, MC.maxCandidates), complete: complete && codes.length <= MC.maxCandidates};
+}
+
+// Authentication admission is intentionally a closed contract. Only the
+// relation forms below can produce `issued`; every unsupported construction is
+// reviewable but non-deterministic. This parser never returns or rewrites the
+// value, so coupon/code identity remains owned by the normal evidence lexer.
+const MC_AUTHENTICATION_ADMISSION_KINDS = Object.freeze(['issued', 'ambiguous', 'discussion', 'incomplete']);
+const MC_AUTHENTICATION_SOURCE_LIMIT = 60000;
+
+function authenticationAdmissionResult_(kind, authenticationLike) {
+  return {kind: kind, deterministic: kind === 'issued', authenticationLike: !!authenticationLike};
+}
+
+function authenticationTargetPattern_() {
+  return '(?:(?:verification|authentication|security|one[ -]?time|password[ -]?reset|login|log[ -]?in|sign[ -]?in|email|account|identity|two[ -]?factor|multi[ -]?factor|mfa|2fa|otp)\\s+(?:code|passcode|pin|password)|one[ -]?time\\s+password|passcode|otp|pin|codice\\s+(?:di\\s+)?(?:verifica|autenticazione|sicurezza|accesso|monouso))';
+}
+
+function authenticationTargetNounPattern_() {
+  return '(?:account|email|e-?mail|identity|password|profil(?:e|o))';
+}
+
+function authenticationAssignmentPattern_() {
+  return '(?:is|are|è|e[’\\x27]|=|:)';
+}
+
+function authenticationValue_(value) {
+  if (typeof value !== 'string' || !value) return '';
+  let token = value;
+  const closing = {'"': '"', "'": "'", '<': '>', '“': '”', '‘': '’'}[token.charAt(0)];
+  if (closing && token.charAt(token.length - 1) === closing && token.length > 2) token = token.slice(1, -1);
+  token = token.replace(/[.!?,;:]+$/u, '');
+  if (!token || !wellFormedUtf16_(token)) return '';
+  const points = Array.from(token).length;
+  if (points < 1 || points > 40 || !/[\p{L}\p{N}\p{M}]/u.test(token)) return '';
+  if (/^\p{Nd}+\s*[-–—−/:]\s*\p{Nd}+$/u.test(token)) return '';
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token)) return '';
+  if (/^(?:https?:|www\.|\/\/)/iu.test(token)) return '';
+  if (/^(?:example|sample|placeholder|demo|code_here|otp|pin|passcode)$/iu.test(token)) return '';
+  return token;
+}
+
+function authenticationIssuerPrefixPattern_() {
+  // A leading issuer name is context, not an example/status heuristic. The
+  // narrow shape deliberately excludes arbitrary prose and comma clauses.
+  return '(?:(?:[\\p{L}\\p{N}][\\p{L}\\p{N}._-]*(?:\\s+[\\p{L}\\p{N}][\\p{L}\\p{N}._-]*){0,3})\\s*:\\s*)?';
+}
+
+function authenticationClauseParts_(text) {
+  // `!` is not a boundary here: it may be part of a complete Unicode code
+  // token. Unsupported punctuation/layout remains ambiguous instead of being
+  // reinterpreted as a shorter value.
+  return String(text || '').split(/(?<=[.?;])(?=\s|$)|\n/u).map(function (part) {
+    return part.trim();
+  }).filter(function (part) { return !!part; });
+}
+
+function authenticationSubjectPurpose_(text) {
+  const value = String(text || '').trim();
+  if (!value || /[?;]|(?:for|to)\s+(?:discount|coupon|save|shop|redeem|sconto|risparmiare)\b/iu.test(value)) return false;
+  return /^(?:(?:sign[ -]?in|log[ -]?in)(?:\s+to\s+[\p{L}\p{N} ._-]{1,60})?|verify\s+(?:your|the)\s+account|confirm\s+(?:your|the)\s+email|reset\s+(?:your|the)\s+password|accedi(?:\s+al\s+(?:tuo\s+)?account)?|verifica\s+(?:il|la|tuo|tua)\s+(?:account|identità|email))\.?$/iu.test(value);
+}
+
+function authenticationGenericAssignment_(clause, bridged) {
+  const noun = '(?:code|passcode|pin|codice)';
+  const prefix = authenticationIssuerPrefixPattern_() + '(?:(?:your|the|a|an|il\\s+tuo|tuo|il|la)\\s+)?' + noun;
+  const forward = new RegExp('^' + prefix + '\\s*' + authenticationAssignmentPattern_() + '\\s*(\\S+)[.!?,;:]*$', 'iu').exec(clause);
+  const reverse = new RegExp('^(\\S+)\\s*' + authenticationAssignmentPattern_() + '\\s*(?:(?:your|the|a|an|il\\s+tuo|tuo|il|la)\\s+)?' + noun + '[.!?,;:]*$', 'iu').exec(clause);
+  return bridged && (forward && authenticationValue_(forward[1]) || reverse && authenticationValue_(reverse[1]));
+}
+
+function authenticationIssuedClause_(clause, bridged) {
+  if (/[?]/u.test(clause) || authenticationDiscussionClause_(clause)) return false;
+  const target = authenticationTargetPattern_();
+  const label = '(?:(?:your|the|a|an|il\\s+tuo|tuo|il|la)\\s+)?' + target;
+  const prefix = authenticationIssuerPrefixPattern_();
+  const forward = new RegExp('^' + prefix + label + '\\s*' + authenticationAssignmentPattern_() + '\\s*(\\S+)[.!?,;:]*$', 'iu').exec(clause);
+  if (forward && authenticationValue_(forward[1])) return true;
+  const reverse = new RegExp('^' + prefix + '(\\S+)\\s*' + authenticationAssignmentPattern_() + '\\s*' + label + '[.!?,;:]*$', 'iu').exec(clause);
+  if (reverse && authenticationValue_(reverse[1])) return true;
+
+  const use = new RegExp('^' + prefix + '(?:please\\s+)?(?:use|enter|type|insert|inserisci|digita|usa)\\s+' +
+    '(?:(?:(?:your|the|a|an|il\\s+tuo|tuo|il|la)\\s+)?(?:code|passcode|pin|codice)\\s+)?(\\S+)\\s+' +
+    '(?:to|for|per)\\s+(?:verify|confirm|authenticate|access|reset|sign[ -]?in|log[ -]?in|verifica|conferma|accedi)\\s+' +
+    '(?:(?:your|the|a|an|il\\s+tuo|tuo|il|la)\\s+)?' + authenticationTargetNounPattern_() + '[.!?,;:]*$', 'iu').exec(clause);
+  if (use && authenticationValue_(use[1])) return true;
+
+  const delivery = new RegExp('^' + prefix + '(?:we|i|the\\s+system|the\\s+service|il\\s+sistema)\\s+' +
+    '(?:sent|emailed|texted|generated|created|inviato|inviata|generato|generata)\\s+' +
+    '(?:(?:your|the|il\\s+tuo|tuo|il|la)\\s+)?' + target + '\\s*(?:to\\s+(?:you|your)|a\\s+(?:te|lei))?\\s*(?:is|è|=|:)?\\s*(\\S+)[.!?,;:]*$', 'iu').exec(clause);
+  return !!(delivery && authenticationValue_(delivery[1]));
+}
+
+function authenticationDiscussionClause_(clause) {
+  const target = authenticationTargetPattern_();
+  return /[?]/u.test(clause) ||
+    /^(?:if|unless|suppose|assuming|maybe|perhaps|for\s+example|example|documentation|tutorial|according\s+to|they\s+said|it\s+was\s+reported)\b/iu.test(clause) ||
+    /^(?:question|report(?:ed)?|(?:they|we|i|the\s+system)\s+(?:said|reported|recalled|remembered|mentioned|described|referred))\s*:/iu.test(clause) ||
+    new RegExp('^(?:not|never|no|non)\\b[\\s\\S]*' + target, 'iu').test(clause) ||
+    new RegExp(target + '\\s*' + authenticationAssignmentPattern_() + '\\s*(?:not|never|no|non)\\b', 'iu').test(clause) ||
+    new RegExp('\\b(?:not|never|no|non|pending|required|expired|invalid|used)\\b[\\s\\S]*' + target, 'iu').test(clause) ||
+    new RegExp('\\b(?:mention(?:ed|s|ing)|discuss(?:ed|es|ing)|describ(?:ed|es|ing)|refer(?:red|s|ring))\\b[\\s\\S]*' + target, 'iu').test(clause);
+}
+
+function authenticationLikeSource_(source) {
+  const pattern = /\b(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|two[ -]?factor|verify(?:ing)?\s+(?:your|the)?\s*(?:account|email|identity)|confirm(?:ing)?\s+(?:your|the)?\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\s+(?:al\s+)?(?:tuo\s+)?account)\b/iu;
+  return source.sourceSpans.some(function (span) { return span && typeof span.text === 'string' && pattern.test(span.text); });
+}
+
+function authenticationAdmission_(source) {
+  if (!source || !Array.isArray(source.sourceSpans) || !Array.isArray(source.spans)) return authenticationAdmissionResult_('incomplete');
+  if (!MC_AUTHENTICATION_ADMISSION_KINDS.length || source.sourceSpans.length !== source.spans.length) return authenticationAdmissionResult_('incomplete');
+  const authenticationLike = authenticationLikeSource_(source);
+  if (source.incomplete) return authenticationAdmissionResult_('incomplete', authenticationLike);
+  let total = 0;
+  const subject = source.sourceSpans.find(function (span) { return span && span.kind === 'subject'; });
+  const bridge = !!(subject && authenticationSubjectPurpose_(subject.text));
+  let discussion = false;
+  for (const span of source.sourceSpans) {
+    if (!span || typeof span.text !== 'string') return authenticationAdmissionResult_('incomplete');
+    total += span.text.length;
+    if (total > MC_AUTHENTICATION_SOURCE_LIMIT) return authenticationAdmissionResult_('incomplete');
+    const clauses = authenticationClauseParts_(span.text);
+    for (const clause of clauses) {
+      if (authenticationIssuedClause_(clause, bridge)) return authenticationAdmissionResult_('issued', true);
+      if (span.kind !== 'subject' && authenticationGenericAssignment_(clause, bridge)) return authenticationAdmissionResult_('issued', true);
+      if (authenticationDiscussionClause_(clause)) discussion = true;
+    }
+  }
+  return authenticationAdmissionResult_(discussion ? 'discussion' : 'ambiguous', authenticationLike);
+}
+
+function authenticationExclusion_(source) {
+  const admission = authenticationAdmission_(source);
+  return admission.kind === 'issued' ? {excludedReason: 'authentication_code_message', admission: admission} : null;
+}
+
+function authenticationExcludedOutcome_(source, admission) {
+  return {status: source.incomplete ? 'incomplete' : 'complete', candidates: [], empty: true,
+    modelEmpty: false, invalidated: false, verifiedNonOffer: false, archiveAllowed: false,
+    excludedReason: 'authentication_code_message', admission: admission || authenticationAdmission_(source)};
+}
+
+function checkpointAuthenticationExclusion_(journalSheet, journal) {
+  if (!journal || typeof journal.messageId !== 'string' || !Array.isArray(journal.candidateKeys) ||
+      !Array.isArray(journal.rowNumbers)) fail_('STATE');
+  journal.status = 'ignored'; journal.outcome = 'authentication_code_message'; journal.failureStage = '';
+  journal.lastError = ''; journal.nextRetryAt = ''; journal.updatedAt = new Date().toISOString();
+  saveMessageState_(journalSheet, journal);
+  return {messageId: journal.messageId, status: 'ignored', rows: journal.rowNumbers.slice(),
+    excludedReason: 'authentication_code_message'};
 }
 function rawOccurrences_(value, source, normalized) {
   if (!wellFormedUtf16_(value) || !wellFormedUtf16_(source)) return [];

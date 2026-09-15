@@ -55,6 +55,8 @@ function processReviewAction_(sheet, rowNumber, action, c) {
     return completeReviewMessage_(state, sheet, journalSheet, c);
   }
   const message = getReviewMessage_(state.messageId);
+  const admission = authenticationAdmission_(candidateSource_(message));
+  if (admission.kind === 'issued') return checkpointAuthenticationExclusion_(journalSheet, state);
   if (action === EN.actions.retry_ai) return retryReviewCandidate_(sheet, rowNumber, state, candidate[0], message, journalSheet, c);
   if (!validateReviewRow_(row, message, displayRow, candidate[0].imageEvidence, formulas, c, key, legacyTechnicalNotes)) return reviewFailure_(sheet, rowNumber, 'REVIEW');
   setReviewStatus_(sheet, rowNumber, EN.statuses.confirmed, '');

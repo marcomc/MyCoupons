@@ -7,6 +7,7 @@ Private Gmail-to-Google-Sheets coupon importer built with Google Apps Script.
 - [Status](#status)
 - [Sheet state](#sheet-state)
 - [Core behavior](#core-behavior)
+- [Authentication admission contract](#authentication-admission-contract)
 - [Gemini routing](#gemini-routing)
 - [Future delivery](#future-delivery)
 - [Local provisioner foundation](#local-provisioner-foundation)
@@ -293,6 +294,35 @@ file for private settings. The coupon tab cannot use the reserved internal title
 `_MyCoupons Messages`, regardless of case, and its name is limited to 100 UTF-16
 units. The manifest declares the intended owner-only Apps
 Script runtime; no permissions are granted merely by checking out these files.
+
+## Authentication admission contract
+
+Authentication exclusion is a closed, typed admission decision shared by
+deterministic extraction, model admission, workflow checkpoints, replay, and
+Confirm. Only a complete value, an explicit authentication target, and one
+affirmative assignment, delivery, or use predicate in the same source span and
+clause can produce `issued`. One explicit authentication-purpose subject may
+bridge to a body clause containing a generic `code`, `passcode`, `pin`, or
+`codice`; subject and body values are never concatenated.
+
+| Fixed case | Admission | Result |
+| --- | --- | --- |
+| `Your verification code is 123456.` | `issued` | Exclude before model/image work; checkpoint as policy-ignored. |
+| `123456 is your authentication passcode.` | `issued` | Same exclusion and no Gmail mutation. |
+| `Use code ÈTÉ+20! to verify your account.` | `issued` | Preserve the source token; exclude without rewriting it. |
+| `We sent your security code 123456.` | `issued` | Delivery is accepted only with the explicit target and value. |
+| Subject `Sign in to Acme`; body `Your code is 123456.` | `issued` | The single subject-to-body purpose bridge is allowed. |
+| `Is your verification code 123456?` | `discussion` | Gemini/manual review path; never deterministic exclusion. |
+| `Maybe`, `for example`, reported, documented, or negated issuance | `discussion` | No deterministic exclusion. |
+| Unsupported layout, cross-clause/span relation, locator, range, placeholder, or overlong value | `ambiguous` | Gemini/manual review path; grammar is not expanded implicitly. |
+| Any positively matching source with incomplete coverage | `incomplete` | Fail closed; no automatic exclusion or archive authority. |
+
+Case, issuer-name words, punctuation, and token length do not grant authority;
+length is only a safety bound. Questions, hypotheses, reporting, examples,
+documentation, negations, speculative language, and cross-clause leakage are
+not affirmative issuance. The contract intentionally does not implement broad
+natural-language understanding, candidate selection/filtering, new locales,
+Gmail filtering, Cloud/deployment changes, or unrelated parser refactors.
 
 ## Local provisioner foundation
 

@@ -201,8 +201,11 @@ function uniqueAICandidates_(candidates) {
 }
 
 function extractCouponOutcome_(message, hooks) {
-  // Validate all source ownership, HTML coverage, and image records before any fetch.
+  // Validate source ownership before any model or image transport. A complete
+  // issued authentication relation is a policy exclusion, not an empty offer.
   const source = candidateSource_(message);
+  const admission = authenticationAdmission_(source);
+  if (admission.kind === 'issued') return authenticationExcludedOutcome_(source, admission);
   const prompt = candidatePrompt_(message);
   const images = source.images.map(function (image) {
     if (!image || typeof image.mimeType !== 'string' || !Array.isArray(image.bytes)) fail_('AI');
@@ -228,13 +231,14 @@ function extractCouponOutcome_(message, hooks) {
   // This is deliberately descriptive, not authorization to mutate Gmail. In
   // particular, an empty complete outcome only means no candidate was found.
   const complete = !source.incomplete && !prompt.truncated && deterministicOutcome.complete;
-  const autoConfirmed = result.length > 0 && complete && !aiOutcome.invalidated && result.every(function (candidate) {
+  const manualAuthenticationReview = admission.authenticationLike && admission.kind !== 'issued';
+  const autoConfirmed = result.length > 0 && complete && !manualAuthenticationReview && !aiOutcome.invalidated && result.every(function (candidate) {
     return candidateAutomaticallyConfirmed_(candidate);
   });
   return {status: complete ? 'complete' : 'incomplete', candidates: result,
     empty: result.length === 0, modelEmpty: aiOutcome.modelEmpty, invalidated: aiOutcome.invalidated,
     verifiedNonOffer: complete && result.length === 0 && aiOutcome.modelEmpty,
-    archiveAllowed: autoConfirmed};
+    archiveAllowed: autoConfirmed, admission: admission};
 }
 
 function candidateAutomaticallyConfirmed_(candidate) {
