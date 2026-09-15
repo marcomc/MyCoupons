@@ -41,7 +41,8 @@ function runImportWorkflowInSession_(state) {
 function processCouponMessage_(state, message) {
   if (!message || typeof message.id !== 'string' || !validGmailApiId_(message.id)) fail_('MAIL');
   const existing = getMessageState_(state.journalSheet, message.id);
-  if (existing && authenticationAdmission_(candidateSource_(message)).kind === 'issued') {
+  if (existing && authenticationAdmission_(candidateSource_(message)).kind === 'issued' &&
+      authenticationExclusionBindingsComplete_(existing)) {
     return checkpointAuthenticationExclusionWithRows_(state.couponSheet, state.journalSheet, existing);
   }
   if (legacyMailReviewBatch_(existing)) {
@@ -93,12 +94,16 @@ function processCouponMessage_(state, message) {
       // Exclusion only changes journal metadata; it never deletes rows or
       // grants a Gmail mutation checkpoint.
       const replayAdmission = authenticationAdmission_(candidateSource_(message));
-      if (replayAdmission.kind === 'issued') return checkpointAuthenticationExclusionWithRows_(state.couponSheet, state.journalSheet, journal);
+      if (replayAdmission.kind === 'issued') {
+        if (!authenticationExclusionBindingsComplete_(journal)) fail_('STATE');
+        return checkpointAuthenticationExclusionWithRows_(state.couponSheet, state.journalSheet, journal);
+      }
     }
     const extraction = resumingBatch ? {candidates: journal.batchIntent.candidates,
       archiveAllowed: false, verifiedNonOffer: false} : extractCouponOutcomeForState_(state, message);
     const candidates = extraction.candidates;
     if (extraction.excludedReason === 'authentication_code_message') {
+      if (!authenticationExclusionBindingsComplete_(journal)) fail_('STATE');
       return checkpointAuthenticationExclusionWithRows_(state.couponSheet, state.journalSheet, journal);
     }
     if (extraction.verifiedNonOffer) {
@@ -330,6 +335,15 @@ function extractCouponOutcomeForState_(state, message) {
   const hooks = Object.assign({}, state && state.extractionHooks || {});
   if (state && state._deadlineMs) hooks.deadlineMs = state._deadlineMs;
   return extractCouponOutcome_(message, hooks);
+}
+
+function authenticationExclusionBindingsComplete_(journal) {
+  if (!journal || !Array.isArray(journal.candidateKeys) || !Array.isArray(journal.rowNumbers) ||
+      journal.candidateKeys.length !== journal.rowNumbers.length ||
+      !journal.rowNumbers.every(function (rowNumber) {
+        return Number.isSafeInteger(rowNumber) && rowNumber > 1 && rowNumber < Number.MAX_SAFE_INTEGER;
+      })) return false;
+  return journal.candidateStates === undefined || candidateStates_(journal.candidateStates, journal.candidateKeys, journal.rowNumbers);
 }
 
 function checkpointAuthenticationExclusionWithRows_(sheet, journalSheet, journal) {

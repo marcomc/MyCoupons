@@ -181,6 +181,22 @@ test('an interrupted legacy batch cannot become complete through a later non-off
   assert.equal(coupon._values[1][17], 'Needs review');
 });
 
+test('an incomplete legacy authentication batch stays fail-closed without row resolution', () => {
+  const {ctx, config} = harness();
+  const message = {id: 'abc123', receivedAtMs: 0, subject: 'Sign in to Acme', sender: '',
+    link: 'https://mail.google.com/mail/#all/abc123', text: 'Your code is 123456.', html: '', incomplete: false};
+  const key = 'a'.repeat(64);
+  const coupon = sheet([HEADERS]); const journal = sheet([JOURNAL]);
+  const retained = ctx.newMessageState_(message.id);
+  retained.version = 1; retained.status = 'failed'; retained.candidateKeys = [key]; retained.dedupeKeys = [key];
+  retained.rowNumbers = [];
+  ctx.saveMessageState_(journal, retained);
+  const result = ctx.runImportWorkflow_({config, couponSheet: coupon, journalSheet: journal, messages: [message]});
+  assert.equal(result.messages[0].status, 'failed');
+  assert.equal(ctx.getMessageState_(journal, message.id).failureStage, 'legacy_batch');
+  assert.equal(coupon.getLastRow(), 1);
+});
+
 test('resumed archive intent revalidates rows before Gmail mutation', () => {
   const {ctx, config} = harness(); config.labelId = 'coupon-label';
   const message = {id: 'abc123', receivedAtMs: Date.parse('2026-09-01T10:00:00Z'), subject: 'Brand offer', sender: '',

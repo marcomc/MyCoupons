@@ -122,7 +122,7 @@ function authenticationValue_(value) {
   if (points < 1 || points > 40 || !/[\p{L}\p{N}\p{M}]/u.test(token)) return '';
   const numericPart = '[\\p{Nd}][\\p{Nd}.,٫٬]*';
   if (/^[+\-−][\p{Nd}][\p{Nd}.,٫٬]*$/u.test(token)) return '';
-  if (new RegExp('^' + numericPart + '\\s*[-‐‑‒–—−－/:∕⁄]\\s*' + numericPart + '$', 'u').test(token)) return '';
+  if (new RegExp('^' + numericPart + '\\s*[-‐‑‒–—−－/:∕⁄∶]\\s*' + numericPart + '$', 'u').test(token)) return '';
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token)) return '';
   if (/^(?:[a-z][a-z\d+.-]*:|www\.|\/\/)/iu.test(token)) return '';
   if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|this|that|it|one|same|above|below|today|yesterday|tomorrow|now|soon|later|already|successfully|immediately|here|there|x{3,})$/iu.test(token)) return '';
@@ -206,6 +206,10 @@ function authenticationDiscussionClause_(clause, includeGeneric) {
     new RegExp('\\b(?:mention(?:ed|s|ing)|discuss(?:ed|es|ing)|describ(?:ed|es|ing)|refer(?:red|s|ring))\\b[\\s\\S]*' + discussionTarget, 'iu').test(clause);
 }
 
+function authenticationTargetlessDiscussionClause_(clause) {
+  return /^(?:it|this|that|code|passcode|pin|codice)\s+(?:is|was|seems?)(?:\s+not)?\s+(?:pending|required|expired|invalid|used|wrong|incorrect|cancelled|canceled|obsolete|inactive|void)\b/iu.test(clause);
+}
+
 function authenticationLikeSource_(source) {
   const pattern = /\b(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|two[ -]?factor|verify(?:ing)?\s+(?:your|the)?\s*(?:account|email|identity)|confirm(?:ing)?\s+(?:your|the)?\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\s+(?:al\s+)?(?:tuo\s+)?account)\b/iu;
   const target = new RegExp(authenticationTargetSearchPattern_(), 'iu');
@@ -241,6 +245,7 @@ function authenticationAdmission_(source) {
         discussionFrame = authenticationDiscussionClause_(clause, bridge);
         continue;
       }
+      if (authenticationTargetlessDiscussionClause_(clause)) { discussion = true; continue; }
       if (authenticationIssuedClause_(clause, bridge)) { issued = true; continue; }
       if (span.kind !== 'subject' && authenticationGenericAssignment_(clause, bridge)) { issued = true; continue; }
       if (authenticationDiscussionClause_(clause)) { discussion = true; discussionFrame = true; }

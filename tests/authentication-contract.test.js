@@ -79,6 +79,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'Your verification code is 1,000‒2,000.'}],
     ['ambiguous', {text: 'Your verification code is 1,000－2,000.'}],
     ['ambiguous', {text: 'Your verification code is 12.3/45.6.'}],
+    ['ambiguous', {text: 'Your verification code is 123∶456.'}],
     ['ambiguous', {text: 'Your verification code is ' + 'A'.repeat(40) + '!'}],
     ['ambiguous', {text: 'Your verification code is −123.'}],
     ['ambiguous', {text: 'Your verification code is [[' + 'A'.repeat(40) + ']].'}],
@@ -98,6 +99,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['discussion', {text: 'Your verification code is 123456⁉'}],
     ['discussion', {text: 'Your verification code is 123456⁈'}],
     ['discussion', {text: 'Your verification code is 123456﹖'}],
+    ['discussion', {text: 'Your verification code is 123456. It is expired.'}],
   ];
   cases.forEach(([kind, message]) => {
     const result = admission(ctx, message);
