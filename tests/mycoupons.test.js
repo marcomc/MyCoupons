@@ -62,6 +62,7 @@ function createRuntime({
   profileEmail = 'owner@example.com',
   triggers = [],
   dailyScheduleMetadata = undefined,
+  scanState = undefined,
   watermark = null,
   watermarkTargetIdentity = undefined,
 } = {}) {
@@ -112,6 +113,9 @@ function createRuntime({
         installedConfig.sheetName, installedConfig.labelName, labels[0]?.id,
       ]) : watermarkTargetIdentity);
     }
+  }
+  if (scanState !== undefined) {
+    properties.set('MYCOUPONS_SCAN_STATE', scanState);
   }
 
   const sheet = {
@@ -242,12 +246,21 @@ function createRuntime({
             if (advanceClockOnList) {
               clock = new Date(clock.getTime() + 60_000);
             }
+            const excludedLabels = [
+              options.q.includes('-in:sent') && 'SENT',
+              options.q.includes('-in:drafts') && 'DRAFT',
+              options.q.includes('-in:spam') && 'SPAM',
+              options.q.includes('-in:trash') && 'TRASH',
+            ].filter(Boolean);
+            const queryMessageIds = listedMessageIds.filter(id => !excludedLabels.some(label =>
+              gmailMessages.get(id).labelIds.includes(label),
+            ));
             const offset = Number(options.pageToken || 0);
-            const page = listedMessageIds.slice(offset, offset + listPageSize).map(id => ({id}));
+            const page = queryMessageIds.slice(offset, offset + listPageSize).map(id => ({id}));
             const next = offset + page.length;
             return {
               messages: page,
-              ...(next < listedMessageIds.length ? {nextPageToken: String(next)} : {}),
+              ...(next < queryMessageIds.length ? {nextPageToken: String(next)} : {}),
             };
           },
           modify: (resource, userId, id) => mutations.push({resource, userId, id}),
@@ -430,7 +443,7 @@ test('keeps a multi-page import query stable after importing and labeling an ear
   assert.equal(runtime.context.runMyCouponsImport().imported, 2);
   assert.equal(runtime.queries.length, 2);
   assert.equal(runtime.queries[0], runtime.queries[1]);
-  assert.doesNotMatch(runtime.queries[0], /-label:/u);
+  assert.doesNotMatch(runtime.queries[0], /(?:-label:|-in:spam|-in:trash)/u);
   assert.equal(runtime.mutations.length, 2);
 });
 
@@ -1036,7 +1049,7 @@ test('reports only non-secret installation readiness and fails closed for owner 
   const installed = createRuntime({triggers: [{getHandlerFunction: () => 'runMyCouponsDaily'}]});
   assert.deepEqual(
     JSON.parse(JSON.stringify(installed.context.getMyCouponsInstallationStatus())),
-    {dailyTrigger: 'installed', ready: true},
+    {dailyTrigger: 'installed', importState: 'current', ready: true},
   );
 
   const wrongOwner = createRuntime({profileEmail: 'other@example.com'});
@@ -1047,6 +1060,94 @@ test('reports only non-secret installation readiness and fails closed for owner 
     {getHandlerFunction: () => 'runMyCouponsDaily'},
   ]});
   assert.throws(() => duplicates.context.getMyCouponsInstallationStatus(), /multiple daily triggers/i);
+});
+
+test('read-only status validates persisted import state without mutating it', () => {
+  const validScan = JSON.stringify({
+    boundary: '2026-01-11T10:00:00.000Z',
+    configIdentity: JSON.stringify([
+      'owner@example.com', 'Coupon Code Discount', 'sheet-id', 'Coupon Manager', true,
+      '2026-01-01T00:00:00.000Z', 1,
+    ]),
+    labelId: 'Label_Imported',
+    labelName: 'Coupon Code Discount',
+    listedFinalPage: true,
+    pageToken: '',
+    pendingIds: [],
+    start: '2026-01-10T10:00:00.000Z',
+    version: 2,
+  });
+  const runtime = createRuntime({
+    scanState: validScan,
+    watermark: '2026-01-10T10:00:00.000Z',
+  });
+  const before = [...runtime.properties.entries()];
+
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.context.getMyCouponsInstallationStatus())), {
+    dailyTrigger: 'missing', importState: 'current', ready: true,
+  });
+  assert.deepEqual([...runtime.properties.entries()], before);
+  assert.equal(runtime.mutations.length, 0);
+  assert.equal(runtime.trashed.length, 0);
+  assert.equal(runtime.createdTriggers.length, 0);
+});
+
+test('read-only status fails closed for malformed persisted scan or watermark state', () => {
+  const malformedScan = createRuntime({scanState: '{"version":2}'});
+  const malformedScanBefore = [...malformedScan.properties.entries()];
+  assert.throws(() => malformedScan.context.getMyCouponsInstallationStatus(), /scan state is invalid/i);
+  assert.deepEqual([...malformedScan.properties.entries()], malformedScanBefore);
+
+  const malformedTimestamp = JSON.stringify({
+    boundary: '2026-01-11T10:00:00.000Z',
+    configIdentity: JSON.stringify([
+      'owner@example.com', 'Coupon Code Discount', 'sheet-id', 'Coupon Manager', true,
+      '2026-01-01T00:00:00.000Z', 1,
+    ]),
+    labelId: 'Label_Imported',
+    labelName: 'Coupon Code Discount',
+    listedFinalPage: true,
+    pageToken: '',
+    pendingIds: [],
+    start: 'not-a-timestamp',
+    version: 2,
+  });
+  const malformedScanTimestamp = createRuntime({scanState: malformedTimestamp});
+  const malformedScanTimestampBefore = [...malformedScanTimestamp.properties.entries()];
+  assert.throws(() => malformedScanTimestamp.context.getMyCouponsInstallationStatus(), /scan state is invalid/i);
+  assert.deepEqual([...malformedScanTimestamp.properties.entries()], malformedScanTimestampBefore);
+
+  const malformedWatermark = createRuntime({
+    watermark: 'not-a-timestamp',
+  });
+  const malformedWatermarkBefore = [...malformedWatermark.properties.entries()];
+  assert.throws(() => malformedWatermark.context.getMyCouponsInstallationStatus(), /watermark is invalid/i);
+  assert.deepEqual([...malformedWatermark.properties.entries()], malformedWatermarkBefore);
+});
+
+test('read-only status reports valid stale import state without clearing it', () => {
+  const staleScan = JSON.stringify({
+    boundary: '2026-01-11T10:00:00.000Z',
+    configIdentity: 'stale-config',
+    labelId: 'stale-label',
+    labelName: 'Coupon Code Discount',
+    listedFinalPage: true,
+    pageToken: '',
+    pendingIds: [],
+    start: '2026-01-10T10:00:00.000Z',
+    version: 2,
+  });
+  const runtime = createRuntime({
+    scanState: staleScan,
+    watermark: '2026-01-10T10:00:00.000Z',
+    watermarkTargetIdentity: 'stale-target',
+  });
+  const before = [...runtime.properties.entries()];
+
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.context.getMyCouponsInstallationStatus())), {
+    dailyTrigger: 'missing', importState: 'restart-required', ready: true,
+  });
+  assert.deepEqual([...runtime.properties.entries()], before);
 });
 
 test('fails closed for legacy or mismatched daily trigger schedule metadata without mutating triggers', () => {
@@ -1093,12 +1194,12 @@ test('rejects invalid time zones before trigger creation and accepts valid slash
 
   const valid = createRuntime({config: {timeZone: 'America/New_York'}});
   assert.deepEqual(JSON.parse(JSON.stringify(valid.context.getMyCouponsInstallationStatus())), {
-    dailyTrigger: 'missing', ready: true,
+    dailyTrigger: 'missing', importState: 'current', ready: true,
   });
 
   const gmt = createRuntime({config: {timeZone: 'GMT'}});
   assert.deepEqual(JSON.parse(JSON.stringify(gmt.context.getMyCouponsInstallationStatus())), {
-    dailyTrigger: 'missing', ready: true,
+    dailyTrigger: 'missing', importState: 'current', ready: true,
   });
 });
 
@@ -1153,6 +1254,21 @@ test('reports an incomplete retention page after safely trashing its processed m
   const outcome = runtime.context.cleanupExpiredImportedMessages();
   assert.deepEqual(JSON.parse(JSON.stringify(outcome)), {complete: false, trashed: 1});
   assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-first'}]);
+});
+
+test('uses retention system exclusions so an eligible message is not pinned behind protected mail', () => {
+  const runtime = createRuntime({
+    listPageSize: 1,
+    messages: [
+      message({id: 'old-sent', date: new Date('2025-01-01T00:00:00.000Z'), labels: ['Coupon Code Discount', 'SENT']}),
+      message({id: 'old-eligible', date: new Date('2025-01-02T00:00:00.000Z'), labels: ['Coupon Code Discount']}),
+    ],
+  });
+
+  const outcome = runtime.context.cleanupExpiredImportedMessages();
+  assert.deepEqual(JSON.parse(JSON.stringify(outcome)), {complete: true, trashed: 1});
+  assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-eligible'}]);
+  assert.match(runtime.queries[0], /-in:sent -in:drafts -in:spam -in:trash/u);
 });
 
 test('surfaces incomplete retention through the daily result', () => {
