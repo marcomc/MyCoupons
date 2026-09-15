@@ -151,7 +151,7 @@ function authenticationClauseParts_(text) {
 }
 
 function authenticationQuestionMark_() {
-  return '[?？؟⸮՟՞⁇⁈⁉﹖]';
+  return '[?？؟;⸮՟՞⁇⁈⁉﹖]';
 }
 
 function authenticationSubjectPurpose_(text) {

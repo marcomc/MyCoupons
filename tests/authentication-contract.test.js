@@ -119,6 +119,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'Your verification code is\u2028123456.'}],
     ['ambiguous', {text: 'Your verification code is\u2029123456.'}],
     ['discussion', {text: 'Your verification code is 123456？'}],
+    ['discussion', {text: 'Your verification code is 123456;'}],
     ['discussion', {text: 'Your verification code is 123456՞'}],
     ['discussion', {text: 'Your verification code is 123456⁉'}],
     ['discussion', {text: 'Your verification code is 123456⁈'}],

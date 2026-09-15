@@ -41,44 +41,44 @@ function runImportWorkflowInSession_(state) {
 function processCouponMessage_(state, message) {
   if (!message || typeof message.id !== 'string' || !validGmailApiId_(message.id)) fail_('MAIL');
   const existing = getMessageState_(state.journalSheet, message.id);
-  if (existing && authenticationAdmissionForMessage_(message).kind === 'issued' &&
-      authenticationExclusionBindingsComplete_(existing)) {
-    return checkpointAuthenticationExclusionWithRows_(state.couponSheet, state.journalSheet, existing);
-  }
-  if (legacyMailReviewBatch_(existing)) {
-    reconcileCandidateRows_(state.couponSheet, existing);
-    existing.status = 'review'; existing.failureStage = ''; existing.lastError = ''; existing.nextRetryAt = '';
-    existing.updatedAt = new Date().toISOString(); saveMessageState_(state.journalSheet, existing);
-    return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
-  }
-  if (existing && existing.version !== 3 && !completeCandidateBatch_(existing)) {
-    keepIncompleteBatch_(existing, state.journalSheet);
-    return {messageId: message.id, status: 'failed', rows: existing.rowNumbers.slice(), error: 'STATE'};
-  }
-  if (existing && completeCandidateBatch_(existing) && MC_FINAL_MESSAGE_STATES.indexOf(existing.status) >= 0) {
-    return {messageId: message.id, status: existing.status, rows: existing.rowNumbers.slice()};
-  }
-  if (existing && completeCandidateBatch_(existing) && existing.status === 'review') {
-    return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
-  }
-  if (existing && completeCandidateBatch_(existing) && existing.outcome === 'archive' && existing.candidateStates &&
-      existing.candidateStates.length && existing.candidateStates.every(function (item) { return item.status === 'confirmed'; })) {
-    reconcileCandidateRows_(state.couponSheet, existing);
-    if (!refreshAndValidateReviewRows_(existing, state.couponSheet, state.config)) {
-      restoreReviewRows_(existing, state.couponSheet);
-      existing.status = 'review'; existing.outcome = 'review'; existing.updatedAt = new Date().toISOString();
-      saveMessageState_(state.journalSheet, existing);
+  let journal = existing || newMessageState_(message.id);
+  try {
+    if (existing && authenticationAdmissionForMessage_(message).kind === 'issued' &&
+        authenticationExclusionBindingsComplete_(existing)) {
+      return checkpointAuthenticationExclusionWithRows_(state.couponSheet, state.journalSheet, existing);
+    }
+    if (legacyMailReviewBatch_(existing)) {
+      reconcileCandidateRows_(state.couponSheet, existing);
+      existing.status = 'review'; existing.failureStage = ''; existing.lastError = ''; existing.nextRetryAt = '';
+      existing.updatedAt = new Date().toISOString(); saveMessageState_(state.journalSheet, existing);
       return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
     }
-    // Persist refreshed row locations before granting Gmail mutation authority.
-    saveMessageState_(state.journalSheet, existing);
-    return finalizeImportedMessage_(state, existing);
-  }
-  let journal = existing || newMessageState_(message.id);
-  journal.attempts++;
-  journal.status = 'processing'; journal.failureStage = 'extract'; journal.lastError = '';
-  saveMessageState_(state.journalSheet, journal);
-  try {
+    if (existing && existing.version !== 3 && !completeCandidateBatch_(existing)) {
+      keepIncompleteBatch_(existing, state.journalSheet);
+      return {messageId: message.id, status: 'failed', rows: existing.rowNumbers.slice(), error: 'STATE'};
+    }
+    if (existing && completeCandidateBatch_(existing) && MC_FINAL_MESSAGE_STATES.indexOf(existing.status) >= 0) {
+      return {messageId: message.id, status: existing.status, rows: existing.rowNumbers.slice()};
+    }
+    if (existing && completeCandidateBatch_(existing) && existing.status === 'review') {
+      return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
+    }
+    if (existing && completeCandidateBatch_(existing) && existing.outcome === 'archive' && existing.candidateStates &&
+        existing.candidateStates.length && existing.candidateStates.every(function (item) { return item.status === 'confirmed'; })) {
+      reconcileCandidateRows_(state.couponSheet, existing);
+      if (!refreshAndValidateReviewRows_(existing, state.couponSheet, state.config)) {
+        restoreReviewRows_(existing, state.couponSheet);
+        existing.status = 'review'; existing.outcome = 'review'; existing.updatedAt = new Date().toISOString();
+        saveMessageState_(state.journalSheet, existing);
+        return {messageId: message.id, status: 'review', rows: existing.rowNumbers.slice()};
+      }
+      // Persist refreshed row locations before granting Gmail mutation authority.
+      saveMessageState_(state.journalSheet, existing);
+      return finalizeImportedMessage_(state, existing);
+    }
+    journal.attempts++;
+    journal.status = 'processing'; journal.failureStage = 'extract'; journal.lastError = '';
+    saveMessageState_(state.journalSheet, journal);
     if (!Array.isArray(journal.candidateStates)) {
       if (journal.candidateKeys.length || journal.rowNumbers.length) {
         if (journal.candidateKeys.length !== journal.rowNumbers.length) fail_('STATE');

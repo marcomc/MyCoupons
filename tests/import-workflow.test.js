@@ -222,6 +222,25 @@ test('authentication exclusion rebinds reordered candidate states by key', () =>
     [[secondKey, 3, 'ignored'], [firstKey, 2, 'ignored']]);
 });
 
+test('authentication checkpoint failures stay inside per-message handling', () => {
+  const {ctx, config} = harness();
+  const authMessage = {id: 'abc123', receivedAtMs: 0, subject: 'Sign in to Acme', sender: '',
+    link: 'https://mail.google.com/mail/#all/abc123', text: 'Your code is 123456.', html: '', incomplete: false};
+  const nextMessage = {id: 'def456', receivedAtMs: 0, subject: 'Offer', sender: '',
+    link: 'https://mail.google.com/mail/#all/def456', text: 'Coupon code SAVE20', html: '', incomplete: false};
+  const candidate = confirmedCandidate({code: 'SAVE20', review: true});
+  const key = ctx.candidateDedupeKey_(authMessage, candidate);
+  const coupon = sheet([HEADERS, ctx.couponRow_(authMessage, candidate)], 1);
+  coupon.getRange(2, 14).setNote(ctx.candidateKeyNote_(key));
+  const journal = sheet([JOURNAL]); const retained = ctx.newMessageState_(authMessage.id);
+  retained.version = 2; retained.status = 'review'; retained.candidateKeys = [key]; retained.dedupeKeys = [key]; retained.rowNumbers = [2];
+  retained.candidateStates = [{key, rowNumber: 2, status: 'review', imageEvidence: {}}]; ctx.saveMessageState_(journal, retained);
+  const state = stateWithExtraction(ctx, {config, couponSheet: coupon, journalSheet: journal, messages: [authMessage, nextMessage]});
+  const result = ctx.runImportWorkflow_(state);
+  assert.equal(result.messages[0].status, 'failed');
+  assert.equal(result.messages[1].status, 'review');
+});
+
 test('resumed archive intent revalidates rows before Gmail mutation', () => {
   const {ctx, config} = harness(); config.labelId = 'coupon-label';
   const message = {id: 'abc123', receivedAtMs: Date.parse('2026-09-01T10:00:00Z'), subject: 'Brand offer', sender: '',
