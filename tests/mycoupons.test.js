@@ -55,6 +55,7 @@ function createRuntime({
   now = new Date('2026-01-11T10:00:00.000Z'),
   labels = [{id: 'Label_Imported', name: 'Coupon Code Discount', type: 'user'}],
   listedMessageIds = messages.map(value => value.id),
+  openedSpreadsheetName = undefined,
   profileEmail = 'owner@example.com',
   triggers = [],
   dailyScheduleMetadata = undefined,
@@ -258,7 +259,10 @@ function createRuntime({
     SpreadsheetApp: {
       openById: id => {
         assert.equal(id, 'sheet-id');
-        return {getSheetByName: name => name === 'Coupon Manager' ? sheet : null};
+        return {
+          getName: () => openedSpreadsheetName === undefined ? installedConfig.spreadsheetName : openedSpreadsheetName,
+          getSheetByName: name => name === 'Coupon Manager' ? sheet : null,
+        };
       },
     },
     Utilities: {
@@ -498,6 +502,50 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
   assert.equal(outcome.imported, 0);
   assert.equal(runtime.rows.length, 1);
   assert.deepEqual(runtime.mutations, []);
+});
+
+test('does not import coupon codes found only in quoted reply or forward history', () => {
+  const runtime = createRuntime({messages: [
+    message({
+      id: 'on-wrote',
+      subject: 'Re: promotion',
+      body: 'Thanks for the details.\n\nOn Tue, Jan 6, 2026 at 10:00 AM Offers <offers@example.com> wrote:\nCoupon code: SAVE20',
+    }),
+    message({
+      id: 'leading-quote',
+      subject: 'Fwd: promotion',
+      body: 'No new offer from me.\n> Coupon code: SAVE20',
+    }),
+    message({
+      id: 'new-top-content',
+      subject: 'Re: promotion',
+      body: 'Coupon code: NEW20\n\n---------- Forwarded Message ----------\nCoupon code: OLD20',
+    }),
+  ]});
+
+  const outcome = runtime.context.runMyCouponsImport();
+
+  assert.equal(outcome.imported, 1);
+  assert.equal(runtime.rows.length, 2);
+  assert.equal(runtime.rows[1][1], 'NEW20');
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.mutations)), [{
+    resource: {addLabelIds: ['Label_Imported'], removeLabelIds: ['INBOX']},
+    userId: 'me',
+    id: 'new-top-content',
+  }]);
+});
+
+test('requires the opened spreadsheet to have the exact configured name before Gmail mutation', () => {
+  const matching = createRuntime({messages: [message({id: 'matching', body: 'Coupon code: SAVE20'})]});
+  assert.equal(matching.context.runMyCouponsImport().imported, 1);
+
+  const mismatched = createRuntime({
+    openedSpreadsheetName: 'Other spreadsheet',
+    messages: [message({id: 'mismatched', body: 'Coupon code: SAVE20'})],
+  });
+  assert.throws(() => mismatched.context.runMyCouponsImport(), /spreadsheet name did not match/i);
+  assert.equal(mismatched.rows.length, 1);
+  assert.equal(mismatched.mutations.length, 0);
 });
 
 test('rejects overlong and URL-like code forms rather than importing truncated tokens', () => {

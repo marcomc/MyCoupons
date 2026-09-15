@@ -378,6 +378,9 @@ function assertMyCouponsOwner_(config) {
 
 function resolveCouponSheet_(config) {
   var spreadsheet = SpreadsheetApp.openById(config.spreadsheetId);
+  if (spreadsheet.getName() !== config.spreadsheetName) {
+    throw new Error('Configured coupon spreadsheet name did not match the opened spreadsheet.');
+  }
   var sheet = spreadsheet.getSheetByName(config.sheetName);
   if (!sheet) {
     throw new Error('Configured coupon sheet was not found.');
@@ -736,7 +739,8 @@ function messageHasSystemExclusionLabel_(message) {
 }
 
 function extractCouponCodes_(subject, plainText) {
-  var content = [subject || '', plainText || ''];
+  var unquoted = stripQuotedReplyHistory_(plainText);
+  var content = [unquoted.hadQuotedHistory ? '' : subject || '', unquoted.text];
   if (content.some(function(text) {
     return /\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b|\b(?:share|refer|invite)\s+(?:your\s+)?(?:promo(?:tional)?|referral)\s+code\b/iu.test(text);
   })) {
@@ -747,6 +751,28 @@ function extractCouponCodes_(subject, plainText) {
     collectExplicitCouponTokens_(text, found);
   });
   return found;
+}
+
+function stripQuotedReplyHistory_(plainText) {
+  if (typeof plainText !== 'string') {
+    return {hadQuotedHistory: false, text: ''};
+  }
+  var lines = plainText.replace(/\r\n?/gu, '\n').split('\n');
+  var retained = [];
+  for (var index = 0; index < lines.length; index += 1) {
+    if (isQuotedReplyHistoryMarker_(lines[index])) {
+      return {hadQuotedHistory: true, text: retained.join('\n')};
+    }
+    retained.push(lines[index]);
+  }
+  return {hadQuotedHistory: false, text: retained.join('\n')};
+}
+
+function isQuotedReplyHistoryMarker_(line) {
+  return /^\s*>/u.test(line) ||
+    /^\s*On\s+.+\bwrote:\s*$/iu.test(line) ||
+    /^\s*(?:-+\s*)?(?:Original Message|Forwarded Message)(?:\s*-+)?\s*:?\s*$/iu.test(line) ||
+    /^\s*Begin forwarded message:\s*$/iu.test(line);
 }
 
 function collectExplicitCouponTokens_(text, found) {
