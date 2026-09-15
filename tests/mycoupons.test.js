@@ -44,6 +44,7 @@ function createRuntime({
   coerceLastWrite = false,
   attachmentText = '',
   advanceClockOnList = false,
+  fetchFailureAfter = null,
   now = new Date('2026-01-11T10:00:00.000Z'),
   labels = [{id: 'Label_Imported', name: 'Coupon Code Discount'}],
   listedMessageIds = messages.map(value => value.id),
@@ -58,6 +59,7 @@ function createRuntime({
   const trashed = [];
   const queries = [];
   const createdTriggers = [];
+  let getMessageCount = 0;
   const numberFormats = [];
   const properties = new Map();
   properties.set('MYCOUPONS_CONFIG', JSON.stringify({
@@ -149,6 +151,10 @@ function createRuntime({
         Messages: {
           get: (userId, id) => {
             assert.equal(userId, 'me');
+            if (fetchFailureAfter !== null && getMessageCount >= fetchFailureAfter) {
+              throw new Error("Quota exceeded for quota metric 'Total Query Cost'.");
+            }
+            getMessageCount += 1;
             return gmailMessages.get(id);
           },
           list: (userId, options) => {
@@ -237,6 +243,28 @@ test('skips an undecodable MIME text part without aborting later valid messages'
     resource: {addLabelIds: ['Label_Imported'], removeLabelIds: ['INBOX']},
     userId: 'me',
     id: 'valid',
+  }]);
+});
+
+test('keeps the watermark unchanged after a Gmail rate limit while committing the verified partial batch', () => {
+  const runtime = createRuntime({
+    fetchFailureAfter: 1,
+    messages: [
+      message({id: 'first', body: 'Coupon code: FIRST20'}),
+      message({id: 'second', body: 'Coupon code: SECOND20'}),
+    ],
+  });
+
+  const outcome = runtime.context.runMyCouponsImport();
+
+  assert.equal(outcome.complete, false);
+  assert.equal(outcome.imported, 1);
+  assert.equal(outcome.watermark, null);
+  assert.equal(runtime.properties.has('MYCOUPONS_WATERMARK'), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.mutations)), [{
+    resource: {addLabelIds: ['Label_Imported'], removeLabelIds: ['INBOX']},
+    userId: 'me',
+    id: 'first',
   }]);
 });
 

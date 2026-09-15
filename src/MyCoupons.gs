@@ -25,7 +25,7 @@ var MYCOUPONS_COLUMNS = {
  * Imports explicit coupon codes from Gmail, then labels and optionally archives
  * only messages whose Sheet rows were successfully verified.
  *
- * @return {{imported: number, scanned: number, watermark: string}}
+ * @return {{complete: boolean, imported: number, scanned: number, watermark: string|null}}
  */
 function runMyCouponsImport() {
   return withMyCouponsLock_(function() {
@@ -117,7 +117,8 @@ function runMyCouponsImport_(config) {
   var sheet = resolveCouponSheet_(config);
   var sheetState = readCouponSheetState_(sheet);
   var boundary = new Date();
-  var messages = listGmailMessages_(buildImportQuery_(config, boundary));
+  var listing = listGmailMessages_(buildImportQuery_(config, boundary));
+  var messages = listing.messages;
   var imported = 0;
 
   messages.forEach(function(message) {
@@ -145,9 +146,12 @@ function runMyCouponsImport_(config) {
     }
   });
 
-  var watermark = boundary.toISOString();
-  PropertiesService.getScriptProperties().setProperty(MYCOUPONS_WATERMARK_PROPERTY, watermark);
-  return {imported: imported, scanned: messages.length, watermark: watermark};
+  var watermark = null;
+  if (listing.complete) {
+    watermark = boundary.toISOString();
+    PropertiesService.getScriptProperties().setProperty(MYCOUPONS_WATERMARK_PROPERTY, watermark);
+  }
+  return {complete: listing.complete, imported: imported, scanned: messages.length, watermark: watermark};
 }
 
 function cleanupExpiredImportedMessages_(config) {
@@ -158,7 +162,7 @@ function cleanupExpiredImportedMessages_(config) {
   threshold.setUTCDate(threshold.getUTCDate() - config.retentionDays);
   var trashed = 0;
   var label = resolveImportedLabel_(config);
-  listGmailMessages_(buildRetentionQuery_(config)).forEach(function(message) {
+  listGmailMessages_(buildRetentionQuery_(config)).messages.forEach(function(message) {
     if (!messageHasLabel_(message, label.id) || message.date.getTime() >= threshold.getTime()) {
       return;
     }
@@ -390,12 +394,24 @@ function listGmailMessages_(query) {
       options.pageToken = pageToken;
     }
     var page = Gmail.Users.Messages.list('me', options);
-    (page.messages || []).forEach(function(reference) {
-      messages.push(toMyCouponsMessage_(Gmail.Users.Messages.get('me', reference.id, {format: 'full'})));
-    });
+    var references = page.messages || [];
+    for (var index = 0; index < references.length; index += 1) {
+      try {
+        messages.push(toMyCouponsMessage_(Gmail.Users.Messages.get('me', references[index].id, {format: 'full'})));
+      } catch (error) {
+        if (isGmailRateLimitError_(error)) {
+          return {complete: false, messages: messages};
+        }
+        throw error;
+      }
+    }
     pageToken = page.nextPageToken;
   } while (pageToken);
-  return messages;
+  return {complete: true, messages: messages};
+}
+
+function isGmailRateLimitError_(error) {
+  return error && /(?:quota exceeded|rate limit|user-rate limit)/iu.test(String(error.message || error));
 }
 
 function toMyCouponsMessage_(message) {
