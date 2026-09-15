@@ -60,6 +60,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'Your verification code is. 123456.'}],
     ['ambiguous', {text: 'Your verification code is ' + 'A'.repeat(41) + '.'}],
     ['ambiguous', {text: 'The verification code appears as 123456.'}],
+    ['ambiguous', {text: 'Your 2-factor code is 123456. Acme coupon code SAVE20.'}],
     ['discussion', {text: 'For example. Your verification code is 123456.'}],
     ['discussion', {text: 'For example. Documentation. Your verification code is 123456.'}],
     ['discussion', {text: 'Your verification code is 123456. This is only an example.'}],

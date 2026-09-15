@@ -218,7 +218,7 @@ function authenticationTargetlessDiscussionClause_(clause) {
 }
 
 function authenticationLikeSource_(source) {
-  const pattern = new RegExp(authenticationWholeTokenPattern_('(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|two[ -]?factor|verify(?:ing)?\\s+(?:your|the)?\\s*(?:account|email|identity)|confirm(?:ing)?\\s+(?:your|the)?\\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\\s+(?:al\\s+)?(?:tuo\\s+)?account)'), 'iu');
+  const pattern = new RegExp(authenticationWholeTokenPattern_('(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|2[ -]?factor|two[ -]?factor|verify(?:ing)?\\s+(?:your|the)?\\s*(?:account|email|identity)|confirm(?:ing)?\\s+(?:your|the)?\\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\\s+(?:al\\s+)?(?:tuo\\s+)?account)'), 'iu');
   const target = new RegExp('(?:^|[^\\p{L}\\p{N}\\p{M}_])(?:' + authenticationTargetPattern_() +
     ')(?=$|[^\\p{L}\\p{N}\\p{M}_])', 'iu');
   return source.sourceSpans.some(function (span) {
