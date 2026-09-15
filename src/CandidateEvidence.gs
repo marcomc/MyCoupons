@@ -188,6 +188,7 @@ function authenticationDiscussionClause_(clause, includeGeneric) {
   const discussionTarget = includeGeneric ? '(?:code|passcode|pin|codice|' + target + ')' : target;
   return new RegExp(authenticationQuestionMark_(), 'u').test(clause) ||
     /^(?:if|unless|suppose|assuming|maybe|perhaps|for\s+example|example|documentation|tutorial|according\s+to|they\s+said|it\s+was\s+reported)\b/iu.test(clause) ||
+    /^(?:this|that)\s+is\s+(?:only\s+)?(?:an?\s+)?(?:example|illustration|documentation|report)\b/iu.test(clause) ||
     /^(?:question|report(?:ed)?|status\s+report|hypothesis|hypothetical(?:\s+scenario)?|user\s+said|(?:they|we|i|the\s+system)\s+(?:said|reported|recalled|remembered|mentioned|described|referred))\s*:/iu.test(clause) ||
     new RegExp('^(?:not|never|no|non)\\b[\\s\\S]*' + discussionTarget, 'iu').test(clause) ||
     new RegExp(discussionTarget + '\\s*' + authenticationAssignmentPattern_() + '\\s*(?:not|never|no|non)\\b', 'iu').test(clause) ||
@@ -219,6 +220,7 @@ function authenticationAdmission_(source) {
   const bridge = !!(subject && authenticationSubjectPurpose_(subject.text));
   let discussion = false;
   let discussionFrame = false;
+  let issued = false;
   let representation = '';
   for (const span of source.sourceSpans) {
     if (span.kind !== representation) { discussionFrame = false; representation = span.kind; }
@@ -229,12 +231,12 @@ function authenticationAdmission_(source) {
         discussionFrame = authenticationDiscussionClause_(clause, bridge);
         continue;
       }
-      if (authenticationIssuedClause_(clause, bridge)) return authenticationAdmissionResult_('issued', true);
-      if (span.kind !== 'subject' && authenticationGenericAssignment_(clause, bridge)) return authenticationAdmissionResult_('issued', true);
+      if (authenticationIssuedClause_(clause, bridge)) { issued = true; continue; }
+      if (span.kind !== 'subject' && authenticationGenericAssignment_(clause, bridge)) { issued = true; continue; }
       if (authenticationDiscussionClause_(clause)) { discussion = true; discussionFrame = true; }
     }
   }
-  return authenticationAdmissionResult_(discussion ? 'discussion' : 'ambiguous', authenticationLike);
+  return authenticationAdmissionResult_(issued && !discussion ? 'issued' : discussion ? 'discussion' : 'ambiguous', issued || authenticationLike);
 }
 
 function authenticationExclusion_(source) {

@@ -57,6 +57,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'The verification code appears as 123456.'}],
     ['discussion', {text: 'For example. Your verification code is 123456.'}],
     ['discussion', {text: 'For example. Documentation. Your verification code is 123456.'}],
+    ['discussion', {text: 'Your verification code is 123456. This is only an example.'}],
     ['discussion', {html: '<p>For example.</p><p>Your verification code is 123456.</p>'}],
     ['ambiguous', {text: 'Your verification code is YOUR_CODE.'}],
     ['ambiguous', {text: 'Your verification code is [CODE].'}],
@@ -74,7 +75,9 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'Your verification code is ftp://example.com/code.'}],
     ['ambiguous', {text: 'Your verification code is tel:+15551234567.'}],
     ['discussion', {text: 'Your verification code is 123456？'}],
-    ['discussion', {text: 'Your verification code is 123456⁉'}]
+    ['discussion', {text: 'Your verification code is 123456⁉'}],
+    ['discussion', {text: 'Your verification code is 123456⁈'}],
+    ['discussion', {text: 'Your verification code is 123456﹖'}],
   ];
   cases.forEach(([kind, message]) => {
     const result = admission(ctx, message);
@@ -129,6 +132,15 @@ test('ambiguous authentication remains on the model/manual path', () => {
   assert.equal(modelCalls, 1);
   assert.equal(outcome.excludedReason, undefined);
   assert.equal(outcome.admission.kind, 'discussion');
+  assert.equal(outcome.archiveAllowed, false);
+});
+
+test('empty ambiguous authentication remains reachable for manual review', () => {
+  const {ctx} = harness();
+  ctx.callGeminiModel_ = () => ({text: JSON.stringify({candidates: []})});
+  const outcome = ctx.extractCouponOutcome_({text: 'Maybe your verification code is 123456.', incomplete: false});
+  assert.equal(outcome.admission.kind, 'discussion');
+  assert.equal(outcome.verifiedNonOffer, false);
   assert.equal(outcome.archiveAllowed, false);
 });
 

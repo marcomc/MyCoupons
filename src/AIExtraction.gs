@@ -237,7 +237,7 @@ function extractCouponOutcome_(message, hooks) {
   });
   return {status: complete ? 'complete' : 'incomplete', candidates: result,
     empty: result.length === 0, modelEmpty: aiOutcome.modelEmpty, invalidated: aiOutcome.invalidated,
-    verifiedNonOffer: complete && result.length === 0 && aiOutcome.modelEmpty,
+    verifiedNonOffer: complete && result.length === 0 && aiOutcome.modelEmpty && !manualAuthenticationReview,
     archiveAllowed: autoConfirmed, admission: admission};
 }
 
