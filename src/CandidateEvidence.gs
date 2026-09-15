@@ -95,6 +95,10 @@ function authenticationTargetNounPattern_() {
   return '(?:account|email|e-?mail|identity|password|profil(?:e|o))';
 }
 
+function authenticationTargetSearchPattern_() {
+  return '(?:^|[^\\p{L}\\p{N}_])(?:' + authenticationTargetPattern_() + ')(?=$|[^\\p{L}\\p{N}_])';
+}
+
 function authenticationAssignmentPattern_() {
   return '(?:(?:is|are)(?=\\s|$)|è(?=\\s|$)|e[’\\x27](?=\\s|$)|=|:)';
 }
@@ -171,7 +175,7 @@ function authenticationIssuedClause_(clause, bridged) {
   if (reverse && authenticationValue_(reverse[1])) return true;
 
   const use = new RegExp('^' + prefix + '(?:please\\s+)?(?:use|enter|type|insert|inserisci|digita|usa)\\s+' +
-    '(?:(?:(?:your|the|a|an|il\\s+tuo|tuo|il|la)\\s+)?(?:code|passcode|pin|codice)\\s+)?(\\S+)\\s+' +
+    '(?:(?:your|the|a|an|il\\s+tuo|tuo|il|la)\\s+)?(?:code|passcode|pin|codice)\\s+(\\S+)\\s+' +
     '(?:to|for|per)\\s+(?:verify|confirm|authenticate|access|reset|sign[ -]?in|log[ -]?in|verifica|conferma|accedi)\\s+' +
     '(?:(?:your|the|a|an|il\\s+tuo|tuo|il|la)\\s+)?' + authenticationTargetNounPattern_() + '[.!?,;:]*$', 'iu').exec(clause);
   if (use && authenticationValue_(use[1])) return true;
@@ -204,7 +208,7 @@ function authenticationDiscussionClause_(clause, includeGeneric) {
 
 function authenticationLikeSource_(source) {
   const pattern = /\b(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|two[ -]?factor|verify(?:ing)?\s+(?:your|the)?\s*(?:account|email|identity)|confirm(?:ing)?\s+(?:your|the)?\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\s+(?:al\s+)?(?:tuo\s+)?account)\b/iu;
-  const target = new RegExp(authenticationTargetPattern_(), 'iu');
+  const target = new RegExp(authenticationTargetSearchPattern_(), 'iu');
   return source.sourceSpans.some(function (span) {
     return span && typeof span.text === 'string' && (pattern.test(span.text) || target.test(span.text));
   });
@@ -221,9 +225,6 @@ function authenticationAdmission_(source) {
     total += span.text.length;
     if (total > MC_AUTHENTICATION_SOURCE_LIMIT) return authenticationAdmissionResult_('incomplete', authenticationLike);
   }
-  if (authenticationLike && source.sourceSpans.some(function (span) { return span.kind === 'html' && span.quoted; })) {
-    return authenticationAdmissionResult_('discussion', true);
-  }
   const subject = source.sourceSpans.find(function (span) { return span && span.kind === 'subject'; });
   const bridge = !!(subject && authenticationSubjectPurpose_(subject.text));
   let discussion = false;
@@ -232,6 +233,7 @@ function authenticationAdmission_(source) {
   let representation = '';
   for (const span of source.sourceSpans) {
     if (span.kind !== representation) { discussionFrame = false; representation = span.kind; }
+    if (span.quoted && authenticationLikeSource_({sourceSpans: [span]})) { discussion = true; continue; }
     const clauses = authenticationClauseParts_(span.text);
     for (const clause of clauses) {
       if (discussionFrame) {

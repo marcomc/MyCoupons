@@ -334,9 +334,13 @@ function extractCouponOutcomeForState_(state, message) {
 
 function checkpointAuthenticationExclusionWithRows_(sheet, journalSheet, journal) {
   if (!journal || !Array.isArray(journal.candidateKeys) || !Array.isArray(journal.rowNumbers)) fail_('STATE');
+  const priorRowNumbers = journal.rowNumbers.slice();
+  const priorCandidateRows = Array.isArray(journal.candidateStates) ? journal.candidateStates.map(function (item) { return item.rowNumber; }) : null;
   const entries = journal.candidateKeys.map(function (key, index) {
     const row = resolveCandidateRow_(sheet, journal.messageId, key, journal.rowNumbers[index]);
     if (!Number.isInteger(row) || row < 2) fail_('STATE');
+    journal.rowNumbers[index] = row;
+    if (Array.isArray(journal.candidateStates)) journal.candidateStates[index].rowNumber = row;
     return {key: key, row: row};
   });
   const snapshots = entries.map(function (entry) {
@@ -349,6 +353,10 @@ function checkpointAuthenticationExclusionWithRows_(sheet, journalSheet, journal
     if (Array.isArray(journal.candidateStates)) journal.candidateStates.forEach(function (item) { item.status = 'ignored'; });
     return checkpointAuthenticationExclusion_(journalSheet, journal);
   } catch (e) {
+    journal.rowNumbers = priorRowNumbers;
+    if (Array.isArray(journal.candidateStates) && priorCandidateRows) {
+      journal.candidateStates.forEach(function (item, index) { item.rowNumber = priorCandidateRows[index]; });
+    }
     if (Array.isArray(journal.candidateStates) && candidateStatuses) {
       journal.candidateStates.forEach(function (item, index) { item.status = candidateStatuses[index]; });
     }

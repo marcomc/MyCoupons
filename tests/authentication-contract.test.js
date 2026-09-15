@@ -41,7 +41,8 @@ test('closed admission accepts only complete affirmative authentication relation
     {subject: 'Your verification code is 123456.'},
     {subject: 'Sign in to Acme', text: 'Your code is 123456.'},
     {text: 'Sample Bank: your verification code is 123456.'},
-    {html: '<!-- <blockquote>template</blockquote> --><p>Your verification code is 123456.</p>'}
+    {html: '<!-- <blockquote>template</blockquote> --><p>Your verification code is 123456.</p>'},
+    {html: '<blockquote>Terms apply.</blockquote><p>Your verification code is 123456.</p>'}
   ];
   accepted.forEach(message => assert.equal(admission(ctx, message).kind, 'issued', JSON.stringify(message)));
   accepted.forEach(message => assert.equal(admission(ctx, message).deterministic, true));
@@ -83,6 +84,8 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'Use it to verify your account.'}],
     ['ambiguous', {text: 'Your verification code is example.com/reset.'}],
     ['ambiguous', {text: 'Your verification code is /verify/123.'}],
+    ['ambiguous', {text: 'Use Chrome to access your account.'}],
+    ['ambiguous', {text: 'Shopping savings: Acme coupon code SAVE20.'}],
     ['discussion', {html: '<p>Coupon code SAVE20</p><blockquote>Your verification code is 123456.</blockquote>'}],
     ['discussion', {text: 'Coupon code SAVE20\n---------- Forwarded message ---------\nYour verification code is 123456.'}],
     ['discussion', {text: 'Your verification code is 123456？'}],
