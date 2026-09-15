@@ -130,8 +130,8 @@ function authenticationValue_(value) {
   if (new RegExp('^' + numericPart + '\\s*' + numericRangeOrRatioSeparator + '\\s*' + numericPart + '$', 'u').test(token)) return '';
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token)) return '';
   if (/^(?:[a-z][a-z\d+.-]*:|www\.|\/\/)/iu.test(token)) return '';
-  if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|this|that|it|one|same|above|below|today|yesterday|tomorrow|now|soon|later|already|successfully|immediately|here|there|n\/?a|tbd|unknown|undefined|null|none|missing|not\s+available|not\s+applicable|x{3,})$/iu.test(token)) return '';
-  if (/^(?:[a-z\d](?:[a-z\d-]{0,62}\.)+[a-z]{2,})(?:[/?#:].*)?$/iu.test(token) || /^(?:\/|\.{1,2}\/|#|\?)/u.test(token)) return '';
+  if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|this|that|it|one|same|above|below|today|yesterday|tomorrow|now|soon|later|already|successfully|immediately|here|there|ready|again|n\/?a|tbd|unknown|undefined|null|none|missing|not\s+available|not\s+applicable|x{3,})$/iu.test(token)) return '';
+  if (/^(?:[a-z\d](?:[a-z\d-]{0,62}\.)+[a-z]{2,})(?:[/?#:].*)?$/iu.test(token) || /^(?:\d{1,3}\.){3}\d{1,3}(?:[/?#:].*)?$/u.test(token) || /^(?:\/|\.{1,2}\/|#|\?)/u.test(token)) return '';
   return token;
 }
 
