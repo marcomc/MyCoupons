@@ -125,7 +125,7 @@ function authenticationValue_(value) {
   if (new RegExp('^' + numericPart + '\\s*[-‐‑‒–—−－/:∕⁄∶]\\s*' + numericPart + '$', 'u').test(token)) return '';
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token)) return '';
   if (/^(?:[a-z][a-z\d+.-]*:|www\.|\/\/)/iu.test(token)) return '';
-  if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|this|that|it|one|same|above|below|today|yesterday|tomorrow|now|soon|later|already|successfully|immediately|here|there|x{3,})$/iu.test(token)) return '';
+  if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|this|that|it|one|same|above|below|today|yesterday|tomorrow|now|soon|later|already|successfully|immediately|here|there|n\/?a|tbd|unknown|undefined|null|none|missing|not\s+available|not\s+applicable|x{3,})$/iu.test(token)) return '';
   if (/^(?:[a-z\d](?:[a-z\d-]{0,62}\.)+[a-z]{2,})(?:[/?#:].*)?$/iu.test(token) || /^(?:\/|\.{1,2}\/|#|\?)/u.test(token)) return '';
   return token;
 }
@@ -194,6 +194,7 @@ function authenticationDiscussionClause_(clause, includeGeneric) {
   const discussionTarget = includeGeneric ? '(?:code|passcode|pin|codice|' + target + ')' : target;
   return new RegExp(authenticationQuestionMark_(), 'u').test(clause) ||
     /^(?:if|unless|suppose|assuming|maybe|perhaps|for\s+example|(?:an?\s+)?example|(?:an?\s+)?report|user\s+report|documentation|tutorial|according\s+to|they\s+said|it\s+was\s+reported)\b/iu.test(clause) ||
+    /^(?:can|could|would|will|do|does|did|is|are|am|have|has|please|why|how|what|when|where|who)\b[\s\S]{0,100}:\s/iu.test(clause) ||
     /^(?:this|that)\s+is\s+(?:only\s+)?(?:an?\s+)?(?:example|illustration|documentation|report)\b/iu.test(clause) ||
     /^(?:the\s+)?(?:documentation|docs?|tutorial)\s+(?:says?|shows?|states?|reads?|uses?)\s*:/iu.test(clause) ||
     /^(?:-{2,}\s*forwarded\s+message\s*-*|begin\s+forwarded\s+message)\s*:?$/iu.test(clause) ||
@@ -211,7 +212,7 @@ function authenticationTargetlessDiscussionClause_(clause) {
 }
 
 function authenticationLikeSource_(source) {
-  const pattern = /\b(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|two[ -]?factor|verify(?:ing)?\s+(?:your|the)?\s*(?:account|email|identity)|confirm(?:ing)?\s+(?:your|the)?\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\s+(?:al\s+)?(?:tuo\s+)?account)\b/iu;
+  const pattern = /(?:^|[^\p{L}\p{N}_])(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|two[ -]?factor|verify(?:ing)?\s+(?:your|the)?\s*(?:account|email|identity)|confirm(?:ing)?\s+(?:your|the)?\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\s+(?:al\s+)?(?:tuo\s+)?account)(?=$|[^\p{L}\p{N}_])/iu;
   const target = new RegExp(authenticationTargetSearchPattern_(), 'iu');
   return source.sourceSpans.some(function (span) {
     return span && typeof span.text === 'string' && (pattern.test(span.text) || target.test(span.text));

@@ -360,8 +360,7 @@ function canonicalGmailMessage_(raw, deadlineMs) {
   if (!isFinite(receivedAt.getTime())) fail_('MAIL');
   const payload = parseMimePayload_(raw.payload);
   const imageDeadline = Math.min(Date.now() + 30000, deadlineMs ? deadlineMs - 15000 : Infinity);
-  const acquired = acquireMessageImages_(raw, payload.html, imageDeadline);
-  return {
+  const preliminary = {
     id: raw.id,
     threadId: raw.threadId || '',
     receivedAt: receivedAt.toISOString(),
@@ -371,9 +370,19 @@ function canonicalGmailMessage_(raw, deadlineMs) {
     text: payload.text,
     html: payload.html,
     link: gmailLink_(raw.id),
-    incomplete: payload.incomplete || acquired.incomplete,
-    images: acquired.images
+    incomplete: payload.incomplete,
+    images: []
   };
+  // Authentication admission is independent of image evidence. A preliminary
+  // exclusion can avoid remote/attachment image transport, while the ordinary
+  // post-acquisition admission remains fail-closed if HTML coverage is incomplete.
+  const preliminarySource = candidateSource_(preliminary);
+  preliminarySource.incomplete = payload.incomplete || htmlContent_(payload.html).incomplete;
+  if (authenticationAdmission_(preliminarySource).kind === 'issued') return preliminary;
+  const acquired = acquireMessageImages_(raw, payload.html, imageDeadline);
+  preliminary.incomplete = payload.incomplete || acquired.incomplete;
+  preliminary.images = acquired.images;
+  return preliminary;
 }
 
 // Trace records contain only closed classifications, types, counts and outcomes.

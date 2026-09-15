@@ -320,6 +320,20 @@ test('recovered MIME messages still acquire image attachments and preserve HTML 
   }
 });
 
+test('preliminary authentication admission avoids image transport before final coverage recheck', () => {
+  const {ctx} = harness();
+  let fetches = 0;
+  ctx.UrlFetchApp = {fetch: () => { fetches++; throw new Error('must not fetch image'); }};
+  ctx.Gmail.Users.Messages = {Attachments: {get: () => assert.fail('must not fetch attachment')}};
+  const payload = {mimeType: 'multipart/alternative', parts: [
+    {mimeType: 'text/plain', body: body('Your verification code is 123456.')},
+    {mimeType: 'text/html', body: body('<p>Your verification code is 123456.</p><img src="https://example.com/offer.png">')}
+  ]};
+  const result = ctx.canonicalGmailMessage_({id: 'abc123', internalDate: '0', payload});
+  assert.equal(fetches, 0); assert.equal(result.images.length, 0);
+  assert.equal(ctx.authenticationAdmission_(ctx.candidateSource_(result)).kind, 'incomplete');
+});
+
 test('omitted document bodies and containers reject malformed metadata and inline bytes without fetching', () => {
   const {ctx} = harness();
   ctx.Gmail.Users.Messages = {Attachments: {get: () => assert.fail('no document fetch')}};
