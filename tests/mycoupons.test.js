@@ -263,7 +263,7 @@ function createRuntime({
     },
     Utilities: {
       formatDate: (_, timeZone) => {
-        if (!['Europe/Rome', 'UTC', 'America/New_York'].includes(timeZone)) {
+        if (!['Europe/Rome', 'UTC', 'GMT', 'America/New_York'].includes(timeZone)) {
           throw new Error('Unknown time zone');
         }
         return '2000-01-01';
@@ -769,6 +769,36 @@ test('leaves messages before initialDate and resumed spam/trash messages untouch
   assert.equal(runtime.mutations.length, 0);
 });
 
+test('leaves sent replies and resumed sent messages untouched even if they quote a coupon', () => {
+  const fresh = createRuntime({messages: [message({
+    id: 'sent-reply',
+    subject: 'Re: Your offer',
+    body: 'Forwarded message: Coupon code: SAVE20',
+    labels: ['SENT'],
+  })]});
+
+  const freshOutcome = fresh.context.runMyCouponsImport();
+  assert.equal(freshOutcome.imported, 0);
+  assert.equal(fresh.rows.length, 1);
+  assert.equal(fresh.mutations.length, 0);
+
+  const resumed = createRuntime({
+    fetchFailureAfter: 0,
+    messages: [message({
+      id: 'sent-pending',
+      subject: 'Fwd: Coupon offer',
+      body: 'Coupon code: SAVE20',
+      labels: ['SENT'],
+    })],
+  });
+  assert.equal(resumed.context.runMyCouponsImport().complete, false);
+  resumed.setFetchFailureAfter(null);
+  const resumedOutcome = resumed.context.runMyCouponsImport();
+  assert.equal(resumedOutcome.complete, true);
+  assert.equal(resumed.rows.length, 1);
+  assert.equal(resumed.mutations.length, 0);
+});
+
 test('drops only exact not-found pending message IDs and resumes the scan', () => {
   const runtime = createRuntime({
     fetchFailureAfter: 0,
@@ -833,7 +863,7 @@ test('fails closed for legacy or mismatched daily trigger schedule metadata with
   assert.equal(mismatched.createdTriggers.length, 0);
 });
 
-test('rejects invalid IANA time zones before trigger creation and accepts a valid configured zone', () => {
+test('rejects invalid time zones before trigger creation and accepts valid slashless IANA zones', () => {
   const invalid = createRuntime({config: {timeZone: 'Invalid/Zone'}});
   assert.throws(() => invalid.context.getMyCouponsInstallationStatus(), /valid IANA time zone/i);
   assert.throws(() => invalid.context.installMyCouponsDailyTrigger(), /valid IANA time zone/i);
@@ -841,6 +871,11 @@ test('rejects invalid IANA time zones before trigger creation and accepts a vali
 
   const valid = createRuntime({config: {timeZone: 'America/New_York'}});
   assert.deepEqual(JSON.parse(JSON.stringify(valid.context.getMyCouponsInstallationStatus())), {
+    dailyTrigger: 'missing', ready: true,
+  });
+
+  const gmt = createRuntime({config: {timeZone: 'GMT'}});
+  assert.deepEqual(JSON.parse(JSON.stringify(gmt.context.getMyCouponsInstallationStatus())), {
     dailyTrigger: 'missing', ready: true,
   });
 });

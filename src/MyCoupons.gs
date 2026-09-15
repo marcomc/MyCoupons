@@ -303,7 +303,7 @@ function getMyCouponsConfig_() {
 
 function validIanaTimeZone_(value) {
   if (typeof value !== 'string' || value.length > 100 ||
-      !/^(?:UTC|[A-Za-z][A-Za-z0-9_+\-]*(?:\/[A-Za-z][A-Za-z0-9_+\-]*)+)$/u.test(value)) {
+      !/^[A-Za-z][A-Za-z0-9_+\-]*(?:\/[A-Za-z][A-Za-z0-9_+\-]*)*$/u.test(value)) {
     return false;
   }
   try {
@@ -731,7 +731,8 @@ function messageHasLabel_(message, labelId) {
 }
 
 function messageHasSystemExclusionLabel_(message) {
-  return message.labelIds.indexOf('SPAM') !== -1 || message.labelIds.indexOf('TRASH') !== -1;
+  return message.labelIds.indexOf('SENT') !== -1 || message.labelIds.indexOf('SPAM') !== -1 ||
+    message.labelIds.indexOf('TRASH') !== -1;
 }
 
 function extractCouponCodes_(subject, plainText) {
