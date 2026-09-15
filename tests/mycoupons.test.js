@@ -41,6 +41,7 @@ function createRuntime({
   ],
   existingRows = [],
   existingFormulas = [],
+  externalAppendRow = null,
   corruptLastWrite = false,
   corruptLastWriteColumns = [],
   coerceLastWrite = false,
@@ -52,7 +53,7 @@ function createRuntime({
   listPageSize = 100,
   missingMessageIds = [],
   now = new Date('2026-01-11T10:00:00.000Z'),
-  labels = [{id: 'Label_Imported', name: 'Coupon Code Discount'}],
+  labels = [{id: 'Label_Imported', name: 'Coupon Code Discount', type: 'user'}],
   listedMessageIds = messages.map(value => value.id),
   profileEmail = 'owner@example.com',
   triggers = [],
@@ -70,6 +71,7 @@ function createRuntime({
   let getMessageCount = 0;
   let listMessageCount = 0;
   const numberFormats = [];
+  let externalAppendDone = false;
   const properties = new Map();
   const installedConfig = {
     ownerEmail: 'owner@example.com',
@@ -100,6 +102,19 @@ function createRuntime({
     },
     getLastColumn: () => headers.length,
     getLastRow: () => values.length,
+    appendRow(row) {
+      values.push(row.map(cell => {
+        const text = String(cell);
+        return /^'[=+\-@]/.test(text) ? text.slice(1) : text;
+      }));
+      formulas.push(row.map(cell => String(cell).startsWith('=') ? String(cell) : ''));
+      if (externalAppendRow && !externalAppendDone) {
+        values.push([...externalAppendRow]);
+        formulas.push(externalAppendRow.map(() => ''));
+        externalAppendDone = true;
+      }
+      return this;
+    },
     getRange(row, column, rowCount, columnCount) {
       return {
         setNumberFormat: format => {
@@ -358,6 +373,17 @@ test('resumes a durable page cursor after a list rate limit instead of repeating
   assert.equal(runtime.queries.at(-1), runtime.queries[0]);
 });
 
+test('binds a resumable scan to the normalized configured owner identity', () => {
+  const runtime = createRuntime({
+    config: {ownerEmail: 'OWNER@EXAMPLE.COM'},
+    fetchFailureAfter: 0,
+    messages: [message({id: 'pending', body: 'Coupon code: SAVE20'})],
+  });
+  runtime.context.runMyCouponsImport();
+  const scan = JSON.parse(runtime.properties.get('MYCOUPONS_SCAN_STATE'));
+  assert.deepEqual(JSON.parse(scan.configIdentity).slice(0, 2), ['owner@example.com', 'Coupon Code Discount']);
+});
+
 test('resumes pending page IDs after a message read rate limit without duplicating a committed row', () => {
   const runtime = createRuntime({
     fetchFailureAfter: 1,
@@ -437,6 +463,10 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'click-prose', body: 'Promo code: click here'}),
     message({id: 'percentage-discount', body: 'Coupon code: 20% off'}),
     message({id: 'currency-discount', body: 'Coupon code: $20 off'}),
+    message({id: 'quoted-percentage-discount', body: 'Coupon code: "20%"'}),
+    message({id: 'quoted-currency-discount', body: 'Coupon code: "$20"'}),
+    message({id: 'not-available', body: 'Coupon code: not-available'}),
+    message({id: 'no-code', body: 'Coupon code: "no-code"'}),
     message({id: 'uppercase-prose', body: 'Coupon code: FREE shipping'}),
     message({id: 'ambiguous-punctuation', body: 'Coupon code: SAVE20.'}),
     message({
@@ -587,6 +617,22 @@ test('writes all codes before making one exact Gmail mutation for their source m
   assert.equal(runtime.mutations[0].id, 'message-2');
 });
 
+test('uses atomic append reservation without overwriting an interleaved external row', () => {
+  const external = [
+    'external-date', 'EXTERNAL', 'External subject', 'external@example.com',
+    'https://mail.google.com/mail/u/?authuser=external%40example.com#all/external', 'external::EXTERNAL', 'external',
+  ];
+  const runtime = createRuntime({
+    externalAppendRow: external,
+    messages: [message({id: 'atomic', body: 'Coupon code: SAFE20'})],
+  });
+
+  runtime.context.runMyCouponsImport();
+  assert.equal(runtime.rows[1][1], 'SAFE20');
+  assert.deepEqual(runtime.rows[2], external);
+  assert.equal(runtime.mutations[0].id, 'atomic');
+});
+
 test('uses exact epoch boundaries and persists the pre-list snapshot watermark', () => {
   const overlap = createRuntime({
     advanceClockOnList: true,
@@ -624,8 +670,8 @@ test('restarts from initialDate when a watermark belongs to a different target',
   const runtime = createRuntime({
     config: {labelName: 'Replacement Label'},
     labels: [
-      {id: 'Label_Imported', name: 'Coupon Code Discount'},
-      {id: 'Label_Replacement', name: 'Replacement Label'},
+      {id: 'Label_Imported', name: 'Coupon Code Discount', type: 'user'},
+      {id: 'Label_Replacement', name: 'Replacement Label', type: 'user'},
     ],
     watermark: '2026-01-10T10:00:00.000Z',
     watermarkTargetIdentity: JSON.stringify(['owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount']),
@@ -752,6 +798,19 @@ test('reports only non-secret installation readiness and fails closed for owner 
     {getHandlerFunction: () => 'runMyCouponsDaily'},
   ]});
   assert.throws(() => duplicates.context.getMyCouponsInstallationStatus(), /multiple daily triggers/i);
+});
+
+test('requires the imported label to be one unambiguous user label', () => {
+  const system = createRuntime({
+    config: {labelName: 'INBOX'},
+    labels: [{id: 'INBOX', name: 'INBOX', type: 'system'}],
+  });
+  assert.throws(() => system.context.runMyCouponsImport(), /exactly one user label/i);
+
+  const missingType = createRuntime({
+    labels: [{id: 'Label_Imported', name: 'Coupon Code Discount'}],
+  });
+  assert.throws(() => missingType.context.runMyCouponsImport(), /exactly one user label/i);
 });
 
 test('moves only old imported messages to Gmail Trash during retention', () => {

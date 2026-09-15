@@ -307,8 +307,8 @@ function resolveImportedLabel_(config) {
   var labels = (Gmail.Users.Labels.list('me').labels || []).filter(function(label) {
     return label.name === config.labelName;
   });
-  if (labels.length !== 1 || !labels[0].id) {
-    throw new Error('Configured imported Gmail label must resolve exactly once.');
+  if (labels.length !== 1 || !labels[0].id || labels[0].type !== 'user') {
+    throw new Error('Configured imported Gmail label must resolve to exactly one user label.');
   }
   return labels[0];
 }
@@ -410,7 +410,12 @@ function sheetSemanticText_(value) {
 }
 
 function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
-  var rowNumber = sheet.getLastRow() + 1;
+  sheet.appendRow(row);
+  var reservation = findExactAppendedCouponRow_(sheet, columns, deduplicationKey);
+  if (!reservation) {
+    throw new Error('Coupon row reservation is ambiguous after append.');
+  }
+  var rowNumber = reservation.rowNumber;
   populatedCouponColumns_(columns).forEach(function(column) {
     sheet.getRange(rowNumber, column + 1, 1, 1).setNumberFormat('@');
   });
@@ -421,6 +426,19 @@ function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
   if (!verifiedCouponRow_(written, formulas, row, columns, deduplicationKey, null)) {
     throw new Error('Coupon row verification failed before Gmail mutation.');
   }
+}
+
+function findExactAppendedCouponRow_(sheet, columns, deduplicationKey) {
+  var data = sheet.getDataRange();
+  var values = data.getValues();
+  var formulas = data.getFormulas();
+  var matches = [];
+  values.slice(1).forEach(function(row, index) {
+    if (sheetSemanticText_(row[columns.deduplicationKey]) === deduplicationKey) {
+      matches.push({rowNumber: index + 2, row: row, formulas: formulas[index + 1]});
+    }
+  });
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function populatedCouponColumns_(columns) {
@@ -505,7 +523,7 @@ function watermarkTargetIdentity_(config) {
 }
 
 function scanConfigIdentity_(config) {
-  return JSON.stringify([config.labelName, config.spreadsheetId, config.sheetName,
+  return JSON.stringify([config.ownerEmail.toLowerCase(), config.labelName, config.spreadsheetId, config.sheetName,
     config.archiveImported, config.initialDate.toISOString(), config.watermarkOverlapDays]);
 }
 
@@ -703,7 +721,7 @@ function acceptCouponToken_(token, quoted, hasFollowingWord) {
   if (!quoted && /[.!?,;:]$/u.test(token)) {
     return null;
   }
-  if (!quoted && /^(?:[$€£¥]\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?[%‰])$/u.test(token)) {
+  if (/^(?:[$€£¥]\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?[%‰])$/u.test(token)) {
     return null;
   }
   if (!quoted && !/[\p{N}\p{P}\p{S}]/u.test(token) && (token === token.toLowerCase() || hasFollowingWord)) {
@@ -713,7 +731,7 @@ function acceptCouponToken_(token, quoted, hasFollowingWord) {
 }
 
 function isCouponAbsenceMarker_(token) {
-  return /^(?:not|none|n\/?a|no|null|empty|required)$/iu.test(token);
+  return /^(?:not|none|n\/?a|no|null|empty|required|not[-_]?available|no[-_]?code)$/iu.test(token);
 }
 
 function withMyCouponsLock_(callback) {

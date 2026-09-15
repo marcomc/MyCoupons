@@ -62,12 +62,13 @@ that fixed range completes.
 1. On first run, search all non-spam/non-trash Gmail messages from the exact
    UTC beginning of `initialDate`. Later runs search from the watermark minus
    its overlap.
-2. Exclude messages already carrying the configured imported label.
+2. Resolve the configured imported label to exactly one user-created Gmail
+   label, then exclude messages already carrying it or a Spam/Trash label.
 3. Inspect only subject and plain-text message content.
 4. Import only a complete code immediately introduced by an explicit form such
    as `coupon code`, `promo code`, `discount code` or `codice sconto`.
-5. For every imported code, write and verify a deduplicated Sheet row before
-   mutating Gmail.
+5. For every imported code, atomically append and verify a deduplicated Sheet
+   row before mutating Gmail; an ambiguous append reservation fails closed.
 6. Label the exact source message and, when configured, remove only that
    message from Inbox.
 7. Persist the pre-list scan boundary only after every page and message in the
