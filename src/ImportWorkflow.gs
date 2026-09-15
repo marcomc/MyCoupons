@@ -354,7 +354,11 @@ function checkpointAuthenticationExclusionWithRows_(sheet, journalSheet, journal
     const row = resolveCandidateRow_(sheet, journal.messageId, key, journal.rowNumbers[index]);
     if (!Number.isInteger(row) || row < 2) fail_('STATE');
     journal.rowNumbers[index] = row;
-    if (Array.isArray(journal.candidateStates)) journal.candidateStates[index].rowNumber = row;
+    if (Array.isArray(journal.candidateStates)) {
+      const candidateState = journal.candidateStates.find(function (item) { return item.key === key; });
+      if (!candidateState) fail_('STATE');
+      candidateState.rowNumber = row;
+    }
     return {key: key, row: row};
   });
   const snapshots = entries.map(function (entry) {

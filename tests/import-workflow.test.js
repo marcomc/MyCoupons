@@ -197,6 +197,31 @@ test('an incomplete legacy authentication batch stays fail-closed without row re
   assert.equal(coupon.getLastRow(), 1);
 });
 
+test('authentication exclusion rebinds reordered candidate states by key', () => {
+  const {ctx, config} = harness();
+  const message = {id: 'abc123', receivedAtMs: 0, subject: 'Sign in to Acme', sender: '',
+    link: 'https://mail.google.com/mail/#all/abc123', text: 'Your code is 123456.', html: '', incomplete: false};
+  const first = confirmedCandidate({code: 'FIRST'}); const second = confirmedCandidate({code: 'SECOND'});
+  const firstKey = ctx.candidateDedupeKey_(message, first); const secondKey = ctx.candidateDedupeKey_(message, second);
+  const coupon = sheet([HEADERS, ctx.couponRow_(message, first), ctx.couponRow_(message, second)]);
+  coupon.getRange(2, 14).setNote(ctx.candidateKeyNote_(firstKey));
+  coupon.getRange(3, 14).setNote(ctx.candidateKeyNote_(secondKey));
+  const journal = sheet([JOURNAL]); const retained = ctx.newMessageState_(message.id);
+  retained.version = 2; retained.status = 'review'; retained.candidateKeys = [firstKey, secondKey];
+  retained.dedupeKeys = [firstKey, secondKey]; retained.rowNumbers = [2, 3];
+  retained.candidateStates = [
+    {key: secondKey, rowNumber: 3, status: 'review', imageEvidence: {}},
+    {key: firstKey, rowNumber: 2, status: 'review', imageEvidence: {}}
+  ];
+  ctx.saveMessageState_(journal, retained);
+  const result = ctx.runImportWorkflow_({config, couponSheet: coupon, journalSheet: journal, messages: [message]});
+  assert.equal(result.messages[0].status, 'ignored');
+  const saved = ctx.getMessageState_(journal, message.id);
+  assert.deepEqual(saved.rowNumbers, [2, 3]);
+  assert.deepEqual(saved.candidateStates.map(item => [item.key, item.rowNumber, item.status]),
+    [[secondKey, 3, 'ignored'], [firstKey, 2, 'ignored']]);
+});
+
 test('resumed archive intent revalidates rows before Gmail mutation', () => {
   const {ctx, config} = harness(); config.labelId = 'coupon-label';
   const message = {id: 'abc123', receivedAtMs: Date.parse('2026-09-01T10:00:00Z'), subject: 'Brand offer', sender: '',

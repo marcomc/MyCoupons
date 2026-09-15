@@ -197,6 +197,7 @@ function authenticationDiscussionClause_(clause, includeGeneric) {
     /^(?:can|could|would|will|do|does|did|is|are|am|have|has|please|why|how|what|when|where|who)\b[\s\S]{0,100}:\s/iu.test(clause) ||
     /^(?:this|that)\s+is\s+(?:only\s+)?(?:an?\s+)?(?:example|illustration|documentation|report)\b/iu.test(clause) ||
     /^(?:the\s+)?(?:documentation|docs?|tutorial)\s+(?:says?|shows?|states?|reads?|uses?)\s*:/iu.test(clause) ||
+    /^(?:[\p{L}\p{N}][\p{L}\p{N}._-]{0,39})\s+(?:said|reported|recalled|remembered|mentioned|described|referred)\s*:/iu.test(clause) ||
     /^(?:-{2,}\s*forwarded\s+message\s*-*|begin\s+forwarded\s+message)\s*:?$/iu.test(clause) ||
     /^on\s+.{1,100}\s+wrote\s*:/iu.test(clause) ||
     /^(?:question|report(?:ed)?|status\s+report|hypothesis|hypothetical(?:\s+scenario)?|user\s+said|(?:they|we|i|the\s+system)\s+(?:said|reported|recalled|remembered|mentioned|described|referred))\s*:/iu.test(clause) ||
@@ -212,7 +213,7 @@ function authenticationTargetlessDiscussionClause_(clause) {
 }
 
 function authenticationLikeSource_(source) {
-  const pattern = /(?:^|[^\p{L}\p{N}_])(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|two[ -]?factor|verify(?:ing)?\s+(?:your|the)?\s*(?:account|email|identity)|confirm(?:ing)?\s+(?:your|the)?\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\s+(?:al\s+)?(?:tuo\s+)?account)(?=$|[^\p{L}\p{N}_])/iu;
+  const pattern = /(?:^|[^\p{L}\p{N}\p{M}_])(?:verification|authentication|security|one[ -]?time|password[ -]?reset|passcode|otp|pin|mfa|2fa|two[ -]?factor|verify(?:ing)?\s+(?:your|the)?\s*(?:account|email|identity)|confirm(?:ing)?\s+(?:your|the)?\s*email|sign[ -]?in|log[ -]?in|acced(?:i|ere)\s+(?:al\s+)?(?:tuo\s+)?account)(?=$|[^\p{L}\p{N}\p{M}_])/iu;
   const target = new RegExp(authenticationTargetSearchPattern_(), 'iu');
   return source.sourceSpans.some(function (span) {
     return span && typeof span.text === 'string' && (pattern.test(span.text) || target.test(span.text));
