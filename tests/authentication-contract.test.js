@@ -67,6 +67,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['discussion', {text: 'Status report: your verification code is 123456.'}],
     ['discussion', {text: 'Hypothetical scenario: your verification code is 123456.'}],
     ['discussion', {text: 'User said: your verification code is 123456.'}],
+    ['discussion', {text: 'The documentation says: your verification code is 123456.'}],
     ['ambiguous', {text: 'Your verification code is 1,000-2,000.'}],
     ['ambiguous', {text: 'Your verification code is 12.3/45.6.'}],
     ['ambiguous', {text: 'Your verification code is ' + 'A'.repeat(40) + '!'}],
