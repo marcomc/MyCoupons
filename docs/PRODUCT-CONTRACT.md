@@ -1,0 +1,99 @@
+# MyCoupons product contract
+
+## Table of contents
+
+- [Outcome](#outcome)
+- [Configuration compatibility](#configuration-compatibility)
+- [Data contract](#data-contract)
+- [Import contract](#import-contract)
+- [Retention contract](#retention-contract)
+- [Exclusions](#exclusions)
+- [Acceptance evidence](#acceptance-evidence)
+- [Non-goals](#non-goals)
+
+## Outcome
+
+MyCoupons is a private Google Apps Script automation. It imports explicitly
+introduced coupon codes from Gmail into the existing Google Sheet, labels and
+archives the source email after a verified write, and later moves imported
+emails to Gmail Trash after their configured retention period.
+
+## Configuration compatibility
+
+Configuration remains in the existing `MYCOUPONS_CONFIG` Script Property. The
+baseline retains `ownerEmail`, `spreadsheetId`, `spreadsheetName`, `sheetName`,
+`labelName` and `timeZone`. Existing AI-related keys remain parseable for a
+safe migration but have no runtime effect.
+
+The baseline settings are:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `initialDate` | `2026-01-01` | First successful scan begins on this date. |
+| `watermarkOverlapDays` | `1` | Re-scan this overlap before the last successful scan. |
+| `retentionDays` | `180` | Age after which imported labeled emails move to Trash. |
+| `archiveImported` | `true` | Remove imported messages from Inbox after a verified write. |
+| `trashExpiredImported` | `true` | Enable retention cleanup. |
+| `dailyHour` | `8` | Approximate local daily trigger hour. |
+
+## Data contract
+
+The existing coupon tab and its headers remain the database. A baseline row
+populates, at minimum, email date, coupon code, source subject, sender, Gmail
+link, notes/deduplication key and status. Existing richer columns remain in
+place and blank when the baseline cannot establish their values.
+
+The durable watermark is stored independently in Script Properties. It is the
+pre-list scan boundary of the latest fully successful scan, not a Sheet-row
+date or the completion time. Each query is bounded above by that snapshot, so
+messages that arrive while an import is running remain eligible next time.
+
+## Import contract
+
+1. On first run, search all non-spam/non-trash Gmail messages from
+   `initialDate`. Later runs search from the watermark minus its overlap.
+2. Exclude messages already carrying the configured imported label.
+3. Inspect only subject and plain-text message content.
+4. Import only a complete code immediately introduced by an explicit form such
+   as `coupon code`, `promo code`, `discount code` or `codice sconto`.
+5. For every imported code, write and verify a deduplicated Sheet row before
+   mutating Gmail.
+6. Label the exact source message and, when configured, remove only that
+   message from Inbox.
+7. Persist the pre-list scan boundary only after every scanned message
+   completes without a runtime failure.
+
+## Retention contract
+
+Retention searches only messages with the imported label. When enabled, a
+message older than `retentionDays` moves to Gmail Trash. It is not permanently
+deleted. The retention action is independent from code extraction and cannot
+touch unlabelled email.
+
+## Exclusions
+
+The baseline does not mutate email that has no explicit code, contains only a
+referral link, is an authentication/OTP message, requires image/OCR analysis,
+or is otherwise ambiguous. An extraction miss is acceptable; a false positive
+that archives unrelated email is not.
+
+## Acceptance evidence
+
+- Existing Apps Script project, Sheet and label are resolved unambiguously.
+- A controlled historical coupon email creates one compatible row, label and
+  archive action.
+- Re-running the same range creates no duplicate row.
+- A new controlled coupon email is imported by the scheduled handler.
+- A safely old labeled controlled message moves to Trash, while an unlabelled
+  message does not.
+- No deployed runtime code, Script Property read or manifest scope depends on
+  Gemini, Vertex, Secret Manager, external HTTP or review UI behavior.
+
+## Non-goals
+
+- AI or Gemini/Vertex inference.
+- HTML, image, attachment or OCR extraction.
+- Manual review UI or spreadsheet edit trigger.
+- Automatic interpretation of generic discounts, referral links or prose.
+- Creating a replacement Google Sheet, Gmail label, Apps Script project or
+  Cloud project.

@@ -1,0 +1,14 @@
+{
+  "ownerEmail": "owner@example.com",
+  "spreadsheetId": "",
+  "spreadsheetName": "My Coupons",
+  "sheetName": "Coupon Manager",
+  "labelName": "Coupon Code Discount",
+  "timeZone": "Europe/Rome",
+  "initialDate": "2026-01-01",
+  "watermarkOverlapDays": 1,
+  "retentionDays": 180,
+  "archiveImported": true,
+  "trashExpiredImported": true,
+  "dailyHour": 8
+}
