@@ -122,7 +122,7 @@ function authenticationValue_(value) {
   if (points < 1 || points > 40 || !/[\p{L}\p{N}\p{M}]/u.test(token)) return '';
   const numericPart = '[\\p{Nd}][\\p{Nd}.,٫٬]*';
   if (/^[+\-−][\p{Nd}][\p{Nd}.,٫٬]*$/u.test(token)) return '';
-  if (new RegExp('^' + numericPart + '\\s*[-–—−/:∕⁄]\\s*' + numericPart + '$', 'u').test(token)) return '';
+  if (new RegExp('^' + numericPart + '\\s*[-‐‑‒–—−－/:∕⁄]\\s*' + numericPart + '$', 'u').test(token)) return '';
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(token)) return '';
   if (/^(?:[a-z][a-z\d+.-]*:|www\.|\/\/)/iu.test(token)) return '';
   if (/^(?:example|sample|placeholder|demo|your[_ -]?code|code[_ -]?here|enter[_ -]?code|value|code|otp|pin|passcode|this|that|it|one|same|above|below|today|yesterday|tomorrow|now|soon|later|already|successfully|immediately|here|there|x{3,})$/iu.test(token)) return '';
@@ -146,7 +146,7 @@ function authenticationClauseParts_(text) {
 }
 
 function authenticationQuestionMark_() {
-  return '[?？؟⸮՟⁇⁈⁉﹖]';
+  return '[?？؟⸮՟՞⁇⁈⁉﹖]';
 }
 
 function authenticationSubjectPurpose_(text) {
@@ -193,7 +193,7 @@ function authenticationDiscussionClause_(clause, includeGeneric) {
   const target = authenticationTargetPattern_();
   const discussionTarget = includeGeneric ? '(?:code|passcode|pin|codice|' + target + ')' : target;
   return new RegExp(authenticationQuestionMark_(), 'u').test(clause) ||
-    /^(?:if|unless|suppose|assuming|maybe|perhaps|for\s+example|example|documentation|tutorial|according\s+to|they\s+said|it\s+was\s+reported)\b/iu.test(clause) ||
+    /^(?:if|unless|suppose|assuming|maybe|perhaps|for\s+example|(?:an?\s+)?example|(?:an?\s+)?report|user\s+report|documentation|tutorial|according\s+to|they\s+said|it\s+was\s+reported)\b/iu.test(clause) ||
     /^(?:this|that)\s+is\s+(?:only\s+)?(?:an?\s+)?(?:example|illustration|documentation|report)\b/iu.test(clause) ||
     /^(?:the\s+)?(?:documentation|docs?|tutorial)\s+(?:says?|shows?|states?|reads?|uses?)\s*:/iu.test(clause) ||
     /^(?:-{2,}\s*forwarded\s+message\s*-*|begin\s+forwarded\s+message)\s*:?$/iu.test(clause) ||
