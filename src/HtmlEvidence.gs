@@ -3,14 +3,23 @@ function htmlContent_(html) {
   const stack = [{node: root}];
   const pieces = [];
   const evidenceSpans = [];
+  const evidenceSpanRecords = [];
   let evidence = '';
+  let evidenceQuoted = false;
   const images = [];
   let incomplete = false;
   let activeImageCount = 0;
   let pendingImageBoundary = false;
   function flushEvidence() {
-    if (evidence) evidenceSpans.push(evidence);
+    if (evidence) {
+      evidenceSpans.push(evidence);
+      evidenceSpanRecords.push({text: evidence, quoted: evidenceQuoted});
+    }
     evidence = '';
+  }
+  function setEvidenceContext(quoted) {
+    if (evidence && evidenceQuoted !== quoted) flushEvidence();
+    evidenceQuoted = quoted;
   }
   function newline(block) {
     if (pieces.length && !pieces[pieces.length - 1].endsWith('\n')) pieces.push('\n');
@@ -36,6 +45,7 @@ function htmlContent_(html) {
     }
     const node = entry.node;
     if (node.nodeName === '#text') {
+      setEvidenceContext(!!entry.quoted);
       if (!entry.suppressed && node.value) appendProjectedText(node.value);
       continue;
     }
@@ -45,6 +55,7 @@ function htmlContent_(html) {
     }
     const tag = node.tagName || '';
     const isHtml = node.namespaceURI === 'http://www.w3.org/1999/xhtml';
+    const quoted = !!entry.quoted || isHtml && /^(?:blockquote|q)$/.test(tag);
     const foreign = Boolean(tag && !isHtml);
     if (foreign) incomplete = true;
     const nodeAttrs = node.attrs || [];
@@ -88,6 +99,7 @@ function htmlContent_(html) {
       if (hasSrc) activeImageCount++;
       const alt = nodeAttrs.find(function (attr) { return attr.name === 'alt'; });
       if (!hasSrc && alt && /\S/u.test(String(alt.value))) {
+        setEvidenceContext(quoted);
         appendProjectedText(alt.value);
         flushEvidence();
         pendingImageBoundary = pieces.length && !pieces[pieces.length - 1].endsWith('\n');
@@ -104,11 +116,11 @@ function htmlContent_(html) {
       }
     }
     for (let i = children.length - 1; i >= 0; i--) {
-      stack.push({node: children[i], suppressed: suppressed || closedDetails && children[i] !== visibleSummary});
+      stack.push({node: children[i], suppressed: suppressed || closedDetails && children[i] !== visibleSummary, quoted: quoted});
     }
   }
   flushEvidence();
-  return {text: pieces.join(''), evidenceSpans: evidenceSpans, images: images,
+  return {text: pieces.join(''), evidenceSpans: evidenceSpans, evidenceSpanRecords: evidenceSpanRecords, images: images,
     activeImageCount: activeImageCount, incomplete: incomplete};
 }
 function htmlText_(html) {

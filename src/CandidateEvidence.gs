@@ -33,11 +33,11 @@ function candidateSource_(message) {
   const sourceSpans = [];
   if (subject) sourceSpans.push({kind: 'subject', text: subject});
   if (text) sourceSpans.push({kind: 'text', text: text});
-  html.evidenceSpans.forEach(function (span) { if (span) sourceSpans.push({kind: 'html', text: span}); });
+  const htmlSpans = html.evidenceSpanRecords || html.evidenceSpans.map(function (span) { return {text: span, quoted: false}; });
+  htmlSpans.forEach(function (span) { if (span && span.text) sourceSpans.push({kind: 'html', text: span.text, quoted: !!span.quoted}); });
   return {spans: sourceSpans.map(function (span) { return span.text; }),
     sourceSpans: sourceSpans,
     evidenceSpans: sourceSpans.map(function (span) { return span.text; }),
-    rawHtml: htmlInput || '',
     sender: sender || '',
     images: images,
     incomplete: incomplete !== false || html.incomplete ||
@@ -192,6 +192,8 @@ function authenticationDiscussionClause_(clause, includeGeneric) {
     /^(?:if|unless|suppose|assuming|maybe|perhaps|for\s+example|example|documentation|tutorial|according\s+to|they\s+said|it\s+was\s+reported)\b/iu.test(clause) ||
     /^(?:this|that)\s+is\s+(?:only\s+)?(?:an?\s+)?(?:example|illustration|documentation|report)\b/iu.test(clause) ||
     /^(?:the\s+)?(?:documentation|docs?|tutorial)\s+(?:says?|shows?|states?|reads?|uses?)\s*:/iu.test(clause) ||
+    /^(?:-{2,}\s*forwarded\s+message\s*-*|begin\s+forwarded\s+message)\s*:?$/iu.test(clause) ||
+    /^on\s+.{1,100}\s+wrote\s*:/iu.test(clause) ||
     /^(?:question|report(?:ed)?|status\s+report|hypothesis|hypothetical(?:\s+scenario)?|user\s+said|(?:they|we|i|the\s+system)\s+(?:said|reported|recalled|remembered|mentioned|described|referred))\s*:/iu.test(clause) ||
     new RegExp('^(?:not|never|no|non)\\b[\\s\\S]*' + discussionTarget, 'iu').test(clause) ||
     new RegExp(discussionTarget + '\\s*' + authenticationAssignmentPattern_() + '\\s*(?:not|never|no|non)\\b', 'iu').test(clause) ||
@@ -219,7 +221,7 @@ function authenticationAdmission_(source) {
     total += span.text.length;
     if (total > MC_AUTHENTICATION_SOURCE_LIMIT) return authenticationAdmissionResult_('incomplete', authenticationLike);
   }
-  if (authenticationLike && /<(?:blockquote|q)\b/iu.test(source.rawHtml || '')) {
+  if (authenticationLike && source.sourceSpans.some(function (span) { return span.kind === 'html' && span.quoted; })) {
     return authenticationAdmissionResult_('discussion', true);
   }
   const subject = source.sourceSpans.find(function (span) { return span && span.kind === 'subject'; });

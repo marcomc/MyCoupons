@@ -40,7 +40,8 @@ test('closed admission accepts only complete affirmative authentication relation
     {text: 'We sent your security code to you: 123456.'},
     {subject: 'Your verification code is 123456.'},
     {subject: 'Sign in to Acme', text: 'Your code is 123456.'},
-    {text: 'Sample Bank: your verification code is 123456.'}
+    {text: 'Sample Bank: your verification code is 123456.'},
+    {html: '<!-- <blockquote>template</blockquote> --><p>Your verification code is 123456.</p>'}
   ];
   accepted.forEach(message => assert.equal(admission(ctx, message).kind, 'issued', JSON.stringify(message)));
   accepted.forEach(message => assert.equal(admission(ctx, message).deterministic, true));
@@ -83,6 +84,7 @@ test('questions, hypotheses, reports, examples, negations and unsupported clause
     ['ambiguous', {text: 'Your verification code is example.com/reset.'}],
     ['ambiguous', {text: 'Your verification code is /verify/123.'}],
     ['discussion', {html: '<p>Coupon code SAVE20</p><blockquote>Your verification code is 123456.</blockquote>'}],
+    ['discussion', {text: 'Coupon code SAVE20\n---------- Forwarded message ---------\nYour verification code is 123456.'}],
     ['discussion', {text: 'Your verification code is 123456？'}],
     ['discussion', {text: 'Your verification code is 123456⁉'}],
     ['discussion', {text: 'Your verification code is 123456⁈'}],
