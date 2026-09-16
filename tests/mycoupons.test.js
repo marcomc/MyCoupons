@@ -159,7 +159,7 @@ function createRuntime({
     appendRow(row) {
       values.push(row.map(cell => {
         const text = String(cell);
-        return /^'(?:[=+\-@]|\d)/.test(text) ? text.slice(1) : text;
+        return /^'/.test(text) ? text.slice(1) : text;
       }));
       formulas.push(row.map(cell => String(cell).startsWith('=') ? String(cell) : ''));
       if (externalAppendRow && !externalAppendDone) {
@@ -189,7 +189,7 @@ function createRuntime({
           rows.forEach((value, index) => {
             values[row - 1 + index] = value.map(cell => {
               const text = String(cell);
-              return /^'(?:[=+\-@]|\d)/.test(text) ? text.slice(1) : text;
+              return /^'/.test(text) ? text.slice(1) : text;
             });
             formulas[row - 1 + index] = value.map(cell => String(cell).startsWith('=') ? String(cell) : '');
           });
@@ -442,6 +442,18 @@ test('preserves a leading-zero numeric coupon as text through retry repair', () 
   assert.equal(resumed.imported, 0);
   assert.equal(runtime.rows[1][1], '012345');
   assert.equal(runtime.mutations[0].id, 'numeric-code');
+});
+
+test('preserves every Sheets-auto-parsed coupon form as text', () => {
+  const runtime = createRuntime({messages: [
+    message({id: 'scientific-code', body: 'Coupon code: 1E10'}),
+    message({id: 'decimal-code', body: 'Coupon code: 001.25'}),
+  ]});
+
+  assert.equal(runtime.context.runMyCouponsImport().complete, true);
+  assert.equal(runtime.rows[1][1], '1E10');
+  assert.equal(runtime.rows[2][1], '001.25');
+  assert.deepEqual(runtime.mutations.map(entry => entry.id), ['scientific-code', 'decimal-code']);
 });
 
 test('skips an undecodable MIME text part without aborting later valid messages', () => {

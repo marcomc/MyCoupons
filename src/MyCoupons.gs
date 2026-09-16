@@ -591,12 +591,12 @@ function asSheetLiteral_(value) {
 }
 
 function asCouponCodeSheetLiteral_(code) {
-  return /^[0-9]+$/u.test(code) ? "'" + code : asSheetLiteral_(code);
+  return "'" + code;
 }
 
 function sheetSemanticText_(value) {
   var text = String(value);
-  return /^'(?:[=+\-@]|\d)/.test(text) ? text.slice(1) : text;
+  return /^'/.test(text) ? text.slice(1) : text;
 }
 
 function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
