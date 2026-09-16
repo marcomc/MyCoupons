@@ -985,6 +985,20 @@ test('does not import coupon codes found only in quoted reply or forward history
   }]);
 });
 
+test('does not treat inherited reply or forward subjects as a coupon source', () => {
+  const runtime = createRuntime({messages: [
+    message({id: 'reply-subject', subject: 'Re: Your promo code: SAVE20', body: 'Thanks, received.'}),
+    message({id: 'forward-subject', subject: 'Fwd: Discount code: SAVE20', body: 'Forwarding for reference.'}),
+    message({id: 'reply-with-new-body', subject: 'Re: Your promo code: OLD20', body: 'Coupon code: NEW20'}),
+  ]});
+
+  const outcome = runtime.context.runMyCouponsImport();
+
+  assert.equal(outcome.imported, 1);
+  assert.equal(runtime.rows[1][1], 'NEW20');
+  assert.deepEqual(runtime.mutations.map(mutation => mutation.id), ['reply-with-new-body']);
+});
+
 test('does not treat a standalone From line as quoted history', () => {
   const runtime = createRuntime({messages: [message({
     id: 'standalone-from',

@@ -1268,7 +1268,7 @@ function messageHasSystemExclusionLabel_(message) {
 function extractCouponCodes_(subject, plainText) {
   var sourceParts = Array.isArray(plainText) ? plainText : [plainText];
   var content = [];
-  if (subject) {
+  if (subject && !isInheritedReplyOrForwardSubject_(subject)) {
     content.push(subject);
   }
   sourceParts.forEach(function(part) {
@@ -1287,6 +1287,10 @@ function extractCouponCodes_(subject, plainText) {
     collectExplicitCouponTokens_(text, found);
   });
   return found;
+}
+
+function isInheritedReplyOrForwardSubject_(subject) {
+  return /^\s*(?:(?:re|fw|fwd)\s*:\s*)+/iu.test(subject);
 }
 
 function hasReferralCouponContext_(text) {
