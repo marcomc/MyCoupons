@@ -1107,7 +1107,7 @@ test('imports an explicitly introduced coupon rendered only in HTML', () => {
   const runtime = createRuntime({messages: [message({
     id: 'html-coupon',
     body: 'This message has no usable plain-text coupon.',
-    htmlBody: '<p>Use code <strong>SAVE20</strong></p>',
+    htmlBody: '<p>Special offer</p><p>Use code <strong>SAVE20</strong></p>',
   })]});
 
   assert.equal(runtime.context.runMyCouponsImport().imported, 1);
@@ -1129,9 +1129,9 @@ test('imports a letter-only coupon from a coupon-context HTML Code line', () => 
 
 test('imports a letter-only code when a supported multilingual promotion context is explicit', () => {
   const runtime = createRuntime({messages: [
-    message({id: 'english-offer', htmlBody: '<p>Exclusive offer</p><p>Code: AUTUMNSALE</p>'}),
+    message({id: 'english-offer', htmlBody: '<p>Exclusive special offer</p><p>Code: AUTUMNSALE</p>'}),
     message({id: 'italian-offer', htmlBody: '<p>Offerta speciale</p><p>Codice: AUTUNNO2026</p>'}),
-    message({id: 'french-offer', htmlBody: '<p>Offre exclusive</p><p>Code: AUTOMNE2026</p>'}),
+    message({id: 'french-offer', htmlBody: '<p>Offre promotionnelle</p><p>Code: AUTOMNE2026</p>'}),
   ]});
 
   assert.equal(runtime.context.runMyCouponsImport().imported, 3);
@@ -1238,7 +1238,8 @@ test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
     message({id: 'html-bare-token', htmlBody: '<p><strong>SAVE20</strong></p>'}),
     message({id: 'html-link-code', htmlBody: '<p>Coupon code: <a href="https://example.test">SAVE20</a></p>'}),
     message({id: 'html-quoted-code', htmlBody: '<p>Thanks</p><blockquote>Coupon code: SAVE20</blockquote>'}),
-    message({id: 'html-hidden-code', htmlBody: '<p hidden>Coupon code: SAVE20</p>'}),
+    message({id: 'html-hidden-code', htmlBody: '<div hidden><div>Heading</div><p>Coupon code: SAVE20</p></div>'}),
+    message({id: 'html-anchor-boundary', htmlBody: '<p>Promo <a href="https://example.test">not a </a>code: SAVE20</p>'}),
   ]});
 
   assert.equal(runtime.context.runMyCouponsImport().imported, 0);

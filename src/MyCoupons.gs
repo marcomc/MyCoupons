@@ -25,11 +25,11 @@ var MYCOUPONS_DEFAULTS = {
 // without changing the extraction algorithm. Terms describe a promotion
 // context; they never make a bare token importable by themselves.
 var MYCOUPONS_DEFAULT_PROMOTION_CONTEXT_DICTIONARIES = {
-  de: ['angebot', 'aktionscode', 'gutschein', 'rabatt'],
-  en: ['coupon', 'deal', 'discount', 'offer', 'promo', 'promotion', 'saving', 'savings', 'voucher'],
-  es: ['código promocional', 'cupón', 'descuento', 'oferta', 'vale'],
-  fr: ['bon', 'code promo', 'code promotionnel', 'coupon', 'offre', 'réduction'],
-  it: ['buono', 'codice promo', 'codice promozionale', 'codice sconto', 'coupon', 'offerta', 'promozione', 'sconto'],
+  de: ['aktionscode', 'gutschein', 'rabatt', 'sonderangebot'],
+  en: ['coupon', 'deal code', 'discount', 'offer code', 'promo', 'promotion', 'promotional offer', 'saving', 'savings', 'special offer', 'voucher'],
+  es: ['código promocional', 'cupón', 'descuento', 'oferta especial'],
+  fr: ['code promo', 'code promotionnel', 'coupon', 'offre promotionnelle', 'réduction'],
+  it: ['buono sconto', 'codice promo', 'codice promozionale', 'codice sconto', 'coupon', 'offerta speciale', 'promozione', 'sconto'],
 };
 
 var MYCOUPONS_COLUMNS = {
@@ -1378,9 +1378,12 @@ function htmlToCouponText_(html) {
   if (typeof html !== 'string') {
     return '';
   }
+  if (/<blockquote\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']/iu.test(html)) {
+    return '';
+  }
   var withoutInactiveContent = html
     .replace(/<!--[\s\S]*?-->/gu, '')
-    .replace(/<a\b[^>]*>[\s\S]*?<\/a\s*>/giu, '')
+    .replace(/<a\b[^>]*>[\s\S]*?<\/a\s*>/giu, ' [link omitted] ')
     .replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote\s*>/giu, '')
     .replace(/<([A-Za-z][A-Za-z0-9:-]*)\b(?=[^>]*(?:\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']*["']))[^>]*>[\s\S]*?<\/\1\s*>/giu, '')
     .replace(/<(?:script|style|noscript|template)\b[^>]*>[\s\S]*?<\/(?:script|style|noscript|template)\s*>/giu, '');
@@ -1569,8 +1572,8 @@ function collectExplicitCouponTokens_(text, found, promotionContextDictionaries)
   // The baseline intentionally recognizes only a self-contained coupon line.
   // It leaves contextual prose, replies, referrals and ambiguous offers alone.
   var explicitIntroducer = '(?:(?:your|il tuo|la tua)\\s+)?(?:\\b(?:coupon|promo(?:tional)?|discount)\\s+code\\b|\\bcodice\\s+sconto\\b)';
-  var actionIntroducer = '(?:(?:use|enter|apply|redeem|copy)\\s+(?:(?:the|your)\\s+)?code|(?:usa|inserisci|applica|riscatta)\\s+(?:(?:il tuo|la tua)\\s+)?codice)';
   var couponContext = hasCouponPromotionContext_(text, promotionContextDictionaries);
+  var actionIntroducer = couponContext ? '(?:(?:use|enter|apply|redeem|copy)\\s+(?:(?:the|your)\\s+)?code|(?:usa|inserisci|applica|riscatta)\\s+(?:(?:il tuo|la tua)\\s+)?codice)' : '(?!)';
   var genericCodeIntroducer = couponContext ? '\\bcode\\b|\\bcodice\\b' : '(?!)';
   var introducer = '^\\s*(?:' + explicitIntroducer + '|' + actionIntroducer + '|' + genericCodeIntroducer + ')';
   var quoted = new RegExp(introducer + '\\s*(?::|=|-|–)?\\s*["“]([^\\s<>{}\\[\\]"“”]{1,64})["”]\\s*$', 'iu');
