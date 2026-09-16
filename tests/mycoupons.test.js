@@ -579,6 +579,16 @@ test('does not synthesize a coupon across alternative plain-text MIME bodies', (
   assert.equal(runtime.mutations.length, 0);
 });
 
+test('rejects conflicting coupon codes from multipart alternatives', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'conflicting-alternatives', body: 'Coupon code: SAVE10',
+    htmlBody: '<p>Coupon code: SAVE20</p>',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 0);
+  assert.equal(runtime.mutations.length, 0);
+});
+
 test('does not synthesize a coupon across subject and plain-text MIME body boundaries', () => {
   const runtime = createRuntime({messages: [message({
     id: 'split-subject-body', subject: 'Promo code:', body: 'SAVE20',

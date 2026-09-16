@@ -1297,6 +1297,16 @@ function collectCouponTextParts_(part, couponText, messageId, budget) {
     return;
   }
   var mimeType = String(part.mimeType || '').toLowerCase();
+  if (mimeType === 'multipart/alternative') {
+    var alternatives = [];
+    (part.parts || []).forEach(function(child) {
+      var childText = [];
+      collectCouponTextParts_(child, childText, messageId, budget);
+      alternatives.push(childText);
+    });
+    couponText.push({alternatives: alternatives});
+    return;
+  }
   if ((mimeType === 'text/plain' || mimeType === 'text/html') && part.body) {
     var encoded = part.body.data;
     if (part.body.size > MYCOUPONS_TEXT_PART_MAX_BYTES) {
@@ -1539,26 +1549,82 @@ function messageHasSystemExclusionLabel_(message) {
 
 function extractCouponCodes_(subject, plainText, promotionContextDictionaries) {
   var sourceParts = Array.isArray(plainText) ? plainText : [plainText];
+  var alternativeGroups = sourceParts.filter(function(part) {
+    return part && typeof part === 'object' && Array.isArray(part.alternatives);
+  });
   var content = [];
   if (subject && !isInheritedReplyOrForwardSubject_(subject)) {
     content.push(subject);
   }
   sourceParts.forEach(function(part) {
+    if (typeof part !== 'string') {
+      return;
+    }
     var unquoted = stripQuotedReplyHistory_(part);
     if (unquoted.text) {
       content.push(unquoted.text);
     }
   });
-  var messageContext = content.join('\n');
+  var messageContext = content.concat(flattenCouponAlternativeText_(alternativeGroups)).join('\n');
   if (/\botp\b|\b(?:one[- ]time password|verification|authentication|sign[- ]in|login|security)\s+code\b|\bcodice\s+(?:(?:di\s+)?(?:verifica|accesso|sicurezza)|otp)\b/iu.test(messageContext) ||
       hasReferralCouponContext_(messageContext)) {
     return [];
   }
+  var found = extractCouponCodesFromTextParts_(content, promotionContextDictionaries);
+  for (var groupIndex = 0; groupIndex < alternativeGroups.length; groupIndex += 1) {
+    var nonEmptySets = alternativeGroups[groupIndex].alternatives.map(function(parts) {
+      return extractCouponCodesFromTextParts_(parts, promotionContextDictionaries);
+    }).filter(function(codes) {
+      return codes.length;
+    });
+    if (nonEmptySets.length > 1 && nonEmptySets.some(function(codes) {
+      return !sameCouponCodeSet_(codes, nonEmptySets[0]);
+    })) {
+      return [];
+    }
+    nonEmptySets.forEach(function(codes) {
+      codes.forEach(function(code) {
+        if (found.indexOf(code) === -1) {
+          found.push(code);
+        }
+      });
+    });
+  }
+  return found;
+}
+
+function flattenCouponAlternativeText_(alternativeGroups) {
+  var text = [];
+  alternativeGroups.forEach(function(group) {
+    group.alternatives.forEach(function(parts) {
+      parts.forEach(function(part) {
+        if (typeof part === 'string') {
+          text.push(part);
+        }
+      });
+    });
+  });
+  return text;
+}
+
+function extractCouponCodesFromTextParts_(parts, promotionContextDictionaries) {
   var found = [];
-  content.forEach(function(text) {
-    collectExplicitCouponTokens_(text, found, promotionContextDictionaries);
+  parts.forEach(function(part) {
+    if (typeof part !== 'string') {
+      return;
+    }
+    var unquoted = stripQuotedReplyHistory_(part);
+    if (unquoted.text) {
+      collectExplicitCouponTokens_(unquoted.text, found, promotionContextDictionaries);
+    }
   });
   return found;
+}
+
+function sameCouponCodeSet_(first, second) {
+  return first.length === second.length && first.every(function(code) {
+    return second.indexOf(code) !== -1;
+  });
 }
 
 function isInheritedReplyOrForwardSubject_(subject) {
