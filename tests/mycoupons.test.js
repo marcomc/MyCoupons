@@ -125,6 +125,7 @@ function createRuntime({
   const projectTriggers = triggers.map((trigger, index) => ({
     getHandlerFunction: () => trigger.getHandlerFunction(),
     getUniqueId: () => trigger.getUniqueId ? trigger.getUniqueId() : 'existing-trigger-' + index,
+    ...(trigger.getTriggerSource ? {getTriggerSource: () => trigger.getTriggerSource()} : {}),
   }));
   properties.set('MYCOUPONS_CONFIG', JSON.stringify(installedConfig));
   if (projectTriggers.length && dailyScheduleMetadata !== null) {
@@ -388,6 +389,7 @@ function createRuntime({
       }),
     },
     ScriptApp: {
+      TriggerSource: {CLOCK: 'CLOCK'},
       atHour: hour => ({everyDays: () => ({create: () => createdTriggers.push(hour)})}),
       getProjectTriggers: () => projectTriggers,
       newTrigger: handler => ({timeBased: () => ({
@@ -792,6 +794,7 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'referral', body: 'Share https://example.com/referral'}),
     message({id: 'referral-code', body: 'Share your promo code: FRIEND20 with a friend'}),
     message({id: 'give-friend-referral', body: 'Give a friend your promo code: FRIEND20'}),
+    message({id: 'send-to-friend-referral', body: 'Send to a friend your promo code: FRIEND20'}),
     message({id: 'refer-friend', body: 'Refer a friend with promo code: FRIEND20'}),
     message({id: 'invite-friends', body: 'Invite friends with discount code: FRIEND20'}),
     message({id: 'italian-invite-friend', body: 'Invita un amico. Codice sconto: FRIEND20'}),
@@ -929,6 +932,9 @@ test('rejects overlong and URL-like code forms rather than importing truncated t
     message({id: 'overlong', body: 'Coupon code: A' + 'B'.repeat(128)}),
     message({id: 'url', body: 'Promo code: https://example.com/referral'}),
     message({id: 'bare-domain', body: 'Promo code: deals.example.com'}),
+    message({id: 'unicode-domain', body: 'Promo code: deals.example.рф'}),
+    message({id: 'punycode-domain', body: 'Promo code: deals.example.xn--p1ai'}),
+    message({id: 'em-dash-prose', body: 'Promo code: SAVE20—expires tomorrow'}),
     message({id: 'bare-domain-path', body: 'Promo code: deals.example.com/ref/SAVE20?source=email'}),
     message({id: 'unmatched-wrapper', body: 'Promo code: SAVE20)'}),
     message({id: 'quoted-sentence-punctuation', body: 'Promo code: "SAVE20."'}),
@@ -1594,6 +1600,17 @@ test('reports only non-secret installation readiness and fails closed for owner 
     {getHandlerFunction: () => 'runMyCouponsDaily'},
   ]});
   assert.throws(() => duplicates.context.getMyCouponsInstallationStatus(), /multiple daily triggers/i);
+});
+
+test('fails closed when a legacy time-based trigger remains in the project', () => {
+  const runtime = createRuntime({triggers: [{
+    getHandlerFunction: () => 'onReviewEdit',
+    getTriggerSource: () => 'CLOCK',
+  }]});
+
+  assert.throws(() => runtime.context.getMyCouponsInstallationStatus(), /legacy time-based triggers/i);
+  assert.throws(() => runtime.context.installMyCouponsDailyTrigger(), /legacy time-based triggers/i);
+  assert.equal(runtime.createdTriggers.length, 0);
 });
 
 test('read-only status fails closed when the coupon sheet cannot be edited', () => {

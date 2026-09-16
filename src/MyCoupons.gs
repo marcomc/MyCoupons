@@ -110,7 +110,9 @@ function installMyCouponsDailyTrigger() {
   return withMyCouponsLock_(function() {
     var config = getMyCouponsConfig_();
     assertMyCouponsOwner_(config);
-    var matching = ScriptApp.getProjectTriggers().filter(function(trigger) {
+    var projectTriggers = ScriptApp.getProjectTriggers();
+    assertNoLegacyTimeBasedTriggers_(projectTriggers);
+    var matching = projectTriggers.filter(function(trigger) {
       return trigger.getHandlerFunction() === MYCOUPONS_DAILY_HANDLER;
     });
     if (matching.length > 1) {
@@ -151,7 +153,9 @@ function getMyCouponsInstallationStatus() {
   assertCouponSheetEditable_(sheet);
   readCouponSheetState_(sheet, config);
   var importState = inspectPersistedImportState_(config, label.id, sheetId, now);
-  var matching = ScriptApp.getProjectTriggers().filter(function(trigger) {
+  var projectTriggers = ScriptApp.getProjectTriggers();
+  assertNoLegacyTimeBasedTriggers_(projectTriggers);
+  var matching = projectTriggers.filter(function(trigger) {
       return trigger.getHandlerFunction() === MYCOUPONS_DAILY_HANDLER;
   });
   if (matching.length > 1) {
@@ -163,6 +167,16 @@ function getMyCouponsInstallationStatus() {
     throw new Error('Stored MyCoupons daily schedule does not match a trigger. Resolve it deliberately.');
   }
   return {dailyTrigger: matching.length === 1 ? 'installed' : 'missing', importState: importState, ready: true};
+}
+
+function assertNoLegacyTimeBasedTriggers_(triggers) {
+  var legacy = triggers.filter(function(trigger) {
+    return trigger.getHandlerFunction() !== MYCOUPONS_DAILY_HANDLER && typeof trigger.getTriggerSource === 'function' &&
+      trigger.getTriggerSource() === ScriptApp.TriggerSource.CLOCK;
+  });
+  if (legacy.length) {
+    throw new Error('Legacy time-based triggers exist. Resolve them manually before running MyCoupons.');
+  }
 }
 
 function runMyCouponsImport_(config) {
@@ -1208,7 +1222,7 @@ function hasReferralCouponContext_(text) {
     return false;
   }
   return /\b(?:share|refer|invite)\s+(?:your\s+)?(?:promo(?:tional)?|referral)\s+code\b/iu.test(text) ||
-    /\b(?:give|send)\s+(?:a\s+)?friend\s+(?:your\s+)?(?:promo(?:tional)?|referral)\s+code\b/iu.test(text) ||
+    /\b(?:give|send)\s+(?:a\s+|to\s+a\s+)?friend\s+(?:your\s+)?(?:promo(?:tional)?|referral)\s+code\b/iu.test(text) ||
     /\breferral\b/iu.test(text) ||
     /\b(?:share|refer|invite)\b/iu.test(text) && /\bfriends?\b/iu.test(text) ||
     /\b(?:invita|condividi|presenta)\s+(?:un\s+)?amic(?:o|a|i|he)\b/iu.test(text);
@@ -1294,7 +1308,7 @@ function acceptCouponToken_(token, quoted, hasFollowingWord) {
   if (!/^[\p{L}\p{N}\p{P}\p{S}]+$/u.test(token) || Array.from(token).length < 3 || Array.from(token).length > 64) {
     return null;
   }
-  if (/[.!?,;:]$/u.test(token)) {
+  if (/[.!?,;:]$/u.test(token) || /—/u.test(token)) {
     return null;
   }
   if (/^(?:[$€£¥]\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?[%‰])$/u.test(token)) {
@@ -1322,7 +1336,7 @@ function normalizeUnquotedCouponToken_(token) {
 function isLinkLikeCouponToken_(token) {
   var normalized = token.replace(/[.!?,;:]+$/u, '');
   return /^(?:https?:\/\/|www\.)/iu.test(normalized) ||
-    /^(?:[\p{L}\p{N}-]+\.)+[A-Za-z]{2,63}(?:[/?#].*)?$/u.test(normalized);
+    /^(?:[\p{L}\p{N}-]+\.)+(?:xn--[A-Za-z0-9-]{2,59}|[\p{L}]{2,63})(?:[/?#].*)?$/iu.test(normalized);
 }
 
 function isEmailAddressCouponToken_(token) {
