@@ -59,6 +59,8 @@ email, Drive, Sheets or credentials.
 
 ## Status
 
-The release candidate is pending its final Cloud Codex review before deployment
-to the existing private Google resources. The previous repository history has a
-verified local-only backup and is not part of this branch.
+The baseline is deployed to the existing private Google resources. Its source
+was matched to `main`, the owner-gated preflight and a manual import completed
+successfully, and one baseline-managed daily trigger is installed. The previous
+repository history has a verified local-only backup and is not present on the
+remote.
