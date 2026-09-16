@@ -35,6 +35,7 @@ The baseline settings are:
 | `archiveImported` | `true` | Remove imported messages from Inbox after a verified write. |
 | `trashExpiredImported` | `true` | Enable retention cleanup. |
 | `dailyHour` | `8` | Approximate local daily trigger hour. |
+| `promotionContextDictionaries` | Built-in dictionaries | Optional object of owner-editable word lists by locale. It extends the built-in `en`, `it`, `es`, `fr` and `de` lists. |
 
 The configured timezone must be a valid bounded IANA timezone. When installed,
 the daily trigger's stable ID, handler, hour, timezone and target identity are
@@ -80,9 +81,9 @@ limit. It is cleared only after that fixed range completes.
    explicit form such as `coupon code`, `promo code`, `discount code`, `codice
    sconto`, `use code` or `usa il codice` (optionally `your`, `il tuo` or `la
    tua`). A generic `Code:` line is accepted only when the same decoded body
-   establishes a promotion context. This uses a bounded vocabulary of common
-   coupon, promo, discount, offer, deal, voucher and saving terms plus their
-   Italian, French, Spanish, Portuguese, German and Dutch equivalents.
+   establishes a promotion context. The owner-editable
+   `promotionContextDictionaries` configuration uses bounded word lists by
+   locale, starting with English, Italian, Spanish, French and German.
    Letter-only codes must be long uppercase tokens; contextual prose is
    deliberately not interpreted.
 5. For every imported code, atomically append and verify a deduplicated Sheet

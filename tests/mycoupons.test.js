@@ -12,6 +12,7 @@ function message({
   additionalHeaders = [],
   additionalPlainTextParts = [],
   htmlBody = '',
+  htmlHeaders = [],
   plainTextHeaders = [],
   plainTextSize = undefined,
   inlineAttachmentText = '',
@@ -30,6 +31,7 @@ function message({
     date,
     from,
     htmlBody,
+    htmlHeaders,
     id,
     labels,
     inlineAttachmentText,
@@ -292,7 +294,7 @@ function createRuntime({
       }].concat(value.additionalPlainTextParts.map(body => ({
         body: {data: Buffer.from(body).toString('base64url')}, mimeType: 'text/plain',
       }))).concat(value.htmlBody ? [{
-        body: {data: Buffer.from(value.htmlBody).toString('base64url')}, mimeType: 'text/html',
+        body: {data: Buffer.from(value.htmlBody).toString('base64url')}, headers: value.htmlHeaders, mimeType: 'text/html',
       }] : []).concat(value.attachmentText ? [{
         body: {data: Buffer.from(value.attachmentText).toString('base64url')},
         filename: 'coupon.txt',
@@ -1135,6 +1137,20 @@ test('imports a letter-only code when a supported multilingual promotion context
   assert.equal(runtime.mutations.length, 3);
 });
 
+test('imports an explicit code from an owner-added promotion dictionary', () => {
+  const runtime = createRuntime({
+    config: {promotionContextDictionaries: {ja: ['割引']}},
+    messages: [message({
+      id: 'custom-dictionary',
+      htmlBody: '<p>割引</p><p>Code: SPRINGSALE</p>',
+      htmlHeaders: [{name: 'Content-Type', value: 'text/html; charset=UTF-8'}],
+    })],
+  });
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'SPRINGSALE');
+});
+
 test('does not import a letter-only Code line without coupon context', () => {
   const runtime = createRuntime({messages: [message({
     id: 'bare-letter-only-code', htmlBody: '<p>Code: WELCOMEPURIFY</p>',
@@ -1163,8 +1179,9 @@ test('removes only known legacy properties while preserving baseline scan state'
     'MYCOUPONS_MAILBOX_SCAN_STATE', 'MYCOUPONS_NOTIFICATION_STATE', 'MYCOUPONS_PENDING_NOTIFICATION',
   ]);
   assert.deepEqual(Object.keys(config).sort(), [
-    'archiveImported', 'dailyHour', 'initialDate', 'labelName', 'ownerEmail', 'retentionDays',
-    'sheetName', 'spreadsheetId', 'spreadsheetName', 'timeZone', 'trashExpiredImported', 'watermarkOverlapDays',
+    'archiveImported', 'dailyHour', 'initialDate', 'labelName', 'ownerEmail', 'promotionContextDictionaries',
+    'retentionDays', 'sheetName', 'spreadsheetId', 'spreadsheetName', 'timeZone',
+    'trashExpiredImported', 'watermarkOverlapDays',
   ]);
   assert.equal(runtime.properties.get('MYCOUPONS_SCAN_STATE'), JSON.stringify({version: 3, pendingIds: []}));
   assert.equal(runtime.properties.get('UNRELATED_PROPERTY'), 'preserved');

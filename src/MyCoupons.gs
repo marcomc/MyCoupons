@@ -21,6 +21,17 @@ var MYCOUPONS_DEFAULTS = {
   watermarkOverlapDays: 1,
 };
 
+// Owners can extend these from MYCOUPONS_CONFIG.promotionContextDictionaries
+// without changing the extraction algorithm. Terms describe a promotion
+// context; they never make a bare token importable by themselves.
+var MYCOUPONS_DEFAULT_PROMOTION_CONTEXT_DICTIONARIES = {
+  de: ['angebot', 'aktionscode', 'gutschein', 'rabatt'],
+  en: ['coupon', 'deal', 'discount', 'offer', 'promo', 'promotion', 'saving', 'savings', 'voucher'],
+  es: ['código promocional', 'cupón', 'descuento', 'oferta', 'vale'],
+  fr: ['bon', 'code promo', 'code promotionnel', 'coupon', 'offre', 'réduction'],
+  it: ['buono', 'codice promo', 'codice promozionale', 'codice sconto', 'coupon', 'offerta', 'promozione', 'sconto'],
+};
+
 var MYCOUPONS_COLUMNS = {
   emailDate: ['email date'],
   couponCode: ['coupon code'],
@@ -301,7 +312,8 @@ function runMyCouponsImport_(config) {
     if (hasOversizedSheetMetadata_(message)) {
       return true;
     }
-    var extractedCodes = extractCouponCodes_(message.subject, message.plainText);
+    var extractedCodes = extractCouponCodes_(message.subject, message.plainText,
+      config.promotionContextDictionaries);
     // A message containing an unusually large code catalogue remains untouched.
     // Missing it is safer than allowing one message to exhaust the whole run.
     if (extractedCodes.length > MYCOUPONS_MAX_CODES_PER_MESSAGE) {
@@ -526,7 +538,36 @@ function getMyCouponsConfig_() {
       throw new Error('MYCOUPONS_CONFIG.' + key + ' must be a boolean.');
     }
   });
+  config.promotionContextDictionaries = parsePromotionContextDictionaries_(parsed.promotionContextDictionaries);
   return config;
+}
+
+function parsePromotionContextDictionaries_(value) {
+  var dictionaries = JSON.parse(JSON.stringify(MYCOUPONS_DEFAULT_PROMOTION_CONTEXT_DICTIONARIES));
+  if (value === undefined) {
+    return dictionaries;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('MYCOUPONS_CONFIG.promotionContextDictionaries must be an object.');
+  }
+  Object.keys(value).forEach(function(locale) {
+    if (!/^[a-z]{2,8}(?:-[a-z0-9]{2,8})?$/iu.test(locale) || !Array.isArray(value[locale]) ||
+        value[locale].length > 100) {
+      throw new Error('MYCOUPONS_CONFIG.promotionContextDictionaries has an invalid locale dictionary.');
+    }
+    var merged = dictionaries[locale] || [];
+    value[locale].forEach(function(term) {
+      if (typeof term !== 'string' || term !== term.trim() || term.length < 2 || term.length > 64 ||
+          !/[\p{L}]/u.test(term) || !/^[\p{L}\p{N}][\p{L}\p{N} .'-]*$/u.test(term)) {
+        throw new Error('MYCOUPONS_CONFIG.promotionContextDictionaries contains an invalid term.');
+      }
+      if (!merged.some(function(existing) { return existing.toLocaleLowerCase() === term.toLocaleLowerCase(); })) {
+        merged.push(term);
+      }
+    });
+    dictionaries[locale] = merged;
+  });
+  return dictionaries;
 }
 
 function serializedBaselineConfig_(config) {
@@ -536,6 +577,7 @@ function serializedBaselineConfig_(config) {
     initialDate: config.initialDate.toISOString().slice(0, 10),
     labelName: config.labelName,
     ownerEmail: config.ownerEmail,
+    promotionContextDictionaries: config.promotionContextDictionaries,
     retentionDays: config.retentionDays,
     sheetName: config.sheetName,
     spreadsheetId: config.spreadsheetId,
@@ -1410,7 +1452,7 @@ function messageHasSystemExclusionLabel_(message) {
     message.labelIds.indexOf('TRASH') !== -1;
 }
 
-function extractCouponCodes_(subject, plainText) {
+function extractCouponCodes_(subject, plainText, promotionContextDictionaries) {
   var sourceParts = Array.isArray(plainText) ? plainText : [plainText];
   var content = [];
   if (subject && !isInheritedReplyOrForwardSubject_(subject)) {
@@ -1424,12 +1466,12 @@ function extractCouponCodes_(subject, plainText) {
   });
   var messageContext = content.join('\n');
   if (/\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b/iu.test(messageContext) ||
-      hasReferralCouponContext_(messageContext)) {
+      hasReferralCouponContext_(messageContext, promotionContextDictionaries)) {
     return [];
   }
   var found = [];
   content.forEach(function(text) {
-    collectExplicitCouponTokens_(text, found);
+    collectExplicitCouponTokens_(text, found, promotionContextDictionaries);
   });
   return found;
 }
@@ -1438,8 +1480,8 @@ function isInheritedReplyOrForwardSubject_(subject) {
   return /^\s*(?:(?:re|fw|fwd)\s*:\s*)+/iu.test(subject);
 }
 
-function hasReferralCouponContext_(text) {
-  if (!hasCouponPromotionContext_(text)) {
+function hasReferralCouponContext_(text, promotionContextDictionaries) {
+  if (!hasCouponPromotionContext_(text, promotionContextDictionaries)) {
     return false;
   }
   return /\breferral\b/iu.test(text) ||
@@ -1447,8 +1489,17 @@ function hasReferralCouponContext_(text) {
       /\b(?:friends?|amic(?:o|a|i|he))\b/iu.test(text);
 }
 
-function hasCouponPromotionContext_(text) {
-  return /\b(?:coupon|promo(?:tional)?|discount|offer|deal|voucher|saving(?:s)?|buono|sconto|offerta|promozione|gutschein|rabatt|angebot|aktionscode|réduction|reduction|offre|bon|cup[oó]n|descuento|oferta|vale|cupom)\b|\bcodice\s+(?:sconto|promozionale|promo)\b|\bc[oó]digo\s+promocional\b|\bcode\s+(?:promo|promotionnel)\b/iu.test(text);
+function hasCouponPromotionContext_(text, promotionContextDictionaries) {
+  return Object.keys(promotionContextDictionaries).some(function(locale) {
+    return promotionContextDictionaries[locale].some(function(term) {
+      return new RegExp('(^|[^\\p{L}\\p{N}])' + escapePromotionContextTerm_(term) +
+        '(?=$|[^\\p{L}\\p{N}])', 'iu').test(text);
+    });
+  });
+}
+
+function escapePromotionContextTerm_(term) {
+  return term.replace(/[|\\{}()[\]^$+*?.]/gu, '\\$&').replace(/ /gu, '\\s+');
 }
 
 function stripQuotedReplyHistory_(plainText) {
@@ -1508,7 +1559,7 @@ function isQuotedReplyHistoryMarker_(line) {
     /^\s*Begin forwarded message:\s*$/iu.test(line);
 }
 
-function collectExplicitCouponTokens_(text, found) {
+function collectExplicitCouponTokens_(text, found, promotionContextDictionaries) {
   if (typeof text !== 'string') {
     return;
   }
@@ -1516,7 +1567,7 @@ function collectExplicitCouponTokens_(text, found) {
   // It leaves contextual prose, replies, referrals and ambiguous offers alone.
   var explicitIntroducer = '(?:(?:your|il tuo|la tua)\\s+)?(?:\\b(?:coupon|promo(?:tional)?|discount)\\s+code\\b|\\bcodice\\s+sconto\\b)';
   var actionIntroducer = '(?:(?:use|enter|apply|redeem|copy)\\s+(?:(?:the|your)\\s+)?code|(?:usa|inserisci|applica|riscatta)\\s+(?:(?:il tuo|la tua)\\s+)?codice)';
-  var couponContext = hasCouponPromotionContext_(text);
+  var couponContext = hasCouponPromotionContext_(text, promotionContextDictionaries);
   var genericCodeIntroducer = couponContext ? '\\bcode\\b|\\bcodice\\b' : '(?!)';
   var introducer = '^\\s*(?:' + explicitIntroducer + '|' + actionIntroducer + '|' + genericCodeIntroducer + ')';
   var quoted = new RegExp(introducer + '\\s*(?::|=|-|–)?\\s*["“]([^\\s<>{}\\[\\]"“”]{1,64})["”]\\s*$', 'iu');

@@ -32,7 +32,8 @@ the computer used to edit or deploy it is not part of the production runtime.
   retain a private continuation cursor when Gmail enforces a per-user quota.
 - Import only explicitly introduced coupon/promo/discount codes on a standalone
   line, or an equivalent non-reply subject. Letter-only codes require a strong
-  coupon context and an uppercase token, while referral-only,
+  promotion context and an uppercase token. The owner can extend the localized
+  promotion dictionaries in configuration, while referral-only,
   authentication, ambiguous and no-code emails stay untouched.
 - Avoid duplicate rows for the same Gmail message and exact code.
 - Apply the configured label and archive only after the Sheet write succeeds.
