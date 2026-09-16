@@ -1069,14 +1069,7 @@ function watermarkTargetIdentity_(config, labelId, sheetId) {
 
 function scanConfigIdentity_(config, sheetId) {
   return JSON.stringify([config.ownerEmail.toLowerCase(), config.labelName, config.spreadsheetId, config.sheetName,
-    sheetId, config.archiveImported, config.initialDate.toISOString(), config.watermarkOverlapDays,
-    promotionContextDictionaryIdentity_(config.promotionContextDictionaries)]);
-}
-
-function promotionContextDictionaryIdentity_(dictionaries) {
-  return Object.keys(dictionaries).sort().map(function(locale) {
-    return [locale, dictionaries[locale].slice().sort()];
-  });
+    sheetId, config.archiveImported, config.initialDate.toISOString(), config.watermarkOverlapDays]);
 }
 
 function validScanTimestamp_(value, now) {
@@ -1301,48 +1294,29 @@ function extractPlainText_(payload, messageId) {
 
 function collectCouponTextParts_(part, couponText, messageId, budget) {
   if (isAttachedPart_(part)) {
-    return true;
+    return;
   }
   var mimeType = String(part.mimeType || '').toLowerCase();
-  if (mimeType === 'multipart/alternative') {
-    var alternatives = [];
-    var complete = true;
-    (part.parts || []).forEach(function(child) {
-      var childText = [];
-      if (!collectCouponTextParts_(child, childText, messageId, budget)) {
-        complete = false;
-      }
-      alternatives.push(childText);
-    });
-    couponText.push({alternatives: alternatives, complete: complete});
-    return complete;
-  }
   if ((mimeType === 'text/plain' || mimeType === 'text/html') && part.body) {
     var encoded = part.body.data;
     if (part.body.size > MYCOUPONS_TEXT_PART_MAX_BYTES) {
-      return false;
+      return;
     }
     if (!encoded && validOpaqueGmailId_(part.body.attachmentId)) {
       var attachment = Gmail.Users.Messages.Attachments.get('me', messageId, part.body.attachmentId);
       encoded = attachment && attachment.data;
     }
     if (typeof encoded !== 'string' || encoded.length > Math.ceil(MYCOUPONS_TEXT_PART_MAX_BYTES * 4 / 3) + 4) {
-      return false;
+      return;
     }
     var decoded = decodeBase64UrlTextPart_(encoded, part);
     if (decoded !== null && decoded.length <= budget.remaining) {
-      var couponPart = mimeType === 'text/html' ? htmlToCouponText_(decoded) : decoded;
-      if (couponPart === null) {
-        return false;
-      }
-      couponText.push(couponPart);
+      couponText.push(mimeType === 'text/html' ? htmlToCouponText_(decoded) : decoded);
       budget.remaining -= decoded.length;
-    } else {
-      return false;
     }
   }
-  return (part.parts || []).every(function(child) {
-    return collectCouponTextParts_(child, couponText, messageId, budget);
+  (part.parts || []).forEach(function(child) {
+    collectCouponTextParts_(child, couponText, messageId, budget);
   });
 }
 
@@ -1415,114 +1389,39 @@ function declaredTextPartCharset_(part) {
 
 function htmlToCouponText_(html) {
   if (typeof html !== 'string') {
-    return null;
+    return '';
   }
   // Apps Script has no HTML/CSS renderer. A stylesheet means visibility cannot
   // be established reliably, so fail closed instead of importing preview text.
-  if (/<(?:blockquote|pre|script|style|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*(?:"[^"']*&[^"']*"|'[^"']*&[^"']*'|[^\s>]*&)|&(?!#(?:x[0-9a-f]+|\d+);|(?:amp|apos|gt|lt|nbsp|quot);)[a-z#]/iu.test(html)) {
-    return null;
+  if (/<(?:blockquote|style|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)|&(?!amp;|apos;|gt;|lt;|nbsp;|quot;)[a-z][a-z0-9]+;/iu.test(html)) {
+    return '';
   }
-  var text = extractBoundedVisibleHtmlText_(html);
-  return text === null ? null : text.replace(/\r\n?/gu, '\n');
-}
-
-function extractBoundedVisibleHtmlText_(html) {
-  var output = [];
-  var anchorDepth = 0;
-  var ignoredElement = null;
-  var index = 0;
-  while (index < html.length) {
-    if (html.slice(index, index + 4) === '<!--') {
-      var commentEnd = html.indexOf('-->', index + 4);
-      if (commentEnd === -1) {
-        return null;
-      }
-      index = commentEnd + 3;
-      continue;
-    }
-    if (html.charAt(index) !== '<') {
-      if (!ignoredElement) {
-        output.push(html.charAt(index));
-      }
-      index += 1;
-      continue;
-    }
-    var tagEnd = findHtmlTagEnd_(html, index + 1);
-    if (tagEnd === -1) {
-      return null;
-    }
-    var tag = html.slice(index + 1, tagEnd);
-    var match = /^\s*(\/)?\s*([A-Za-z][A-Za-z0-9:-]*)\b/u.exec(tag);
-    if (!match) {
-      index = tagEnd + 1;
-      continue;
-    }
-    var closing = Boolean(match[1]);
-    var name = match[2].toLowerCase();
-    if (ignoredElement) {
-      if (closing && name === ignoredElement) {
-        ignoredElement = null;
-      }
-    } else if (!closing && name === 'a') {
-      anchorDepth += 1;
-      output.push(' [link text: ');
-    } else if (closing && name === 'a' && anchorDepth) {
-      anchorDepth -= 1;
-      output.push('] ');
-    } else if (!closing && (name === 'head' || name === 'noscript' || name === 'script' || name === 'title')) {
-      ignoredElement = name;
-      output.push(' ');
-    } else if (!closing && name === 'img') {
-      output.push(' [image omitted] ');
-    } else if (!closing && /^(?:p|div|li|tr|td|th|h[1-6]|table|section|article)$/u.test(name)) {
-      output.push('\u0000');
-    } else if (!closing && (name === 'br' || name === 'hr')) {
-      output.push('\u0000');
-    } else if (closing && /^(?:p|div|li|tr|td|th|h[1-6]|table|section|article)$/u.test(name)) {
-      output.push('\u0000');
-    }
-    index = tagEnd + 1;
-  }
-  var decoded = decodeHtmlEntities_(output.join(''));
-  return ignoredElement || anchorDepth || decoded === null ? null : decoded.split('\u0000').map(function(segment) {
-    return segment.replace(/[\t\r\n\f ]+/gu, ' ');
-  }).join('\n');
-}
-
-function findHtmlTagEnd_(html, start) {
-  var quote = '';
-  for (var index = start; index < html.length; index += 1) {
-    var character = html.charAt(index);
-    if (quote) {
-      if (character === quote) {
-        quote = '';
-      }
-    } else if (character === '"' || character === "'") {
-      quote = character;
-    } else if (character === '>') {
-      return index;
-    }
-  }
-  return -1;
+  var withoutInactiveContent = html
+    .replace(/<!--[\s\S]*?-->/gu, '')
+    .replace(/<head\b[^>]*>[\s\S]*?<\/head\s*>/giu, '')
+    .replace(/<a\b[^>]*>[\s\S]*?<\/a\s*>/giu, ' [link omitted] ')
+    .replace(/<img\b[^>]*>/giu, ' [image omitted] ')
+    .replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote\s*>/giu, '')
+    .replace(/<([A-Za-z][A-Za-z0-9:-]*)\b(?=[^>]*(?:\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']*["']))[^>]*>[\s\S]*?<\/\1\s*>/giu, '')
+    .replace(/<(?:script|style|noscript|template|title)\b[^>]*>[\s\S]*?<\/(?:script|style|noscript|template|title)\s*>/giu, '');
+  var lineAware = withoutInactiveContent
+    .replace(/<(?:br|hr)\b[^>]*>/giu, '\n')
+    .replace(/<\/(?:p|div|li|tr|h[1-6]|table|section|article|blockquote)\s*>/giu, '\n')
+    .replace(/<[^>]*>/gu, '');
+  return decodeHtmlEntities_(lineAware).replace(/\r\n?/gu, '\n');
 }
 
 function decodeHtmlEntities_(value) {
   var named = {amp: '&', apos: "'", gt: '>', lt: '<', nbsp: ' ', quot: '"'};
-  var invalid = false;
-  var decoded = value.replace(/&(#x[0-9a-f]+|#\d+|amp|apos|gt|lt|nbsp|quot);/giu, function(entity, encoded) {
+  return value.replace(/&(#x[0-9a-f]+|#\d+|amp|apos|gt|lt|nbsp|quot);/giu, function(entity, encoded) {
     var key = encoded.toLowerCase();
     if (Object.prototype.hasOwnProperty.call(named, key)) {
       return named[key];
     }
     var codePoint = key.indexOf('#x') === 0 ? parseInt(key.slice(2), 16) : parseInt(key.slice(1), 10);
-    if (!Number.isFinite(codePoint) || codePoint < 0 || codePoint > 1114111 ||
-        (codePoint >= 55296 && codePoint <= 57343)) {
-      invalid = true;
-      return '';
-    }
-    return String.fromCodePoint(codePoint);
+    return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 1114111 &&
+      !(codePoint >= 55296 && codePoint <= 57343) ? String.fromCodePoint(codePoint) : entity;
   });
-  return invalid ? null : decoded;
 }
 
 function validTextPartBytes_(bytes, charset) {
@@ -1581,86 +1480,26 @@ function messageHasSystemExclusionLabel_(message) {
 
 function extractCouponCodes_(subject, plainText, promotionContextDictionaries) {
   var sourceParts = Array.isArray(plainText) ? plainText : [plainText];
-  var alternativeGroups = sourceParts.filter(function(part) {
-    return part && typeof part === 'object' && Array.isArray(part.alternatives);
-  });
   var content = [];
   if (subject && !isInheritedReplyOrForwardSubject_(subject)) {
     content.push(subject);
   }
-  var subjectCodes = extractCouponCodesFromTextParts_(content, promotionContextDictionaries);
   sourceParts.forEach(function(part) {
-    if (typeof part !== 'string') {
-      return;
-    }
     var unquoted = stripQuotedReplyHistory_(part);
     if (unquoted.text) {
       content.push(unquoted.text);
     }
   });
-  var messageContext = content.concat(flattenCouponAlternativeText_(alternativeGroups)).join('\n');
+  var messageContext = content.join('\n');
   if (/\botp\b|\b(?:one[- ]time password|verification|authentication|sign[- ]in|login|security)\s+code\b|\bcodice\s+(?:(?:di\s+)?(?:verifica|accesso|sicurezza)|otp)\b/iu.test(messageContext) ||
       hasReferralCouponContext_(messageContext)) {
     return [];
   }
-  var found = extractCouponCodesFromTextParts_(content, promotionContextDictionaries);
-  for (var groupIndex = 0; groupIndex < alternativeGroups.length; groupIndex += 1) {
-    if (!alternativeGroups[groupIndex].complete) {
-      return subjectCodes;
-    }
-    var nonEmptySets = alternativeGroups[groupIndex].alternatives.map(function(parts) {
-      return extractCouponCodesFromTextParts_(parts, promotionContextDictionaries);
-    }).filter(function(codes) {
-      return codes.length;
-    });
-    if (nonEmptySets.length > 1 && nonEmptySets.some(function(codes) {
-      return !sameCouponCodeSet_(codes, nonEmptySets[0]);
-    })) {
-      return [];
-    }
-    nonEmptySets.forEach(function(codes) {
-      codes.forEach(function(code) {
-        if (found.indexOf(code) === -1) {
-          found.push(code);
-        }
-      });
-    });
-  }
-  return found;
-}
-
-function flattenCouponAlternativeText_(alternativeGroups) {
-  var text = [];
-  alternativeGroups.forEach(function(group) {
-    group.alternatives.forEach(function(parts) {
-      parts.forEach(function(part) {
-        if (typeof part === 'string') {
-          text.push(part);
-        }
-      });
-    });
-  });
-  return text;
-}
-
-function extractCouponCodesFromTextParts_(parts, promotionContextDictionaries) {
   var found = [];
-  parts.forEach(function(part) {
-    if (typeof part !== 'string') {
-      return;
-    }
-    var unquoted = stripQuotedReplyHistory_(part);
-    if (unquoted.text) {
-      collectExplicitCouponTokens_(unquoted.text, found, promotionContextDictionaries);
-    }
+  content.forEach(function(text) {
+    collectExplicitCouponTokens_(text, found, promotionContextDictionaries);
   });
   return found;
-}
-
-function sameCouponCodeSet_(first, second) {
-  return first.length === second.length && first.every(function(code) {
-    return second.indexOf(code) !== -1;
-  });
 }
 
 function isInheritedReplyOrForwardSubject_(subject) {

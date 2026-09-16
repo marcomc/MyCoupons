@@ -76,12 +76,9 @@ limit. It is cleared only after that fixed range completes.
    `text/plain` or `text/html` content. HTML is reduced to visible,
    line-oriented text; links, markup, scripts, styles and attachments never
    become coupon input. Because Apps Script does not render CSS, an HTML part
-   containing a stylesheet, script, preformatted or hidden-content marker is
-   ignored entirely. A
+   containing a stylesheet or hidden-content marker is ignored entirely. A
    part without a content-type header is accepted only as US-ASCII. Uncertain
    decoding or unsupported named HTML entities leaves the part untouched.
-   `multipart/alternative` representations are treated as mutually exclusive:
-   conflicting extracted code sets leave the message untouched.
 4. Import only a complete code on a self-contained line that begins with an
    explicit form such as `coupon code`, `promo code`, `discount code`, `codice
    sconto`, `use code` or `usa il codice` (optionally `your`, `il tuo` or `la
