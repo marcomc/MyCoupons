@@ -53,6 +53,7 @@ function createRuntime({
   coerceLastWrite = false,
   beforeLiveDeduplicationRead = null,
   beforeLiveDeduplicationReadAt = 2,
+  beforeSnapshotFormulaRead = null,
   beforeAppendFormat = null,
   beforeFinalGmailAuthorization = null,
   beforeRetentionRecheck = null,
@@ -97,6 +98,7 @@ function createRuntime({
   const rangeListCalls = [];
   let externalAppendDone = false;
   let liveDeduplicationReadPending = Boolean(beforeLiveDeduplicationRead);
+  let snapshotFormulaReadPending = Boolean(beforeSnapshotFormulaRead);
   let appendFormatPending = Boolean(beforeAppendFormat);
   let finalGmailAuthorizationPending = Boolean(beforeFinalGmailAuthorization);
   let retentionRecheckPending = Boolean(beforeRetentionRecheck);
@@ -157,7 +159,13 @@ function createRuntime({
           }
           return values.map(row => [...row]);
         },
-        getFormulas: () => formulas.map(row => [...row]),
+        getFormulas: () => {
+          if (snapshotFormulaReadPending) {
+            beforeSnapshotFormulaRead({formulas, values});
+            snapshotFormulaReadPending = false;
+          }
+          return formulas.map(row => [...row]);
+        },
       };
     },
     getLastColumn: () => headers.length,
@@ -450,9 +458,7 @@ test('imports an explicitly introduced code, then labels and archives its exact 
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY'), JSON.stringify([
     'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount', 'Label_Imported', 12345,
   ]));
-  assert.deepEqual(runtime.rangeListCalls, [{
-    a1Notations: ['A2', 'B2', 'C2', 'D2', 'E2', 'F2', 'G2'], format: '@',
-  }]);
+  assert.deepEqual(runtime.rangeListCalls, []);
   assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
 });
 
@@ -708,10 +714,7 @@ test('preserves the 26-column legacy sheet layout and writes legacy aliases at t
   assert.equal(row[20], 'legacy-message::SAVE20');
   assert.equal(row[21], 'imported');
   assert.equal(row[25], '');
-  assert.deepEqual(runtime.numberFormats.map(format => [format.column, format.columnCount, format.format]), [
-    [4, 1, '@'], [5, 1, '@'], [6, 1, '@'], [7, 1, '@'],
-    [14, 1, '@'], [21, 1, '@'], [22, 1, '@'],
-  ]);
+  assert.deepEqual(runtime.numberFormats, []);
 });
 
 test('preserves case, Unicode, and supported punctuation only after an explicit introducer', () => {
@@ -927,10 +930,7 @@ test('treats untrusted Gmail text as literal Sheet text rather than a formula', 
 
   assert.equal(runtime.rows[1][2], '=IMPORTXML("https://example.com")');
   assert.equal(runtime.rows[1][3], '+attacker@example.com');
-  assert.deepEqual(runtime.numberFormats.map(format => [format.column, format.columnCount, format.format]), [
-    [1, 1, '@'], [2, 1, '@'], [3, 1, '@'], [4, 1, '@'],
-    [5, 1, '@'], [6, 1, '@'], [7, 1, '@'],
-  ]);
+  assert.deepEqual(runtime.numberFormats, []);
   assert.deepEqual(JSON.parse(JSON.stringify(runtime.formulas[1].slice(1, 6))), ['', '', '', '', '']);
 });
 
@@ -986,7 +986,7 @@ test('re-reads the live deduplication row before repairing Gmail and fails close
       existingRows: [[...existing]],
       messages: [message({id: 'message-1', subject: 'Earlier', body: 'Coupon code: SAVE20'})],
     });
-    assert.throws(() => runtime.context.runMyCouponsImport(), /complete message and code identity|duplicate deduplication key/i);
+    assert.throws(() => runtime.context.runMyCouponsImport(), /complete message and code identity|duplicate deduplication key|snapshot read/i);
     assert.equal(runtime.mutations.length, 0);
   });
 });
@@ -1031,6 +1031,18 @@ test('writes owner-stable Gmail links while accepting exact legacy u/0 rows for 
   });
   assert.equal(ownerStableLegacy.context.runMyCouponsImport().imported, 0);
   assert.equal(ownerStableLegacy.mutations[0].id, 'message-id');
+
+  const caseOnlyOwnerChange = createRuntime({
+    config: {ownerEmail: 'OWNER@EXAMPLE.COM'},
+    existingRows: [[
+      '2026-01-10T08:00:00.000Z', 'SAVE20', '', 'offers@example.com',
+      'https://mail.google.com/mail/u/?authuser=owner%40example.com#all/thread-id', 'message-id::SAVE20', 'imported',
+    ]],
+    messages: [message({id: 'message-id', threadId: 'thread-id', body: 'Coupon code: SAVE20'})],
+  });
+  assert.equal(caseOnlyOwnerChange.context.runMyCouponsImport().imported, 0);
+  assert.equal(caseOnlyOwnerChange.rows.length, 2);
+  assert.equal(caseOnlyOwnerChange.mutations[0].id, 'message-id');
 });
 
 test('uses the Gmail thread ID only for links while retaining the message ID for writes and deduplication', () => {
@@ -1159,7 +1171,7 @@ test('re-verifies every appended code for one message before its Gmail mutation'
     })],
   });
 
-  assert.throws(() => runtime.context.runMyCouponsImport(), /rows changed.*Gmail mutation/i);
+  assert.throws(() => runtime.context.runMyCouponsImport(), /rows changed.*Gmail mutation|snapshot read/i);
   assert.equal(runtime.mutations.length, 0);
 });
 
@@ -1180,7 +1192,7 @@ test('uses atomic append reservation without overwriting an interleaved external
   assert.ok(runtime.sheetDataRangeReadCount <= 6);
 });
 
-test('fails closed if an appended reservation is deleted during formatting', () => {
+test('does not run formatting after append, eliminating its stale-row race', () => {
   const runtime = createRuntime({
     beforeAppendFormat: ({formulas, row, values}) => {
       values.splice(row - 1, 1);
@@ -1189,8 +1201,23 @@ test('fails closed if an appended reservation is deleted during formatting', () 
     messages: [message({id: 'reservation-race', body: 'Coupon code: SAFE20'})],
   });
 
-  assert.throws(() => runtime.context.runMyCouponsImport(), /reservation changed/i);
-  assert.equal(runtime.rows.length, 1);
+  assert.equal(runtime.context.runMyCouponsImport().complete, true);
+  assert.equal(runtime.rows[1][1], 'SAFE20');
+  assert.deepEqual(runtime.numberFormats, []);
+  assert.deepEqual(runtime.rangeListCalls, []);
+});
+
+test('fails closed when the Sheet changes between snapshot values and formulas', () => {
+  const runtime = createRuntime({
+    existingRows: [['legacy', 'note', '', '', '', 'ordinary text', '']],
+    beforeSnapshotFormulaRead: ({formulas, values}) => {
+      values.splice(1, 1);
+      formulas.splice(1, 1);
+    },
+    messages: [message({id: 'snapshot-race', body: 'Coupon code: SAFE20'})],
+  });
+
+  assert.throws(() => runtime.context.runMyCouponsImport(), /changed during a snapshot read/i);
   assert.deepEqual(runtime.mutations, []);
 });
 
@@ -1858,7 +1885,7 @@ test('defers retention until an incomplete import scan has resumed and committed
   assert.deepEqual(runtime.trashed.map(entry => entry.id), ['old-first', 'old-second']);
 });
 
-test('runs retention even when import fails', () => {
+test('defers retention when a hard import error leaves a persisted scan active', () => {
   const duplicate = [
     '2026-01-10T08:00:00.000Z', 'SAVE20', 'Earlier', 'offers@example.com',
     'https://mail.google.com/mail/u/0/#all/message-1', 'message-1::SAVE20', 'imported',
@@ -1873,6 +1900,13 @@ test('runs retention even when import fails', () => {
     ],
   });
   assert.throws(() => runtime.context.runMyCouponsDaily(), /duplicate deduplication key/i);
+  assert.ok(runtime.properties.has('MYCOUPONS_SCAN_STATE'));
+  assert.deepEqual(runtime.trashed, []);
+
+  runtime.rows.splice(2, 1);
+  runtime.formulas.splice(2, 1);
+  const resumed = runtime.context.runMyCouponsDaily();
+  assert.equal(resumed.import.complete, true);
   assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-imported'}]);
 });
 

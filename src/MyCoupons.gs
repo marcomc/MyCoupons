@@ -61,7 +61,8 @@ function runMyCouponsDaily() {
     }
     var retention;
     var retentionError = null;
-    if (!importError && imported && !imported.complete) {
+    if ((!importError && imported && !imported.complete) ||
+        (importError && hasPersistedImportScanState_())) {
       // Retention may trash mail that is still part of a resumable import page.
       // Defer it until that exact scan has committed its watermark.
       retention = {complete: false, trashed: 0};
@@ -504,8 +505,9 @@ function assertCouponSheetEditable_(sheet) {
 }
 
 function readCouponSheetState_(sheet, config) {
-  var values = sheet.getDataRange().getValues();
-  var formulas = sheet.getDataRange().getFormulas();
+  var snapshot = readStableCouponSheetSnapshot_(sheet);
+  var values = snapshot.values;
+  var formulas = snapshot.formulas;
   if (!values.length || !values[0].length) {
     throw new Error('Coupon sheet must contain its existing header row.');
   }
@@ -522,6 +524,34 @@ function readCouponSheetState_(sheet, config) {
     }
   });
   return {columnCount: values[0].length, columns: columns, deduplicationCandidates: deduplicationCandidates};
+}
+
+function readStableCouponSheetSnapshot_(sheet) {
+  var data = sheet.getDataRange();
+  var values = data.getValues();
+  var formulas = data.getFormulas();
+  var confirmedValues = data.getValues();
+  var confirmedFormulas = data.getFormulas();
+  if (!sameSheetMatrix_(values, confirmedValues) || !sameSheetMatrix_(formulas, confirmedFormulas) ||
+      !sameSheetMatrixShape_(confirmedValues, confirmedFormulas)) {
+    throw new Error('Coupon sheet changed during a snapshot read. Retry after concurrent edits finish.');
+  }
+  return {values: confirmedValues, formulas: confirmedFormulas};
+}
+
+function sameSheetMatrix_(first, second) {
+  return Array.isArray(first) && Array.isArray(second) && first.length === second.length &&
+    first.every(function(row, index) {
+      return Array.isArray(row) && Array.isArray(second[index]) && row.length === second[index].length &&
+        row.every(function(cell, column) { return cell === second[index][column]; });
+    });
+}
+
+function sameSheetMatrixShape_(values, formulas) {
+  return Array.isArray(values) && Array.isArray(formulas) && values.length === formulas.length &&
+    values.every(function(row, index) {
+      return Array.isArray(row) && Array.isArray(formulas[index]) && row.length === formulas[index].length;
+    });
 }
 
 function parseDeduplicationKey_(key) {
@@ -578,7 +608,7 @@ function hasOversizedSheetMetadata_(message) {
 }
 
 function gmailLinkForMessage_(threadId, config) {
-  return 'https://mail.google.com/mail/u/?authuser=' + encodeURIComponent(config.ownerEmail) +
+  return 'https://mail.google.com/mail/u/?authuser=' + encodeURIComponent(config.ownerEmail.toLowerCase()) +
     '#all/' + encodeURIComponent(threadId);
 }
 
@@ -587,7 +617,7 @@ function legacyGmailLinkForMessage_(messageId) {
 }
 
 function ownerStableLegacyGmailLinkForMessage_(messageId, config) {
-  return 'https://mail.google.com/mail/u/?authuser=' + encodeURIComponent(config.ownerEmail) +
+  return 'https://mail.google.com/mail/u/?authuser=' + encodeURIComponent(config.ownerEmail.toLowerCase()) +
     '#all/' + encodeURIComponent(messageId);
 }
 
@@ -610,47 +640,12 @@ function sheetSemanticText_(value) {
 function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
   sheet.appendRow(row);
   var reservation = verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey);
-  setCouponRowTextFormats_(sheet, reservation.rowNumber, populatedCouponColumns_(columns));
-  reservation = verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey);
   var range = sheet.getRange(reservation.rowNumber, 1, 1, row.length);
   var written = range.getValues()[0];
   var formulas = range.getFormulas()[0];
   if (!verifiedCouponRow_(written, formulas, row, columns, deduplicationKey, null)) {
     throw new Error('Coupon row verification failed before Gmail mutation.');
   }
-}
-
-function populatedCouponColumns_(columns) {
-  return [
-    columns.emailDate,
-    columns.couponCode,
-    columns.sourceSubject,
-    columns.sender,
-    columns.gmailLink,
-    columns.deduplicationKey,
-    columns.status,
-  ];
-}
-
-function setCouponRowTextFormats_(sheet, rowNumber, columns) {
-  var a1Notations = columns.map(function(column) { return columnToA1_(column + 1) + rowNumber; });
-  if (typeof sheet.getRangeList === 'function') {
-    sheet.getRangeList(a1Notations).setNumberFormat('@');
-    return;
-  }
-  columns.forEach(function(column) {
-    sheet.getRange(rowNumber, column + 1, 1, 1).setNumberFormat('@');
-  });
-}
-
-function columnToA1_(columnNumber) {
-  var result = '';
-  while (columnNumber > 0) {
-    var remainder = (columnNumber - 1) % 26;
-    result = String.fromCharCode(65 + remainder) + result;
-    columnNumber = Math.floor((columnNumber - 1) / 26);
-  }
-  return result;
 }
 
 function verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey) {
@@ -662,9 +657,9 @@ function verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey
 }
 
 function findExactAppendedCouponRow_(sheet, expectedRow, columns, deduplicationKey) {
-  var data = sheet.getDataRange();
-  var values = data.getValues();
-  var formulas = data.getFormulas();
+  var snapshot = readStableCouponSheetSnapshot_(sheet);
+  var values = snapshot.values;
+  var formulas = snapshot.formulas;
   var matches = [];
   values.slice(1).forEach(function(existingRow, index) {
     if (sheetSemanticText_(existingRow[columns.deduplicationKey]) === deduplicationKey &&
@@ -921,6 +916,10 @@ function inspectPersistedImportState_(config, labelId, sheetId, now) {
 
 function saveScanState_(scan) {
   PropertiesService.getScriptProperties().setProperty(MYCOUPONS_SCAN_STATE_PROPERTY, JSON.stringify(scan));
+}
+
+function hasPersistedImportScanState_() {
+  return !!PropertiesService.getScriptProperties().getProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
 }
 
 function gmailListOptions_(query, pageToken) {
