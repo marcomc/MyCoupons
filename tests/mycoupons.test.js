@@ -54,12 +54,14 @@ function createRuntime({
   advanceClockOnList = false,
   fetchFailureAfter = null,
   listFailureAfter = null,
+  trashFailureAfter = null,
   listPageSize = 100,
   missingMessageIds = [],
   now = new Date('2026-01-11T10:00:00.000Z'),
   labels = [{id: 'Label_Imported', name: 'Coupon Code Discount', type: 'user'}],
   listedMessageIds = messages.map(value => value.id),
   openedSpreadsheetName = undefined,
+  sheetCanEdit = true,
   profileEmail = 'owner@example.com',
   triggers = [],
   dailyScheduleMetadata = undefined,
@@ -77,6 +79,7 @@ function createRuntime({
   const createdTriggers = [];
   let getMessageCount = 0;
   let listMessageCount = 0;
+  let trashMessageCount = 0;
   const numberFormats = [];
   let externalAppendDone = false;
   let liveDeduplicationReadPending = Boolean(beforeLiveDeduplicationRead);
@@ -151,6 +154,12 @@ function createRuntime({
     },
     getRange(row, column, rowCount, columnCount) {
       return {
+        canEdit: () => typeof sheetCanEdit === 'function' ? sheetCanEdit({
+          column,
+          columnCount,
+          row,
+          rowCount,
+        }) : sheetCanEdit,
         setNumberFormat: format => {
           numberFormats.push({column, columnCount, format, row, rowCount});
           return this;
@@ -229,7 +238,7 @@ function createRuntime({
         Messages: {
           get: (userId, id) => {
             assert.equal(userId, 'me');
-            if (retentionRecheckPending && getMessageCount === 1) {
+            if (retentionRecheckPending && getMessageCount === 0) {
               beforeRetentionRecheck(gmailMessages);
               retentionRecheckPending = false;
             }
@@ -270,7 +279,13 @@ function createRuntime({
             };
           },
           modify: (resource, userId, id) => mutations.push({resource, userId, id}),
-          trash: (userId, id) => trashed.push({userId, id}),
+          trash: (userId, id) => {
+            if (trashFailureAfter !== null && trashMessageCount >= trashFailureAfter) {
+              throw new Error("Quota exceeded for quota metric 'Total Query Cost'.");
+            }
+            trashMessageCount += 1;
+            trashed.push({userId, id});
+          },
         },
       },
     },
@@ -539,6 +554,7 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'refer-friend', body: 'Refer a friend with promo code: FRIEND20'}),
     message({id: 'invite-friends', body: 'Invite friends with discount code: FRIEND20'}),
     message({id: 'friends-after-code', body: 'Promo code: FRIEND20 — invite friends'}),
+    message({id: 'cross-field-referral', subject: 'Refer a friend today', body: 'Promo code: FRIEND20'}),
     message({id: 'otp', body: 'Your verification code: 123456'}),
     message({id: 'generic', body: 'Use SAVE20 at checkout'}),
     message({id: 'ordinary-prose', body: 'No coupon code is required.'}),
@@ -631,6 +647,8 @@ test('rejects overlong and URL-like code forms rather than importing truncated t
   const runtime = createRuntime({messages: [
     message({id: 'overlong', body: 'Coupon code: A' + 'B'.repeat(128)}),
     message({id: 'url', body: 'Promo code: https://example.com/referral'}),
+    message({id: 'bare-domain', body: 'Promo code: deals.example.com'}),
+    message({id: 'bare-domain-path', body: 'Promo code: deals.example.com/ref/SAVE20?source=email'}),
   ]});
 
   const outcome = runtime.context.runMyCouponsImport();
@@ -1095,6 +1113,30 @@ test('reports only non-secret installation readiness and fails closed for owner 
   assert.throws(() => duplicates.context.getMyCouponsInstallationStatus(), /multiple daily triggers/i);
 });
 
+test('read-only status fails closed when the coupon sheet cannot be edited', () => {
+  const runtime = createRuntime({sheetCanEdit: false});
+  const before = [...runtime.properties.entries()];
+
+  assert.throws(() => runtime.context.getMyCouponsInstallationStatus(), /not editable/i);
+  assert.deepEqual([...runtime.properties.entries()], before);
+  assert.equal(runtime.mutations.length, 0);
+  assert.equal(runtime.trashed.length, 0);
+  assert.equal(runtime.createdTriggers.length, 0);
+});
+
+test('checks the full next append row is editable before listing Gmail messages', () => {
+  const runtime = createRuntime({
+    sheetCanEdit: ({column, columnCount, row, rowCount}) =>
+      !(column === 1 && columnCount === 7 && row === 2 && rowCount === 1),
+    messages: [message({id: 'blocked-sheet', body: 'Coupon code: SHEET20'})],
+  });
+
+  assert.throws(() => runtime.context.runMyCouponsImport(), /not editable/i);
+  assert.deepEqual(runtime.queries, []);
+  assert.equal(runtime.rows.length, 1);
+  assert.equal(runtime.mutations.length, 0);
+});
+
 test('read-only status validates persisted import state without mutating it', () => {
   const validScan = JSON.stringify({
     boundary: '2026-01-11T10:00:00.000Z',
@@ -1156,6 +1198,34 @@ test('read-only status fails closed for malformed persisted scan or watermark st
   const malformedWatermarkBefore = [...malformedWatermark.properties.entries()];
   assert.throws(() => malformedWatermark.context.getMyCouponsInstallationStatus(), /watermark is invalid/i);
   assert.deepEqual([...malformedWatermark.properties.entries()], malformedWatermarkBefore);
+});
+
+test('rejects future persisted watermark and scan timestamps before import can commit them', () => {
+  const future = '2026-01-11T10:00:01.000Z';
+  const futureWatermark = createRuntime({watermark: future});
+  const watermarkBefore = [...futureWatermark.properties.entries()];
+  assert.throws(() => futureWatermark.context.getMyCouponsInstallationStatus(), /watermark is invalid/i);
+  assert.throws(() => futureWatermark.context.runMyCouponsImport(), /watermark is invalid/i);
+  assert.deepEqual([...futureWatermark.properties.entries()], watermarkBefore);
+
+  const futureScan = createRuntime({scanState: JSON.stringify({
+    boundary: future,
+    configIdentity: JSON.stringify([
+      'owner@example.com', 'Coupon Code Discount', 'sheet-id', 'Coupon Manager', true,
+      '2026-01-01T00:00:00.000Z', 1,
+    ]),
+    labelId: 'Label_Imported',
+    labelName: 'Coupon Code Discount',
+    listedFinalPage: true,
+    pageToken: '',
+    pendingIds: [],
+    start: future,
+    version: 2,
+  })});
+  const scanBefore = [...futureScan.properties.entries()];
+  assert.throws(() => futureScan.context.getMyCouponsInstallationStatus(), /scan state is invalid/i);
+  assert.throws(() => futureScan.context.runMyCouponsImport(), /scan state is invalid/i);
+  assert.deepEqual([...futureScan.properties.entries()], scanBefore);
 });
 
 test('read-only status reports valid stale import state without clearing it', () => {
@@ -1299,7 +1369,7 @@ test('revalidates each retention candidate immediately before trashing it', () =
 
 test('stops retention safely when an immediate candidate recheck is rate limited', () => {
   const runtime = createRuntime({
-    fetchFailureAfter: 3,
+    fetchFailureAfter: 1,
     messages: [
       message({id: 'old-first', date: new Date('2025-01-01T00:00:00.000Z'), labels: ['Coupon Code Discount']}),
       message({id: 'old-second', date: new Date('2025-01-02T00:00:00.000Z'), labels: ['Coupon Code Discount']}),
@@ -1310,6 +1380,24 @@ test('stops retention safely when an immediate candidate recheck is rate limited
     complete: false, trashed: 1,
   });
   assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-first'}]);
+});
+
+test('reports incomplete retention safely when listing or trashing is rate limited', () => {
+  const oldMessage = message({
+    id: 'old-imported',
+    date: new Date('2025-01-01T00:00:00.000Z'),
+    labels: ['Coupon Code Discount'],
+  });
+  const listLimited = createRuntime({listFailureAfter: 0, messages: [oldMessage]});
+  const trashLimited = createRuntime({trashFailureAfter: 0, messages: [oldMessage]});
+
+  assert.deepEqual(JSON.parse(JSON.stringify(listLimited.context.cleanupExpiredImportedMessages())), {
+    complete: false, trashed: 0,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(trashLimited.context.cleanupExpiredImportedMessages())), {
+    complete: false, trashed: 0,
+  });
+  assert.deepEqual(trashLimited.trashed, []);
 });
 
 test('reports an incomplete retention page after safely trashing its processed messages', () => {

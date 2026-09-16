@@ -128,11 +128,14 @@ function installMyCouponsDailyTrigger() {
  * @return {{dailyTrigger: string, importState: string, ready: boolean}}
  */
 function getMyCouponsInstallationStatus() {
+  var now = new Date();
   var config = getMyCouponsConfig_();
   assertMyCouponsOwner_(config);
   var label = resolveImportedLabel_(config);
-  readCouponSheetState_(resolveCouponSheet_(config), config);
-  var importState = inspectPersistedImportState_(config, label.id);
+  var sheet = resolveCouponSheet_(config);
+  assertCouponSheetEditable_(sheet);
+  readCouponSheetState_(sheet, config);
+  var importState = inspectPersistedImportState_(config, label.id, now);
   var matching = ScriptApp.getProjectTriggers().filter(function(trigger) {
       return trigger.getHandlerFunction() === MYCOUPONS_DAILY_HANDLER;
   });
@@ -148,10 +151,12 @@ function getMyCouponsInstallationStatus() {
 }
 
 function runMyCouponsImport_(config) {
+  var now = new Date();
   var label = resolveImportedLabel_(config);
   var sheet = resolveCouponSheet_(config);
+  assertCouponSheetEditable_(sheet);
   var sheetState = readCouponSheetState_(sheet, config);
-  var scan = loadOrStartScanState_(config, label.id, new Date());
+  var scan = loadOrStartScanState_(config, label.id, now);
   var imported = 0;
   var scanned = 0;
 
@@ -207,6 +212,9 @@ function runMyCouponsImport_(config) {
 
     if (!scan.pageToken && scan.listedFinalPage) {
       var watermark = scan.boundary;
+      if (!validScanTimestamp_(watermark, now)) {
+        throw new Error('Refusing to commit a future MyCoupons watermark.');
+      }
       PropertiesService.getScriptProperties().setProperty(MYCOUPONS_WATERMARK_PROPERTY, watermark);
       PropertiesService.getScriptProperties().setProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY,
         watermarkTargetIdentity_(config, label.id));
@@ -251,11 +259,19 @@ function cleanupExpiredImportedMessages_(config) {
   threshold.setUTCDate(threshold.getUTCDate() - config.retentionDays);
   var trashed = 0;
   var label = resolveImportedLabel_(config);
-  var listed = listFirstGmailMessagePage_(buildRetentionQuery_(config, threshold));
-  for (var index = 0; index < listed.messages.length; index += 1) {
+  var listed;
+  try {
+    listed = listFirstGmailMessagePage_(buildRetentionQuery_(config, threshold));
+  } catch (error) {
+    if (isGmailRateLimitError_(error)) {
+      return {complete: false, trashed: trashed};
+    }
+    throw error;
+  }
+  for (var index = 0; index < listed.messageIds.length; index += 1) {
     var message;
     try {
-      message = toMyCouponsMessage_(Gmail.Users.Messages.get('me', listed.messages[index].id, {format: 'full'}));
+      message = toMyCouponsMessage_(Gmail.Users.Messages.get('me', listed.messageIds[index], {format: 'full'}));
     } catch (error) {
       if (isGmailRateLimitError_(error)) {
         return {complete: false, trashed: trashed};
@@ -269,7 +285,14 @@ function cleanupExpiredImportedMessages_(config) {
         messageHasSystemExclusionLabel_(message)) {
       continue;
     }
-    Gmail.Users.Messages.trash('me', message.id);
+    try {
+      Gmail.Users.Messages.trash('me', message.id);
+    } catch (error) {
+      if (isGmailRateLimitError_(error)) {
+        return {complete: false, trashed: trashed};
+      }
+      throw error;
+    }
     trashed += 1;
   }
   return {complete: listed.complete, trashed: trashed};
@@ -406,6 +429,13 @@ function resolveCouponSheet_(config) {
     throw new Error('Configured coupon sheet was not found.');
   }
   return sheet;
+}
+
+function assertCouponSheetEditable_(sheet) {
+  var range = sheet.getRange(sheet.getLastRow() + 1, 1, 1, sheet.getLastColumn());
+  if (!range || typeof range.canEdit !== 'function' || range.canEdit() !== true) {
+    throw new Error('Configured coupon sheet is not editable by the current user.');
+  }
 }
 
 function readCouponSheetState_(sheet, config) {
@@ -588,20 +618,21 @@ function buildRetentionQuery_(config, threshold) {
     Math.floor(threshold.getTime() / 1000) + ' -in:sent -in:drafts -in:spam -in:trash';
 }
 
-function scanStart_(config, labelId) {
+function scanStart_(config, labelId, now) {
   var properties = PropertiesService.getScriptProperties();
   var rawWatermark = properties.getProperty(MYCOUPONS_WATERMARK_PROPERTY);
   if (!rawWatermark) {
     return initialScanStart_(config);
   }
+  var watermark = new Date(rawWatermark);
+  if (!validScanTimestamp_(rawWatermark, now) || isNaN(watermark.getTime()) ||
+      watermark.toISOString() !== rawWatermark) {
+    throw new Error('Stored MyCoupons watermark is invalid. Repair it deliberately before importing.');
+  }
   if (properties.getProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY) !== watermarkTargetIdentity_(config, labelId)) {
     properties.deleteProperty(MYCOUPONS_WATERMARK_PROPERTY);
     properties.deleteProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY);
     return initialScanStart_(config);
-  }
-  var watermark = new Date(rawWatermark);
-  if (isNaN(watermark.getTime()) || watermark.toISOString() !== rawWatermark) {
-    throw new Error('Stored MyCoupons watermark is invalid. Repair it deliberately before importing.');
   }
   watermark.setUTCDate(watermark.getUTCDate() - config.watermarkOverlapDays);
   if (config.watermarkOverlapDays === 0) {
@@ -626,9 +657,10 @@ function scanConfigIdentity_(config) {
     config.archiveImported, config.initialDate.toISOString(), config.watermarkOverlapDays]);
 }
 
-function validScanTimestamp_(value) {
+function validScanTimestamp_(value, now) {
   var date = new Date(value);
-  return typeof value === 'string' && !isNaN(date.getTime()) && date.toISOString() === value;
+  return typeof value === 'string' && !isNaN(date.getTime()) && date.toISOString() === value &&
+    (!now || date.getTime() <= now.getTime());
 }
 
 function loadOrStartScanState_(config, labelId, boundary) {
@@ -637,7 +669,7 @@ function loadOrStartScanState_(config, labelId, boundary) {
   if (!raw) {
     return newScanState_(config, labelId, boundary);
   }
-  var scan = parseStoredScanState_(raw);
+  var scan = parseStoredScanState_(raw, boundary);
   if (scan.configIdentity !== scanConfigIdentity_(config) || scan.labelName !== config.labelName || scan.labelId !== labelId) {
     properties.deleteProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
     properties.deleteProperty(MYCOUPONS_WATERMARK_PROPERTY);
@@ -648,30 +680,34 @@ function loadOrStartScanState_(config, labelId, boundary) {
 }
 
 function newScanState_(config, labelId, boundary) {
+  var start = scanStart_(config, labelId, boundary);
+  if (start.getTime() > boundary.getTime()) {
+    throw new Error('MYCOUPONS_CONFIG.initialDate cannot be after the import boundary.');
+  }
   return {version: MYCOUPONS_SCAN_STATE_VERSION, configIdentity: scanConfigIdentity_(config), labelId: labelId,
-    labelName: config.labelName, start: scanStart_(config, labelId).toISOString(), boundary: boundary.toISOString(),
+    labelName: config.labelName, start: start.toISOString(), boundary: boundary.toISOString(),
     pageToken: '', pendingIds: [], listedFinalPage: false};
 }
 
-function parseStoredScanState_(raw) {
+function parseStoredScanState_(raw, now) {
   var scan;
   try {
     scan = JSON.parse(raw);
   } catch (error) {
     throw new Error('Stored MyCoupons scan state is invalid. Repair it deliberately before importing.');
   }
-  if (!validStoredScanState_(scan)) {
+  if (!validStoredScanState_(scan, now)) {
     throw new Error('Stored MyCoupons scan state is invalid. Repair it deliberately before importing.');
   }
   return scan;
 }
 
-function validStoredScanState_(scan) {
+function validStoredScanState_(scan, now) {
   return !!scan && typeof scan === 'object' && !Array.isArray(scan) &&
     Object.keys(scan).sort().join(',') === 'boundary,configIdentity,labelId,labelName,listedFinalPage,pageToken,pendingIds,start,version' &&
     scan.version === MYCOUPONS_SCAN_STATE_VERSION && typeof scan.configIdentity === 'string' && !!scan.configIdentity &&
     typeof scan.labelName === 'string' && !!scan.labelName && typeof scan.labelId === 'string' && !!scan.labelId &&
-    validScanTimestamp_(scan.start) && validScanTimestamp_(scan.boundary) &&
+    validScanTimestamp_(scan.start, now) && validScanTimestamp_(scan.boundary, now) &&
     new Date(scan.start).getTime() <= new Date(scan.boundary).getTime() && typeof scan.pageToken === 'string' &&
     scan.pageToken.length <= 1000 && Array.isArray(scan.pendingIds) &&
     scan.pendingIds.length <= MYCOUPONS_SEARCH_PAGE_SIZE &&
@@ -680,7 +716,7 @@ function validStoredScanState_(scan) {
     !(scan.listedFinalPage && !!scan.pageToken);
 }
 
-function inspectPersistedImportState_(config, labelId) {
+function inspectPersistedImportState_(config, labelId, now) {
   var properties = PropertiesService.getScriptProperties();
   var watermark = properties.getProperty(MYCOUPONS_WATERMARK_PROPERTY);
   var watermarkIdentity = properties.getProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY);
@@ -689,14 +725,14 @@ function inspectPersistedImportState_(config, labelId) {
   }
   var restartRequired = false;
   if (watermark) {
-    if (!validScanTimestamp_(watermark)) {
+    if (!validScanTimestamp_(watermark, now)) {
       throw new Error('Stored MyCoupons watermark is invalid. Repair it deliberately before importing.');
     }
     restartRequired = watermarkIdentity !== watermarkTargetIdentity_(config, labelId);
   }
   var rawScan = properties.getProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
   if (rawScan) {
-    var scan = parseStoredScanState_(rawScan);
+    var scan = parseStoredScanState_(rawScan, now);
     restartRequired = restartRequired || scan.configIdentity !== scanConfigIdentity_(config) ||
       scan.labelName !== config.labelName || scan.labelId !== labelId;
   }
@@ -720,20 +756,17 @@ function escapeGmailQueryString_(value) {
 }
 
 function listFirstGmailMessagePage_(query) {
-  var messages = [];
   var page = Gmail.Users.Messages.list('me', gmailListOptions_(query));
   var references = page.messages || [];
-  for (var index = 0; index < references.length; index += 1) {
-    try {
-      messages.push(toMyCouponsMessage_(Gmail.Users.Messages.get('me', references[index].id, {format: 'full'})));
-    } catch (error) {
-      if (isGmailRateLimitError_(error)) {
-        return {complete: false, messages: messages};
-      }
-      throw error;
-    }
+  if (references.some(function(reference) {
+    return !reference || typeof reference.id !== 'string' || !reference.id;
+  })) {
+    throw new Error('Gmail returned an invalid message list.');
   }
-  return {complete: !page.nextPageToken, messages: messages};
+  if (new Set(references.map(function(reference) { return reference.id; })).size !== references.length) {
+    throw new Error('Gmail returned duplicate message IDs in one page.');
+  }
+  return {complete: !page.nextPageToken, messageIds: references.map(function(reference) { return reference.id; })};
 }
 
 function isGmailRateLimitError_(error) {
@@ -829,10 +862,9 @@ function messageHasSystemExclusionLabel_(message) {
 function extractCouponCodes_(subject, plainText) {
   var unquoted = stripQuotedReplyHistory_(plainText);
   var content = [unquoted.hadQuotedHistory ? '' : subject || '', unquoted.text];
-  if (content.some(function(text) {
-    return /\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b/iu.test(text) ||
-      hasReferralCouponContext_(text);
-  })) {
+  var messageContext = content.join('\n');
+  if (/\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b/iu.test(messageContext) ||
+      hasReferralCouponContext_(messageContext)) {
     return [];
   }
   var found = [];
@@ -891,7 +923,7 @@ function collectExplicitCouponTokens_(text, found) {
 }
 
 function acceptCouponToken_(token, quoted, hasFollowingWord) {
-  if (!token || /^(?:https?:\/\/|www\.)/iu.test(token) || !/[\p{L}\p{N}]/u.test(token)) {
+  if (!token || isLinkLikeCouponToken_(token) || !/[\p{L}\p{N}]/u.test(token)) {
     return null;
   }
   if (/^'/u.test(token) || isCouponPlaceholder_(token)) {
@@ -910,6 +942,12 @@ function acceptCouponToken_(token, quoted, hasFollowingWord) {
     return null;
   }
   return token;
+}
+
+function isLinkLikeCouponToken_(token) {
+  var normalized = token.replace(/[.!?,;:]+$/u, '');
+  return /^(?:https?:\/\/|www\.)/iu.test(normalized) ||
+    /^(?:[\p{L}\p{N}-]+\.)+[A-Za-z]{2,63}(?:[/?#].*)?$/u.test(normalized);
 }
 
 function isCouponPlaceholder_(token) {
