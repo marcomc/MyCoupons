@@ -61,7 +61,8 @@ function runMyCouponsDaily() {
     }
     var retention;
     var retentionError = null;
-    if (importError || (!importError && imported && !imported.complete)) {
+    if ((!importError && imported && !imported.complete) ||
+        (importError && hasPersistedImportScanState_())) {
       // Retention may trash mail that is still part of a resumable import page.
       // Defer it until that exact scan has committed its watermark.
       retention = {complete: false, trashed: 0};
@@ -91,6 +92,9 @@ function cleanupExpiredImportedMessages() {
   return withMyCouponsLock_(function() {
     var config = getMyCouponsConfig_();
     assertMyCouponsOwner_(config);
+    if (hasPersistedImportScanState_()) {
+      return {complete: false, trashed: 0};
+    }
     return cleanupExpiredImportedMessages_(config);
   });
 }
@@ -629,7 +633,7 @@ function ownerStableLegacyGmailLinkForMessage_(messageId, config) {
 
 function asSheetLiteral_(value) {
   var text = String(value);
-  return /^'/.test(text) || /^[=+\-@]/.test(text) ? "'" + text : text;
+  return /^'/.test(text) || /^[=+\-@\d]/.test(text) ? "'" + text : text;
 }
 
 function asCouponCodeSheetLiteral_(code) {
@@ -722,7 +726,7 @@ function deduplicationCandidateCorrelatesMessage_(record, message, config, colum
 function verifiedCouponRow_(written, formulas, expected, columns, deduplicationKey, legacyGmailLinks) {
   if (!Array.isArray(written) || !Array.isArray(formulas) ||
       !matchesExpectedSheetValue_(written[columns.deduplicationKey], expected[columns.deduplicationKey]) ||
-      !matchesExpectedSheetValue_(written[columns.emailDate], expected[columns.emailDate]) ||
+      !matchesExpectedSheetDate_(written[columns.emailDate], expected[columns.emailDate]) ||
       !matchesForcedCouponCode_(written[columns.couponCode], expected[columns.couponCode]) ||
       !matchesExpectedSheetValue_(written[columns.sourceSubject], expected[columns.sourceSubject]) ||
       !matchesExpectedSheetValue_(written[columns.sender], expected[columns.sender]) ||
@@ -738,6 +742,14 @@ function verifiedCouponRow_(written, formulas, expected, columns, deduplicationK
 
 function matchesExpectedSheetValue_(written, expected) {
   return String(written) === expectedSheetStoredText_(expected);
+}
+
+function matchesExpectedSheetDate_(written, expected) {
+  if (Object.prototype.toString.call(written) === '[object Date]') {
+    var expectedDate = new Date(expectedSheetStoredText_(expected));
+    return !isNaN(expectedDate.getTime()) && written.getTime() === expectedDate.getTime();
+  }
+  return matchesExpectedSheetValue_(written, expected);
 }
 
 function matchesForcedCouponCode_(written, expected) {
@@ -969,12 +981,16 @@ function toMyCouponsMessage_(message) {
     throw new Error('Gmail returned an incomplete message.');
   }
   var headers = {};
+  var fromHeaderCount = 0;
   var subjectHeaderCount = 0;
   (message.payload.headers || []).forEach(function(header) {
     if (header && typeof header.name === 'string' && typeof header.value === 'string') {
       var name = header.name.toLowerCase();
       if (name === 'subject') {
         subjectHeaderCount += 1;
+      }
+      if (name === 'from') {
+        fromHeaderCount += 1;
       }
       if (!Object.prototype.hasOwnProperty.call(headers, name)) {
         headers[name] = header.value;
@@ -992,7 +1008,7 @@ function toMyCouponsMessage_(message) {
     id: message.id,
     labelIds: message.labelIds || [],
     plainText: extractPlainText_(message.payload, message.id),
-    sourceAmbiguous: subjectHeaderCount > 1,
+    sourceAmbiguous: subjectHeaderCount > 1 || fromHeaderCount > 1,
     subject: headers.subject || '',
     threadId: message.threadId,
   };
@@ -1019,7 +1035,7 @@ function collectPlainTextParts_(part, plainText, messageId) {
       var attachment = Gmail.Users.Messages.Attachments.get('me', messageId, part.body.attachmentId);
       encoded = attachment && attachment.data;
     }
-    var decoded = decodeBase64UrlUtf8_(encoded);
+    var decoded = decodeBase64UrlTextPart_(encoded, part);
     if (decoded !== null) {
       plainText.push(decoded);
     }
@@ -1039,12 +1055,102 @@ function isAttachedPart_(part) {
   });
 }
 
-function decodeBase64UrlUtf8_(encoded) {
+function decodeBase64UrlTextPart_(encoded, part) {
   try {
-    return Utilities.newBlob(Utilities.base64DecodeWebSafe(encoded)).getDataAsString('UTF-8');
+    var bytes = Utilities.base64DecodeWebSafe(encoded);
+    var charset = declaredPlainTextCharset_(part);
+    if (!charset || !validTextPartBytes_(bytes, charset)) {
+      return null;
+    }
+    var decoded = Utilities.newBlob(bytes).getDataAsString(charset);
+    return decoded.indexOf('\ufffd') === -1 ? decoded : null;
   } catch (error) {
     return null;
   }
+}
+
+function declaredPlainTextCharset_(part) {
+  var contentTypes = (part.headers || []).filter(function(header) {
+    return header && typeof header.name === 'string' && typeof header.value === 'string' &&
+      header.name.toLowerCase() === 'content-type';
+  });
+  if (!contentTypes.length) {
+    return 'UTF-8';
+  }
+  if (contentTypes.length !== 1) {
+    return null;
+  }
+  var pieces = contentTypes[0].value.split(';');
+  if (!/^\s*text\/plain\s*$/iu.test(pieces.shift())) {
+    return null;
+  }
+  var charsets = [];
+  for (var index = 0; index < pieces.length; index += 1) {
+    if (/^\s*charset\b/iu.test(pieces[index])) {
+      var match = /^\s*charset\s*=\s*(?:"([A-Za-z0-9._-]+)"|([A-Za-z0-9._-]+))\s*$/u.exec(pieces[index]);
+      if (!match) {
+        return null;
+      }
+      charsets.push((match[1] || match[2]).toLowerCase());
+    }
+  }
+  if (charsets.length !== 1) {
+    return null;
+  }
+  if (charsets[0] === 'utf-8' || charsets[0] === 'utf8') {
+    return 'UTF-8';
+  }
+  if (charsets[0] === 'us-ascii' || charsets[0] === 'ascii') {
+    return 'US-ASCII';
+  }
+  if (charsets[0] === 'iso-8859-1' || charsets[0] === 'iso8859-1' || charsets[0] === 'latin1') {
+    return 'ISO-8859-1';
+  }
+  return null;
+}
+
+function validTextPartBytes_(bytes, charset) {
+  if (!bytes || typeof bytes.length !== 'number') {
+    return false;
+  }
+  if (charset === 'US-ASCII') {
+    for (var index = 0; index < bytes.length; index += 1) {
+      if ((bytes[index] & 255) > 127) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return charset === 'ISO-8859-1' || validUtf8Bytes_(bytes);
+}
+
+function validUtf8Bytes_(bytes) {
+  for (var index = 0; index < bytes.length;) {
+    var first = bytes[index] & 255;
+    if (first <= 127) {
+      index += 1;
+      continue;
+    }
+    var length = first >= 194 && first <= 223 ? 2 : first >= 224 && first <= 239 ? 3 :
+      first >= 240 && first <= 244 ? 4 : 0;
+    if (!length || index + length > bytes.length) {
+      return false;
+    }
+    var codePoint = first & (length === 2 ? 31 : length === 3 ? 15 : 7);
+    for (var continuation = 1; continuation < length; continuation += 1) {
+      var value = bytes[index + continuation] & 255;
+      if (value < 128 || value > 191) {
+        return false;
+      }
+      codePoint = codePoint * 64 + (value & 63);
+    }
+    if (codePoint < (length === 2 ? 128 : length === 3 ? 2048 : 65536) ||
+        codePoint > 1114111 || codePoint >= 55296 && codePoint <= 57343) {
+      return false;
+    }
+    index += length;
+  }
+  return true;
 }
 
 function messageHasLabel_(message, labelId) {

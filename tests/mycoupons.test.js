@@ -10,6 +10,7 @@ function message({
   threadId = id,
   attachmentText = '',
   additionalHeaders = [],
+  plainTextHeaders = [],
   inlineAttachmentText = '',
   encodedBody = null,
   subject = '',
@@ -28,6 +29,7 @@ function message({
     labels,
     inlineAttachmentText,
     encodedBody,
+    plainTextHeaders,
     subject,
     threadId,
   };
@@ -264,6 +266,7 @@ function createRuntime({
       parts: [{
         body: value.inlineAttachmentText ? {attachmentId: 'inline-' + value.id} :
           {data: value.encodedBody ?? Buffer.from(value.body).toString('base64url')},
+        headers: value.plainTextHeaders,
         mimeType: 'text/plain',
       }].concat(value.attachmentText ? [{
         body: {data: Buffer.from(value.attachmentText).toString('base64url')},
@@ -420,7 +423,11 @@ function createRuntime({
         }
         return Buffer.from(encoded, 'base64url');
       },
-      newBlob: bytes => ({getDataAsString: () => Buffer.from(bytes).toString('utf8')}),
+      newBlob: bytes => ({getDataAsString: charset => {
+        const encoding = {'UTF-8': 'utf8', 'US-ASCII': 'ascii', 'ISO-8859-1': 'latin1'}[charset];
+        if (!encoding) throw new Error('Unsupported charset.');
+        return Buffer.from(bytes).toString(encoding);
+      }}),
     },
     console,
   };
@@ -509,6 +516,33 @@ test('skips an undecodable MIME text part without aborting later valid messages'
     userId: 'me',
     id: 'valid',
   }]);
+});
+
+test('preserves an explicitly declared ISO-8859-1 coupon code without UTF-8 corruption', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'latin1-coupon',
+    encodedBody: Buffer.from('Coupon code: ESTATEÈ20', 'latin1').toString('base64url'),
+    plainTextHeaders: [{name: 'Content-Type', value: 'text/plain; charset="ISO-8859-1"'}],
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'ESTATEÈ20');
+  assert.deepEqual(runtime.mutations.map(entry => entry.id), ['latin1-coupon']);
+});
+
+test('skips lossy or unsupported MIME text charsets without blocking later messages', () => {
+  const runtime = createRuntime({messages: [
+    message({id: 'malformed-utf8', encodedBody: Buffer.from([67, 111, 100, 101, 58, 32, 0xc8, 50, 48]).toString('base64url')}),
+    message({
+      id: 'unsupported-charset', body: 'Coupon code: UNKNOWN20',
+      plainTextHeaders: [{name: 'Content-Type', value: 'text/plain; charset=windows-1252'}],
+    }),
+    message({id: 'valid-after-charset', body: 'Coupon code: SAFE20'}),
+  ]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'SAFE20');
+  assert.deepEqual(runtime.mutations.map(entry => entry.id), ['valid-after-charset']);
 });
 
 test('skips oversized Sheet metadata without blocking later valid Gmail messages', () => {
@@ -918,6 +952,17 @@ test('rejects absence markers and leading-apostrophe tokens without mutating Gma
   assert.equal(runtime.mutations.length, 0);
 });
 
+test('skips a message with duplicate From headers without mutating Gmail', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'duplicate-from', body: 'Coupon code: SAVE20',
+    additionalHeaders: [{name: 'From', value: 'other@example.com'}],
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 0);
+  assert.equal(runtime.rows.length, 1);
+  assert.equal(runtime.mutations.length, 0);
+});
+
 test('treats untrusted Gmail text as literal Sheet text rather than a formula', () => {
   const runtime = createRuntime({messages: [message({
     id: 'formula-text',
@@ -950,6 +995,16 @@ test('preserves genuine leading apostrophes in source metadata', () => {
   assert.equal(runtime.mutations.length, 1);
 });
 
+test('preserves a numeric-looking subject as literal source metadata', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'numeric-subject', subject: '001.25', body: 'Coupon code: SAVE20',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][2], '001.25');
+  assert.deepEqual(runtime.mutations.map(entry => entry.id), ['numeric-subject']);
+});
+
 test('deduplicates a previous verified row and repairs its missing Gmail mutation without another row', () => {
   const runtime = createRuntime({
     existingRows: [[
@@ -966,6 +1021,20 @@ test('deduplicates a previous verified row and repairs its missing Gmail mutatio
   assert.equal(runtime.mutations.length, 1);
   assert.equal(runtime.mutations[0].id, 'message-1');
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK'), '2026-01-11T10:00:00.000Z');
+});
+
+test('deduplicates a verified row whose email date is a Sheet Date value', () => {
+  const runtime = createRuntime({
+    existingRows: [[
+      new Date('2026-01-10T08:00:00.000Z'), 'SAVE20', 'Earlier', 'offers@example.com',
+      'https://mail.google.com/mail/u/0/#all/message-1', 'message-1::SAVE20', 'imported',
+    ]],
+    messages: [message({id: 'message-1', subject: 'Earlier', body: 'Coupon code: SAVE20'})],
+  });
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 0);
+  assert.equal(runtime.rows.length, 2);
+  assert.deepEqual(runtime.mutations.map(entry => entry.id), ['message-1']);
 });
 
 test('re-reads the live deduplication row before repairing Gmail and fails closed on concurrent changes', () => {
@@ -1775,6 +1844,23 @@ test('moves only old imported messages to Gmail Trash during retention', () => {
   assert.match(runtime.queries[0], new RegExp(`before:${Math.floor(Date.parse('2025-07-15T10:00:00.000Z') / 1000)}`));
 });
 
+test('defers manual retention while an import scan is resumable', () => {
+  const runtime = createRuntime({
+    config: {retentionDays: 1},
+    modifyFailureAfter: 0,
+    messages: [
+      message({id: 'old-imported', date: new Date('2025-01-01T00:00:00.000Z'), labels: ['Coupon Code Discount']}),
+      message({id: 'pending-coupon', body: 'Coupon code: SAVE20'}),
+    ],
+  });
+
+  assert.equal(runtime.context.runMyCouponsImport().complete, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.context.cleanupExpiredImportedMessages())), {
+    complete: false, trashed: 0,
+  });
+  assert.deepEqual(runtime.trashed, []);
+});
+
 test('revalidates each retention candidate immediately before trashing it', () => {
   const transitions = [
     gmailMessages => { gmailMessages.get('old-imported').labelIds = []; },
@@ -1921,7 +2007,7 @@ test('defers retention when a hard import error leaves a persisted scan active',
   assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-imported'}]);
 });
 
-test('defers retention when import preflight fails before a scan is persisted', () => {
+test('continues retention when import preflight fails before a scan is persisted', () => {
   const runtime = createRuntime({
     sheetCanEdit: false,
     messages: [
@@ -1933,7 +2019,7 @@ test('defers retention when import preflight fails before a scan is persisted', 
 
   assert.throws(() => runtime.context.runMyCouponsDaily(), /not editable/i);
   assert.equal(runtime.properties.has('MYCOUPONS_SCAN_STATE'), false);
-  assert.deepEqual(runtime.trashed, []);
+  assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-imported'}]);
 });
 
 test('does not extract a code found only in a text attachment', () => {
