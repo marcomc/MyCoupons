@@ -1289,8 +1289,11 @@ test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
     message({id: 'html-anchor-boundary', htmlBody: '<p>Promo <a href="https://example.test">not a </a>code: SAVE20</p>'}),
     message({id: 'html-image-boundary', htmlBody: '<p>Promo <img src="cid:x" alt="not a ">code: SAVE20</p>'}),
     message({id: 'html-unsupported-entity', htmlBody: '<p>Coupon code: SAVE&ndash;20</p>'}),
+    message({id: 'html-invalid-numeric-entity', htmlBody: '<p>Coupon code: SAVE&#x110000;20</p>'}),
     message({id: 'line-break-offer-context', htmlBody: '<p>Employment offer</p><p>Code: CANDIDATE123</p>'}),
     message({id: 'inline-formatting-newline', htmlBody: '<p>This employment package includes a special offer\nCode: CANDIDATE123</p>'}),
+    message({id: 'inline-entity-newline', htmlBody: '<p>This employment package includes a special offer&#10;Code: CANDIDATE123</p>'}),
+    message({id: 'nested-block-boundary', htmlBody: '<div>cou<div>pon code: SAVE20</div></div>'}),
     message({id: 'savings-account', body: 'Access your savings account.\nUse code 928357'}),
   ]});
 

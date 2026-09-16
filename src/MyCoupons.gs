@@ -1407,7 +1407,7 @@ function htmlToCouponText_(html) {
     return '';
   }
   var text = extractBoundedVisibleHtmlText_(html);
-  return text === null ? '' : decodeHtmlEntities_(text).replace(/\r\n?/gu, '\n');
+  return text === null ? '' : text.replace(/\r\n?/gu, '\n');
 }
 
 function extractBoundedVisibleHtmlText_(html) {
@@ -1451,6 +1451,8 @@ function extractBoundedVisibleHtmlText_(html) {
       output.push(name === 'a' ? ' [link omitted] ' : ' ');
     } else if (!closing && name === 'img') {
       output.push(' [image omitted] ');
+    } else if (!closing && /^(?:p|div|li|tr|h[1-6]|table|section|article)$/u.test(name)) {
+      output.push('\u0000');
     } else if (!closing && (name === 'br' || name === 'hr')) {
       output.push('\u0000');
     } else if (closing && /^(?:p|div|li|tr|h[1-6]|table|section|article)$/u.test(name)) {
@@ -1458,7 +1460,8 @@ function extractBoundedVisibleHtmlText_(html) {
     }
     index = tagEnd + 1;
   }
-  return ignoredElement ? null : output.join('').split('\u0000').map(function(segment) {
+  var decoded = decodeHtmlEntities_(output.join(''));
+  return ignoredElement || decoded === null ? null : decoded.split('\u0000').map(function(segment) {
     return segment.replace(/[\t\r\n\f ]+/gu, ' ');
   }).join('\n');
 }
@@ -1482,15 +1485,21 @@ function findHtmlTagEnd_(html, start) {
 
 function decodeHtmlEntities_(value) {
   var named = {amp: '&', apos: "'", gt: '>', lt: '<', nbsp: ' ', quot: '"'};
-  return value.replace(/&(#x[0-9a-f]+|#\d+|amp|apos|gt|lt|nbsp|quot);/giu, function(entity, encoded) {
+  var invalid = false;
+  var decoded = value.replace(/&(#x[0-9a-f]+|#\d+|amp|apos|gt|lt|nbsp|quot);/giu, function(entity, encoded) {
     var key = encoded.toLowerCase();
     if (Object.prototype.hasOwnProperty.call(named, key)) {
       return named[key];
     }
     var codePoint = key.indexOf('#x') === 0 ? parseInt(key.slice(2), 16) : parseInt(key.slice(1), 10);
-    return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 1114111 &&
-      !(codePoint >= 55296 && codePoint <= 57343) ? String.fromCodePoint(codePoint) : entity;
+    if (!Number.isFinite(codePoint) || codePoint < 0 || codePoint > 1114111 ||
+        (codePoint >= 55296 && codePoint <= 57343)) {
+      invalid = true;
+      return '';
+    }
+    return String.fromCodePoint(codePoint);
   });
+  return invalid ? null : decoded;
 }
 
 function validTextPartBytes_(bytes, charset) {
