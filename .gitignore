@@ -1,6 +1,7 @@
 node_modules/
 .clasp.json
 .clasprc.json
+oauth-client.json
 .installer/
 .ruff_cache/
 *.local.md
