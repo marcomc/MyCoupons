@@ -1439,13 +1439,16 @@ function isInheritedReplyOrForwardSubject_(subject) {
 }
 
 function hasReferralCouponContext_(text) {
-  var introducer = /\b(?:coupon|promo(?:tional)?|discount)\s+code\b|\bcodice\s+sconto\b/iu;
-  if (!introducer.test(text)) {
+  if (!hasCouponPromotionContext_(text)) {
     return false;
   }
   return /\breferral\b/iu.test(text) ||
     /\b(?:share|refer|invite|give|send|invia|inoltra|invita|condividi|presenta)\b/iu.test(text) &&
       /\b(?:friends?|amic(?:o|a|i|he))\b/iu.test(text);
+}
+
+function hasCouponPromotionContext_(text) {
+  return /\b(?:coupon|promo(?:tional)?|discount|offer|deal|voucher|saving(?:s)?|buono|sconto|offerta|promozione|gutschein|rabatt|angebot|aktionscode|réduction|reduction|offre|bon|cup[oó]n|descuento|oferta|vale|cupom)\b|\bcodice\s+(?:sconto|promozionale|promo)\b|\bc[oó]digo\s+promocional\b|\bcode\s+(?:promo|promotionnel)\b/iu.test(text);
 }
 
 function stripQuotedReplyHistory_(plainText) {
@@ -1513,7 +1516,7 @@ function collectExplicitCouponTokens_(text, found) {
   // It leaves contextual prose, replies, referrals and ambiguous offers alone.
   var explicitIntroducer = '(?:(?:your|il tuo|la tua)\\s+)?(?:\\b(?:coupon|promo(?:tional)?|discount)\\s+code\\b|\\bcodice\\s+sconto\\b)';
   var actionIntroducer = '(?:(?:use|enter|apply|redeem|copy)\\s+(?:(?:the|your)\\s+)?code|(?:usa|inserisci|applica|riscatta)\\s+(?:(?:il tuo|la tua)\\s+)?codice)';
-  var couponContext = /\b(?:coupon|promo(?:tional)?|discount)\b|\bcodice\s+sconto\b/iu.test(text);
+  var couponContext = hasCouponPromotionContext_(text);
   var genericCodeIntroducer = couponContext ? '\\bcode\\b|\\bcodice\\b' : '(?!)';
   var introducer = '^\\s*(?:' + explicitIntroducer + '|' + actionIntroducer + '|' + genericCodeIntroducer + ')';
   var quoted = new RegExp(introducer + '\\s*(?::|=|-|–)?\\s*["“]([^\\s<>{}\\[\\]"“”]{1,64})["”]\\s*$', 'iu');
@@ -1537,7 +1540,7 @@ function isRecognizedCouponCode_(code) {
     return true;
   }
   // Letter-only coupons are accepted only when their line already has a
-  // coupon-specific introducer. Requiring a long uppercase token avoids
+  // promotion-specific introducer. Requiring a long uppercase token avoids
   // treating ordinary prose such as "Code: Welcome" as a coupon.
   return /^[\p{Lu}][\p{Lu}_-]{5,63}$/u.test(code) &&
     !/^(?:CODE|COUPON|DISCOUNT|OFFER|PROMO|PROMOTION|WELCOME|APPLY|REDEEM)$/iu.test(code);

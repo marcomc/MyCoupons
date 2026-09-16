@@ -13,8 +13,10 @@
   review UI.
 - A no-code, referral-only, authentication or ambiguous message remains
   untouched.
-- Write and verify the Sheet row before labeling and archiving its source
-  message. Advance the watermark only after a complete successful scan.
+- Write and verify each Sheet row before labeling and archiving its source
+  message. Advance the watermark only after a complete successful scan; on a
+  Gmail rate-limit failure, commit only verified rows and exact labels, keep
+  the watermark unchanged, and let the next scan exclude labeled messages.
 - Delete retained imported messages by moving them to Gmail Trash, never by an
   irreversible deletion.
 

@@ -80,8 +80,11 @@ limit. It is cleared only after that fixed range completes.
    explicit form such as `coupon code`, `promo code`, `discount code`, `codice
    sconto`, `use code` or `usa il codice` (optionally `your`, `il tuo` or `la
    tua`). A generic `Code:` line is accepted only when the same decoded body
-   establishes coupon context. Letter-only codes must be long uppercase tokens;
-   contextual prose is deliberately not interpreted.
+   establishes a promotion context. This uses a bounded vocabulary of common
+   coupon, promo, discount, offer, deal, voucher and saving terms plus their
+   Italian, French, Spanish, Portuguese, German and Dutch equivalents.
+   Letter-only codes must be long uppercase tokens; contextual prose is
+   deliberately not interpreted.
 5. For every imported code, atomically append and verify a deduplicated Sheet
    row before mutating Gmail; an ambiguous append reservation fails closed.
 6. Label the exact source message and, when configured, remove only that

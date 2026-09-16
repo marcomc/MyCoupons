@@ -1121,6 +1121,20 @@ test('imports a letter-only coupon from a coupon-context HTML Code line', () => 
   assert.equal(runtime.mutations.length, 1);
 });
 
+test('imports a letter-only code when a supported multilingual promotion context is explicit', () => {
+  const runtime = createRuntime({messages: [
+    message({id: 'english-offer', htmlBody: '<p>Exclusive offer</p><p>Code: AUTUMNSALE</p>'}),
+    message({id: 'italian-offer', htmlBody: '<p>Offerta speciale</p><p>Codice: AUTUNNO2026</p>'}),
+    message({id: 'french-offer', htmlBody: '<p>Offre exclusive</p><p>Code: AUTOMNE2026</p>'}),
+  ]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 3);
+  assert.deepEqual(runtime.rows.slice(1).map(row => row[1]).sort(), [
+    'AUTOMNE2026', 'AUTUMNSALE', 'AUTUNNO2026',
+  ]);
+  assert.equal(runtime.mutations.length, 3);
+});
+
 test('does not import a letter-only Code line without coupon context', () => {
   const runtime = createRuntime({messages: [message({
     id: 'bare-letter-only-code', htmlBody: '<p>Code: WELCOMEPURIFY</p>',
