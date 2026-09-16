@@ -30,8 +30,9 @@ the computer used to edit or deploy it is not part of the production runtime.
 - Scan from a configurable initial date on first import, then from the last
   successful watermark with a small configurable overlap. Historical scans
   retain a private continuation cursor when Gmail enforces a per-user quota.
-- Import only digit-containing coupon/promo/discount codes on a standalone
-  explicitly introduced line, or an equivalent non-reply subject. Referral-only,
+- Import only explicitly introduced coupon/promo/discount codes on a standalone
+  line, or an equivalent non-reply subject. Letter-only codes require a strong
+  coupon context and an uppercase token, while referral-only,
   authentication, ambiguous and no-code emails stay untouched.
 - Avoid duplicate rows for the same Gmail message and exact code.
 - Apply the configured label and archive only after the Sheet write succeeds.
@@ -56,6 +57,9 @@ npm run check
 
 Local tests use mocked Google Apps Script services. They never access live
 email, Drive, Sheets or credentials.
+
+Release management uses [CHANGELOG.md](CHANGELOG.md) for shipped
+functionality and [TODO.md](TODO.md) for pending work.
 
 ## Status
 

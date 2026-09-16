@@ -11,6 +11,7 @@ function message({
   attachmentText = '',
   additionalHeaders = [],
   additionalPlainTextParts = [],
+  htmlBody = '',
   plainTextHeaders = [],
   plainTextSize = undefined,
   inlineAttachmentText = '',
@@ -28,6 +29,7 @@ function message({
     body,
     date,
     from,
+    htmlBody,
     id,
     labels,
     inlineAttachmentText,
@@ -79,6 +81,7 @@ function createRuntime({
   missingMessageIds = [],
   now = new Date('2026-01-11T10:00:00.000Z'),
   labels = [{id: 'Label_Imported', name: 'Coupon Code Discount', type: 'user'}],
+  referenceDateNumberFormat = 'yyyy-mm-dd HH:mm:ss',
   listedMessageIds = messages.map(value => value.id),
   openedSpreadsheetName = undefined,
   sheetCanEdit = true,
@@ -245,6 +248,7 @@ function createRuntime({
             }
             return copy;
           }),
+        getNumberFormat: () => referenceDateNumberFormat,
       };
     },
     getRangeList(a1Notations) {
@@ -287,7 +291,9 @@ function createRuntime({
         mimeType: 'text/plain',
       }].concat(value.additionalPlainTextParts.map(body => ({
         body: {data: Buffer.from(body).toString('base64url')}, mimeType: 'text/plain',
-      }))).concat(value.attachmentText ? [{
+      }))).concat(value.htmlBody ? [{
+        body: {data: Buffer.from(value.htmlBody).toString('base64url')}, mimeType: 'text/html',
+      }] : []).concat(value.attachmentText ? [{
         body: {data: Buffer.from(value.attachmentText).toString('base64url')},
         filename: 'coupon.txt',
         mimeType: 'text/plain',
@@ -1089,6 +1095,110 @@ test('accepts one balanced outer token wrapper but rejects nested or unmatched w
   assert.equal(runtime.context.runMyCouponsImport().imported, 1);
   assert.equal(runtime.rows[1][1], 'SAVE20');
   assert.equal(runtime.mutations.length, 1);
+});
+
+test('imports an explicitly introduced coupon rendered only in HTML', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'html-coupon',
+    body: 'This message has no usable plain-text coupon.',
+    htmlBody: '<p>Use code <strong>SAVE20</strong></p>',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'SAVE20');
+  assert.equal(runtime.mutations.length, 1);
+});
+
+test('imports a letter-only coupon from a coupon-context HTML Code line', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'html-letter-only-coupon',
+    body: 'No usable plain-text coupon is available.',
+    htmlBody: '<p>Here is your extra coupon.</p><p>Code: <strong>WELCOMEPURIFY</strong></p>',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'WELCOMEPURIFY');
+  assert.equal(runtime.mutations.length, 1);
+});
+
+test('does not import a letter-only Code line without coupon context', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'bare-letter-only-code', htmlBody: '<p>Code: WELCOMEPURIFY</p>',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 0);
+  assert.equal(runtime.rows.length, 1);
+  assert.equal(runtime.mutations.length, 0);
+});
+
+test('removes only known legacy properties while preserving baseline scan state', () => {
+  const runtime = createRuntime({scanState: JSON.stringify({version: 3, pendingIds: []})});
+  runtime.properties.set('GEMINI_API_KEY', 'legacy-secret');
+  runtime.properties.set('MYCOUPONS_GEMINI_VERTEX_UNTIL', '123');
+  runtime.properties.set('MYCOUPONS_MAILBOX_CONTINUATION', '{}');
+  runtime.properties.set('MYCOUPONS_MAILBOX_SCAN_STATE', '{}');
+  runtime.properties.set('MYCOUPONS_NOTIFICATION_STATE', '{}');
+  runtime.properties.set('MYCOUPONS_PENDING_NOTIFICATION', '{}');
+  runtime.properties.set('UNRELATED_PROPERTY', 'preserved');
+
+  const result = runtime.context.cleanupMyCouponsLegacyProperties();
+  const config = JSON.parse(runtime.properties.get('MYCOUPONS_CONFIG'));
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.removed)).sort(), [
+    'GEMINI_API_KEY', 'MYCOUPONS_GEMINI_VERTEX_UNTIL', 'MYCOUPONS_MAILBOX_CONTINUATION',
+    'MYCOUPONS_MAILBOX_SCAN_STATE', 'MYCOUPONS_NOTIFICATION_STATE', 'MYCOUPONS_PENDING_NOTIFICATION',
+  ]);
+  assert.deepEqual(Object.keys(config).sort(), [
+    'archiveImported', 'dailyHour', 'initialDate', 'labelName', 'ownerEmail', 'retentionDays',
+    'sheetName', 'spreadsheetId', 'spreadsheetName', 'timeZone', 'trashExpiredImported', 'watermarkOverlapDays',
+  ]);
+  assert.equal(runtime.properties.get('MYCOUPONS_SCAN_STATE'), JSON.stringify({version: 3, pendingIds: []}));
+  assert.equal(runtime.properties.get('UNRELATED_PROPERTY'), 'preserved');
+});
+
+test('restarts a baseline import from its configured initial date without changing rows or labels', () => {
+  const runtime = createRuntime({
+    scanState: JSON.stringify({version: 3, pendingIds: ['pending']}),
+    watermark: '2026-09-16T00:00:00.000Z',
+    messages: [message({id: 'existing-row', body: 'Coupon code: SAVE20'})],
+  });
+
+  const result = runtime.context.restartMyCouponsImportFromInitialDate();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {restarted: true});
+  assert.equal(runtime.properties.get('MYCOUPONS_SCAN_STATE'), undefined);
+  assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK'), undefined);
+  assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY'), undefined);
+  assert.equal(runtime.rows.length, 1);
+  assert.equal(runtime.mutations.length, 0);
+});
+
+test('normalizes legacy Email Date strings through row 51 using the later row format', () => {
+  const existingRows = Array.from({length: 52}, (_, index) => [
+    '2026-01-' + String(index % 28 + 1).padStart(2, '0') + 'T08:00:00.000Z',
+    '', '', '', '', '', '',
+  ]);
+  const runtime = createRuntime({existingRows, referenceDateNumberFormat: 'dd/MM/yyyy HH:mm'});
+
+  const result = runtime.context.normalizeMyCouponsEmailDates();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {normalized: 50});
+  assert.deepEqual(runtime.numberFormats.at(-1), {
+    column: 1, columnCount: 1, format: 'dd/MM/yyyy HH:mm', row: 2, rowCount: 50,
+  });
+});
+
+test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
+  const runtime = createRuntime({messages: [
+    message({id: 'html-credits', htmlBody: '<p>Your account has 20 credits.</p>'}),
+    message({id: 'html-referral', htmlBody: '<p>Share your promo code: FRIEND20 with a friend.</p>'}),
+    message({id: 'html-bare-token', htmlBody: '<p><strong>SAVE20</strong></p>'}),
+    message({id: 'html-link-code', htmlBody: '<p>Coupon code: <a href="https://example.test">SAVE20</a></p>'}),
+  ]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 0);
+  assert.equal(runtime.rows.length, 1);
+  assert.equal(runtime.mutations.length, 0);
 });
 
 test('rejects absence markers and leading-apostrophe tokens without mutating Gmail or Sheet', () => {

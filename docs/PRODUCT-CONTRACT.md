@@ -72,12 +72,16 @@ limit. It is cleared only after that fixed range completes.
    label, then exclude messages already carrying it or a Spam, Trash, Sent or
    Draft label.
 3. Inspect only a non-reply/non-forward subject and bounded, non-quoted
-   `text/plain` content. A part without a content-type header is accepted only
+   `text/plain` or `text/html` content. HTML is reduced to visible,
+   line-oriented text; links, markup, scripts, styles and attachments never
+   become coupon input. A part without a content-type header is accepted only
    as US-ASCII; uncertain decoding remains untouched.
-4. Import only a complete, digit-containing code on a self-contained line that
-   begins with an explicit form such as `coupon code`, `promo code`, `discount
-   code` or `codice sconto` (optionally `your`, `il tuo` or `la tua`).
-   Contextual prose is deliberately not interpreted.
+4. Import only a complete code on a self-contained line that begins with an
+   explicit form such as `coupon code`, `promo code`, `discount code`, `codice
+   sconto`, `use code` or `usa il codice` (optionally `your`, `il tuo` or `la
+   tua`). A generic `Code:` line is accepted only when the same decoded body
+   establishes coupon context. Letter-only codes must be long uppercase tokens;
+   contextual prose is deliberately not interpreted.
 5. For every imported code, atomically append and verify a deduplicated Sheet
    row before mutating Gmail; an ambiguous append reservation fails closed.
 6. Label the exact source message and, when configured, remove only that
@@ -119,7 +123,7 @@ acceptable; a false positive that archives unrelated email is not.
 ## Non-goals
 
 - AI or Gemini/Vertex inference.
-- HTML, image, attachment or OCR extraction.
+- Image, attachment or OCR extraction.
 - Manual review UI or spreadsheet edit trigger.
 - Automatic interpretation of generic discounts, referral links or prose.
 - Creating a replacement Google Sheet, Gmail label, Apps Script project or
