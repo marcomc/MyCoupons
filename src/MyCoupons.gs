@@ -1081,7 +1081,7 @@ function acceptCouponToken_(token, quoted, hasFollowingWord) {
   if (!/^[\p{L}\p{N}\p{P}\p{S}]+$/u.test(token) || Array.from(token).length < 3 || Array.from(token).length > 64) {
     return null;
   }
-  if (!quoted && /[.!?,;:]$/u.test(token)) {
+  if (/[.!?,;:]$/u.test(token)) {
     return null;
   }
   if (/^(?:[$€£¥]\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?[%‰])$/u.test(token)) {

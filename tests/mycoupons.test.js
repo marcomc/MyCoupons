@@ -630,14 +630,14 @@ test('preserves the 26-column legacy sheet layout and writes legacy aliases at t
 test('preserves case, Unicode, and supported punctuation only after an explicit introducer', () => {
   const runtime = createRuntime({messages: [message({
     id: 'unicode-punctuation',
-    body: 'Promo code: "MiXeDÈ/20+VIP." Use NOT-A-CODE normally.',
+    body: 'Promo code: "MiXeDÈ/20+VIP". Use NOT-A-CODE normally.',
   })]});
 
   const outcome = runtime.context.runMyCouponsImport();
 
   assert.equal(outcome.imported, 1);
-  assert.equal(runtime.rows[1][1], 'MiXeDÈ/20+VIP.');
-  assert.equal(runtime.rows[1][5], 'unicode-punctuation::MiXeDÈ/20+VIP.');
+  assert.equal(runtime.rows[1][1], 'MiXeDÈ/20+VIP');
+  assert.equal(runtime.rows[1][5], 'unicode-punctuation::MiXeDÈ/20+VIP');
 });
 
 test('does not mutate referral-only, authentication, ambiguous, or already imported messages', () => {
@@ -765,6 +765,7 @@ test('rejects overlong and URL-like code forms rather than importing truncated t
     message({id: 'bare-domain', body: 'Promo code: deals.example.com'}),
     message({id: 'bare-domain-path', body: 'Promo code: deals.example.com/ref/SAVE20?source=email'}),
     message({id: 'unmatched-wrapper', body: 'Promo code: SAVE20)'}),
+    message({id: 'quoted-sentence-punctuation', body: 'Promo code: "SAVE20."'}),
   ]});
 
   const outcome = runtime.context.runMyCouponsImport();
