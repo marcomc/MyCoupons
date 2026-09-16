@@ -94,6 +94,7 @@ function createRuntime({
   let finalGmailAuthorizationPending = Boolean(beforeFinalGmailAuthorization);
   let retentionRecheckPending = Boolean(beforeRetentionRecheck);
   let sheetValueReadCount = 0;
+  let sheetDataRangeReadCount = 0;
   const properties = new Map();
   const installedConfig = {
     ownerEmail: 'owner@example.com',
@@ -135,6 +136,7 @@ function createRuntime({
 
   const sheet = {
     getDataRange() {
+      sheetDataRangeReadCount += 1;
       return {
         getValues: () => {
           sheetValueReadCount += 1;
@@ -370,6 +372,7 @@ function createRuntime({
   vm.runInContext(source, context, {filename: 'src/MyCoupons.gs'});
   return {
     context, createdTriggers, formulas, mutations, numberFormats, properties, queries, rows: values, trashed,
+    get sheetDataRangeReadCount() { return sheetDataRangeReadCount; },
     setFetchFailureAfter: value => { fetchFailureAfter = value; },
     setListFailureAfter: value => { listFailureAfter = value; },
     setModifyFailureAfter: value => { modifyFailureAfter = value; },
@@ -416,6 +419,25 @@ test('skips an undecodable MIME text part without aborting later valid messages'
     userId: 'me',
     id: 'valid',
   }]);
+});
+
+test('skips oversized Sheet metadata without blocking later valid Gmail messages', () => {
+  const runtime = createRuntime({messages: [
+    message({
+      id: 'oversized-subject',
+      subject: 'S'.repeat(50_001),
+      body: 'Coupon code: OVERSIZE20',
+    }),
+    message({id: 'after-oversized', body: 'Coupon code: SAFE20'}),
+  ]});
+
+  const outcome = runtime.context.runMyCouponsImport();
+  assert.equal(outcome.complete, true);
+  assert.equal(outcome.scanned, 2);
+  assert.equal(outcome.imported, 1);
+  assert.equal(runtime.rows.length, 2);
+  assert.equal(runtime.rows[1][1], 'SAFE20');
+  assert.deepEqual(runtime.mutations.map(entry => entry.id), ['after-oversized']);
 });
 
 test('includes a message exactly at the initial UTC boundary', () => {
@@ -602,8 +624,7 @@ test('preserves the 26-column legacy sheet layout and writes legacy aliases at t
   assert.equal(row[20], 'legacy-message::SAVE20');
   assert.equal(row[21], 'imported');
   assert.equal(row[25], '');
-  assert.deepEqual(runtime.numberFormats.map(format => format.column), [4, 5, 6, 7, 14, 21, 22]);
-  assert.ok(runtime.numberFormats.every(format => format.columnCount === 1));
+  assert.deepEqual(runtime.numberFormats.map(format => [format.column, format.columnCount, format.format]), [[1, 26, '@']]);
 });
 
 test('preserves case, Unicode, and supported punctuation only after an explicit introducer', () => {
@@ -768,6 +789,8 @@ test('rejects absence markers and leading-apostrophe tokens without mutating Gma
     message({id: 'negated-need', body: 'No need for a promo code: AUTOAPPLIED'}),
     message({id: 'negated-require', body: 'This offer does not require a promo code: AUTOAPPLIED'}),
     message({id: 'negated-italian', body: 'Questa offerta non richiede un codice sconto: AUTOAPPLIED'}),
+    message({id: 'negated-contraction', body: "This offer doesn't require a promo code: AUTOAPPLIED"}),
+    message({id: 'negated-typographic-contraction', body: 'This offer don’t need a promo code: AUTOAPPLIED'}),
     message({id: 'none', body: 'Coupon code: NONE'}),
     message({id: 'apostrophe', body: 'Coupon code: "\'=SAVE20"'}),
   ]});
@@ -792,7 +815,7 @@ test('treats untrusted Gmail text as literal Sheet text rather than a formula', 
   assert.equal(runtime.rows[1][2], '=IMPORTXML("https://example.com")');
   assert.equal(runtime.rows[1][3], '+attacker@example.com');
   assert.deepEqual(runtime.numberFormats.map(format => [format.column, format.columnCount, format.format]), [
-    [1, 1, '@'], [2, 1, '@'], [3, 1, '@'], [4, 1, '@'], [5, 1, '@'], [6, 1, '@'], [7, 1, '@'],
+    [1, 7, '@'],
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(runtime.formulas[1].slice(1, 6))), ['', '', '', '', '']);
 });
@@ -995,7 +1018,7 @@ test('writes all codes before making one exact Gmail mutation for their source m
 
 test('re-verifies every appended code for one message before its Gmail mutation', () => {
   const runtime = createRuntime({
-    beforeLiveDeduplicationReadAt: 18,
+    beforeLiveDeduplicationReadAt: 6,
     beforeLiveDeduplicationRead: ({formulas, values}) => {
       values.splice(1, 1);
       formulas.splice(1, 1);
@@ -1024,6 +1047,7 @@ test('uses atomic append reservation without overwriting an interleaved external
   assert.equal(runtime.rows[1][1], 'SAFE20');
   assert.deepEqual(runtime.rows[2], external);
   assert.equal(runtime.mutations[0].id, 'atomic');
+  assert.ok(runtime.sheetDataRangeReadCount <= 6);
 });
 
 test('fails closed if an appended reservation is deleted during formatting', () => {

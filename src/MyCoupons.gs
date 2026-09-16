@@ -8,6 +8,7 @@ var MYCOUPONS_DAILY_SCHEDULE_PROPERTY = 'MYCOUPONS_DAILY_SCHEDULE';
 var MYCOUPONS_DAILY_SCHEDULE_VERSION = 2;
 var MYCOUPONS_DAILY_HANDLER = 'runMyCouponsDaily';
 var MYCOUPONS_SEARCH_PAGE_SIZE = 100;
+var MYCOUPONS_SHEET_CELL_MAX_LENGTH = 50000;
 
 var MYCOUPONS_DEFAULTS = {
   archiveImported: true,
@@ -169,6 +170,9 @@ function runMyCouponsImport_(config) {
     scanned += 1;
     if (message.date.getTime() < config.initialDate.getTime() || messageHasLabel_(message, label.id) ||
         messageHasSystemExclusionLabel_(message)) {
+      return true;
+    }
+    if (hasOversizedSheetMetadata_(message)) {
       return true;
     }
     var expectedCodes = [];
@@ -562,6 +566,11 @@ function makeCouponRow_(columns, columnCount, message, code, deduplicationKey, c
   return row;
 }
 
+function hasOversizedSheetMetadata_(message) {
+  return message.subject.length > MYCOUPONS_SHEET_CELL_MAX_LENGTH ||
+    message.from.length > MYCOUPONS_SHEET_CELL_MAX_LENGTH;
+}
+
 function gmailLinkForMessage_(threadId, config) {
   return 'https://mail.google.com/mail/u/?authuser=' + encodeURIComponent(config.ownerEmail) +
     '#all/' + encodeURIComponent(threadId);
@@ -588,11 +597,9 @@ function sheetSemanticText_(value) {
 
 function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
   sheet.appendRow(row);
-  populatedCouponColumns_(columns).forEach(function(column) {
-    var reservation = verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey);
-    sheet.getRange(reservation.rowNumber, column + 1, 1, 1).setNumberFormat('@');
-  });
   var reservation = verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey);
+  sheet.getRange(reservation.rowNumber, 1, 1, row.length).setNumberFormat('@');
+  reservation = verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey);
   var range = sheet.getRange(reservation.rowNumber, 1, 1, row.length);
   var written = range.getValues()[0];
   var formulas = range.getFormulas()[0];
@@ -621,11 +628,6 @@ function findExactAppendedCouponRow_(sheet, expectedRow, columns, deduplicationK
     }
   });
   return matches.length === 1 ? matches[0] : null;
-}
-
-function populatedCouponColumns_(columns) {
-  return [columns.emailDate, columns.couponCode, columns.sourceSubject, columns.sender,
-    columns.gmailLink, columns.deduplicationKey, columns.status];
 }
 
 function verifiedExistingCouponRow_(record, message, code, columns, config) {
@@ -1055,7 +1057,7 @@ function collectExplicitCouponTokens_(text, found) {
 function hasNoCodeContextBeforeIntroducer_(text, introducerIndex) {
   var sameSentence = text.slice(0, introducerIndex).split(/[\n.!?]+/u).pop();
   var context = sameSentence.slice(-160);
-  return /\b(?:no(?:\s+need\s+for)?|without|none|does\s+not\s+require|do(?:es)?\s+not\s+need|not\s+require)(?:\s+(?:an?|the))?\s*$/iu.test(context) ||
+  return /\b(?:no(?:\s+need\s+for)?|without|none|do(?:es)?\s+not\s+(?:need|require)|do(?:es)?n['’]t\s+(?:need|require)|not\s+require)(?:\s+(?:an?|the))?\s*$/iu.test(context) ||
     /\b(?:nessun[oa]?(?:\s+bisogno\s+di)?|senza|non\s+richiede|non\s+serve)(?:\s+(?:un[oa]?|il|lo))?\s*$/iu.test(context);
 }
 
