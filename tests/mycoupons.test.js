@@ -48,6 +48,7 @@ function createRuntime({
   corruptLastWriteColumns = [],
   coerceLastWrite = false,
   beforeLiveDeduplicationRead = null,
+  beforeLiveDeduplicationReadAt = 2,
   beforeRetentionRecheck = null,
   formulaLastWriteColumns = [],
   attachmentText = '',
@@ -128,7 +129,7 @@ function createRuntime({
       return {
         getValues: () => {
           sheetValueReadCount += 1;
-          if (liveDeduplicationReadPending && sheetValueReadCount === 2) {
+          if (liveDeduplicationReadPending && sheetValueReadCount === beforeLiveDeduplicationReadAt) {
             beforeLiveDeduplicationRead({formulas, values});
             liveDeduplicationReadPending = false;
           }
@@ -573,6 +574,7 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'not-available', body: 'Coupon code: not-available'}),
     message({id: 'no-code', body: 'Coupon code: "no-code"'}),
     message({id: 'tbd', body: 'Coupon code: TBD'}),
+    message({id: 'email-address', body: 'Coupon code: support@example.com'}),
     message({id: 'uppercase-prose', body: 'Coupon code: FREE shipping'}),
     message({id: 'ambiguous-punctuation', body: 'Coupon code: SAVE20.'}),
     message({
@@ -850,6 +852,23 @@ test('writes all codes before making one exact Gmail mutation for their source m
   assert.equal(runtime.rows.length, 3);
   assert.equal(runtime.mutations.length, 1);
   assert.equal(runtime.mutations[0].id, 'message-2');
+});
+
+test('re-verifies every appended code for one message before its Gmail mutation', () => {
+  const runtime = createRuntime({
+    beforeLiveDeduplicationReadAt: 4,
+    beforeLiveDeduplicationRead: ({formulas, values}) => {
+      values.splice(1, 1);
+      formulas.splice(1, 1);
+    },
+    messages: [message({
+      id: 'multi-code-race',
+      body: 'Coupon code: SAVE20 Promo code: FREESHIP',
+    })],
+  });
+
+  assert.throws(() => runtime.context.runMyCouponsImport(), /rows changed.*Gmail mutation/i);
+  assert.equal(runtime.mutations.length, 0);
 });
 
 test('uses atomic append reservation without overwriting an interleaved external row', () => {
@@ -1135,6 +1154,20 @@ test('checks the full next append row is editable before listing Gmail messages'
   assert.deepEqual(runtime.queries, []);
   assert.equal(runtime.rows.length, 1);
   assert.equal(runtime.mutations.length, 0);
+});
+
+test('rejects a future initialDate before preflight or import can mutate resources', () => {
+  const config = {initialDate: '2026-01-12'};
+  const preflight = createRuntime({config});
+  const importer = createRuntime({config, messages: [message({body: 'Coupon code: SAVE20'})]});
+  const importerProperties = [...importer.properties.entries()];
+
+  assert.throws(() => preflight.context.getMyCouponsInstallationStatus(), /initialDate.*future/i);
+  assert.throws(() => importer.context.runMyCouponsImport(), /initialDate.*future/i);
+  assert.deepEqual(importer.queries, []);
+  assert.equal(importer.rows.length, 1);
+  assert.equal(importer.mutations.length, 0);
+  assert.deepEqual([...importer.properties.entries()], importerProperties);
 });
 
 test('read-only status validates persisted import state without mutating it', () => {

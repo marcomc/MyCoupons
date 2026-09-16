@@ -130,6 +130,7 @@ function installMyCouponsDailyTrigger() {
 function getMyCouponsInstallationStatus() {
   var now = new Date();
   var config = getMyCouponsConfig_();
+  assertInitialDateNotFuture_(config, now);
   assertMyCouponsOwner_(config);
   var label = resolveImportedLabel_(config);
   var sheet = resolveCouponSheet_(config);
@@ -152,6 +153,7 @@ function getMyCouponsInstallationStatus() {
 
 function runMyCouponsImport_(config) {
   var now = new Date();
+  assertInitialDateNotFuture_(config, now);
   var label = resolveImportedLabel_(config);
   var sheet = resolveCouponSheet_(config);
   assertCouponSheetEditable_(sheet);
@@ -166,23 +168,27 @@ function runMyCouponsImport_(config) {
         messageHasSystemExclusionLabel_(message)) {
       return;
     }
-    var hasVerifiedCode = false;
+    var expectedCodes = [];
     extractCouponCodes_(message.subject, message.plainText).forEach(function(code) {
       var deduplicationKey = message.id + '::' + code;
       if (sheetState.deduplicationRecords[deduplicationKey]) {
-        if (!verifiedLiveExistingCouponRow_(sheet, message, code, config)) {
+        if (!verifiedExistingCouponRow_(sheetState.deduplicationRecords[deduplicationKey], message, code,
+          sheetState.columns, config)) {
           throw new Error('Existing coupon deduplication row does not prove its complete message and code identity.');
         }
-        hasVerifiedCode = true;
+        expectedCodes.push(code);
         return;
       }
       var row = makeCouponRow_(sheetState.columns, sheetState.columnCount, message, code, deduplicationKey, config);
       appendAndVerifyCouponRow_(sheet, row, sheetState.columns, deduplicationKey);
       sheetState.deduplicationRecords[deduplicationKey] = {valid: true};
-      hasVerifiedCode = true;
+      expectedCodes.push(code);
       imported += 1;
     });
-    if (hasVerifiedCode) {
+    if (expectedCodes.length) {
+      if (!verifiedLiveExpectedCouponRows_(sheet, message, expectedCodes, config)) {
+        throw new Error('Verified coupon rows changed and no longer prove their complete message and code identity before Gmail mutation.');
+      }
       mutateImportedMessage_(message.id, label.id, config.archiveImported);
     }
   }
@@ -394,6 +400,12 @@ function parseInitialDate_(value) {
   return parsed;
 }
 
+function assertInitialDateNotFuture_(config, now) {
+  if (config.initialDate.getTime() > now.getTime()) {
+    throw new Error('MYCOUPONS_CONFIG.initialDate cannot be in the future.');
+  }
+}
+
 function integerInRange_(value, name, minimum, maximum) {
   if (!Number.isInteger(value) || value < minimum || value > maximum) {
     throw new Error('MYCOUPONS_CONFIG.' + name + ' must be an integer from ' + minimum + ' to ' + maximum + '.');
@@ -577,11 +589,13 @@ function verifiedExistingCouponRow_(record, message, code, columns, config) {
     [legacyGmailLinkForMessage_(message.id), ownerStableLegacyGmailLinkForMessage_(message.id, config)]);
 }
 
-function verifiedLiveExistingCouponRow_(sheet, message, code, config) {
+function verifiedLiveExpectedCouponRows_(sheet, message, codes, config) {
   var liveState = readCouponSheetState_(sheet, config);
-  var deduplicationKey = message.id + '::' + code;
-  return verifiedExistingCouponRow_(liveState.deduplicationRecords[deduplicationKey], message, code,
-    liveState.columns, config);
+  return codes.every(function(code) {
+    var deduplicationKey = message.id + '::' + code;
+    return verifiedExistingCouponRow_(liveState.deduplicationRecords[deduplicationKey], message, code,
+      liveState.columns, config);
+  });
 }
 
 function verifiedCouponRow_(written, formulas, expected, columns, deduplicationKey, legacyGmailLinks) {
@@ -923,7 +937,7 @@ function collectExplicitCouponTokens_(text, found) {
 }
 
 function acceptCouponToken_(token, quoted, hasFollowingWord) {
-  if (!token || isLinkLikeCouponToken_(token) || !/[\p{L}\p{N}]/u.test(token)) {
+  if (!token || isLinkLikeCouponToken_(token) || isEmailAddressCouponToken_(token) || !/[\p{L}\p{N}]/u.test(token)) {
     return null;
   }
   if (/^'/u.test(token) || isCouponPlaceholder_(token)) {
@@ -948,6 +962,10 @@ function isLinkLikeCouponToken_(token) {
   var normalized = token.replace(/[.!?,;:]+$/u, '');
   return /^(?:https?:\/\/|www\.)/iu.test(normalized) ||
     /^(?:[\p{L}\p{N}-]+\.)+[A-Za-z]{2,63}(?:[/?#].*)?$/u.test(normalized);
+}
+
+function isEmailAddressCouponToken_(token) {
+  return /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/u.test(token);
 }
 
 function isCouponPlaceholder_(token) {
