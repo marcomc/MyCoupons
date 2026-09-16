@@ -833,7 +833,7 @@ function matchesExpectedSheetDate_(written, expected) {
 
 function matchesForcedCouponCode_(written, expected) {
   var text = String(expected);
-  return /^'/.test(text) && String(written) === text.slice(1);
+  return /^'/.test(text) && typeof written === 'string' && written === text.slice(1);
 }
 
 function expectedSheetStoredText_(expected) {
@@ -1423,8 +1423,23 @@ function normalizeUnquotedCouponToken_(token) {
 
 function isLinkLikeCouponToken_(token) {
   var normalized = token.replace(/[.!?,;:]+$/u, '');
-  return /^(?:https?:\/\/|www\.)/iu.test(normalized) ||
+  return isIpAddressCouponToken_(normalized) || /^(?:https?:\/\/|www\.)/iu.test(normalized) ||
     /^(?:[\p{L}\p{N}-]+\.)+(?:xn--[A-Za-z0-9-]{2,59}|[\p{L}]{2,63})(?:[/?#].*)?$/iu.test(normalized);
+}
+
+function isIpAddressCouponToken_(token) {
+  // An IP address (optionally with its port) is routing data, not a coupon.
+  // Reject this false-positive shape before Gmail can be mutated.
+  var match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?::(\d{1,5}))?$/u.exec(token);
+  if (!match) {
+    return false;
+  }
+  for (var index = 1; index <= 4; index += 1) {
+    if (Number(match[index]) > 255) {
+      return false;
+    }
+  }
+  return !match[5] || Number(match[5]) <= 65535;
 }
 
 function isEmailAddressCouponToken_(token) {

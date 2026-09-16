@@ -57,6 +57,7 @@ function createRuntime({
   corruptLastWrite = false,
   corruptLastWriteColumns = [],
   coerceLastWrite = false,
+  coerceNumericCouponReadback = false,
   beforeLiveHeaderRead = null,
   beforeLiveDeduplicationRead = null,
   beforeLiveDeduplicationReadAt = 2,
@@ -227,6 +228,9 @@ function createRuntime({
             }
             if (coerceLastWrite && row > 1 && row === values.length) {
               copy[1] = 'SAVE2O';
+            }
+            if (coerceNumericCouponReadback && row > 1 && row === values.length) {
+              copy[1] = Number(copy[1]);
             }
             if (row > 1 && row === values.length) {
               corruptLastWriteColumns.forEach(column => { copy[column] = ''; });
@@ -520,6 +524,17 @@ test('preserves every Sheets-auto-parsed coupon form as text', () => {
   assert.equal(runtime.rows[1][1], '1E10');
   assert.equal(runtime.rows[2][1], '001.25');
   assert.deepEqual(runtime.mutations.map(entry => entry.id), ['scientific-code', 'decimal-code']);
+});
+
+test('refuses a numeric coupon when Sheets reads it back as a Number', () => {
+  const runtime = createRuntime({
+    coerceNumericCouponReadback: true,
+    messages: [message({id: 'numeric-readback', body: 'Coupon code: 1000000000000000'})],
+  });
+
+  assert.throws(() => runtime.context.runMyCouponsImport(), /verification failed/i);
+  assert.deepEqual(runtime.mutations, []);
+  assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK'), undefined);
 });
 
 test('skips an undecodable MIME text part without aborting later valid messages', () => {
@@ -876,6 +891,8 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'needed-prose', body: 'Coupon code is not needed'}),
     message({id: 'available-prose', body: 'Coupon code: available after signup'}),
     message({id: 'alternative-codes', body: 'Coupon code: SAVE20 or SAVE30'}),
+    message({id: 'ipv4-address', body: 'Coupon code: 192.168.1.1'}),
+    message({id: 'ipv4-address-port', body: 'Coupon code: 192.168.1.1:443'}),
     message({id: 'expires-prose', body: 'Coupon code: expires tomorrow'}),
     message({id: 'click-prose', body: 'Promo code: click here'}),
     message({id: 'click-here', body: 'Promo code: click-here'}),
