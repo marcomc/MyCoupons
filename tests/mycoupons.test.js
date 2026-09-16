@@ -1921,6 +1921,21 @@ test('defers retention when a hard import error leaves a persisted scan active',
   assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-imported'}]);
 });
 
+test('defers retention when import preflight fails before a scan is persisted', () => {
+  const runtime = createRuntime({
+    sheetCanEdit: false,
+    messages: [
+      message({
+        id: 'old-imported', date: new Date('2025-01-01T00:00:00.000Z'), labels: ['Coupon Code Discount'],
+      }),
+    ],
+  });
+
+  assert.throws(() => runtime.context.runMyCouponsDaily(), /not editable/i);
+  assert.equal(runtime.properties.has('MYCOUPONS_SCAN_STATE'), false);
+  assert.deepEqual(runtime.trashed, []);
+});
+
 test('does not extract a code found only in a text attachment', () => {
   const runtime = createRuntime({messages: [message({
     id: 'attached-coupon',

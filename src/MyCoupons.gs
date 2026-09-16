@@ -61,8 +61,7 @@ function runMyCouponsDaily() {
     }
     var retention;
     var retentionError = null;
-    if ((!importError && imported && !imported.complete) ||
-        (importError && hasPersistedImportScanState_())) {
+    if (importError || (!importError && imported && !imported.complete)) {
       // Retention may trash mail that is still part of a resumable import page.
       // Defer it until that exact scan has committed its watermark.
       retention = {complete: false, trashed: 0};
