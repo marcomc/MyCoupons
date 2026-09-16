@@ -543,8 +543,15 @@ function sameSheetMatrix_(first, second) {
   return Array.isArray(first) && Array.isArray(second) && first.length === second.length &&
     first.every(function(row, index) {
       return Array.isArray(row) && Array.isArray(second[index]) && row.length === second[index].length &&
-        row.every(function(cell, column) { return cell === second[index][column]; });
+        row.every(function(cell, column) { return sameSheetCell_(cell, second[index][column]); });
     });
+}
+
+function sameSheetCell_(first, second) {
+  if (first instanceof Date || second instanceof Date) {
+    return first instanceof Date && second instanceof Date && first.getTime() === second.getTime();
+  }
+  return first === second;
 }
 
 function sameSheetMatrixShape_(values, formulas) {

@@ -1221,6 +1221,17 @@ test('fails closed when the Sheet changes between snapshot values and formulas',
   assert.deepEqual(runtime.mutations, []);
 });
 
+test('accepts equal Sheet date values from separate snapshot reads', () => {
+  const runtime = createRuntime({existingRows: [[
+    new Date('2026-01-10T08:00:00.000Z'), 'SAVE20', 'Earlier', 'offers@example.com',
+    'https://mail.google.com/mail/u/0/#all/message-1', 'message-1::SAVE20', 'imported',
+  ]]});
+
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.context.getMyCouponsInstallationStatus())), {
+    dailyTrigger: 'missing', importState: 'current', ready: true,
+  });
+});
+
 test('uses exact epoch boundaries and persists the pre-list snapshot watermark', () => {
   const overlap = createRuntime({
     advanceClockOnList: true,
