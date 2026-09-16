@@ -1231,6 +1231,17 @@ test('refuses an ambiguous legacy Email Date string before changing the Sheet', 
   assert.equal(runtime.numberFormats.length, 0);
 });
 
+test('refuses to replace a legacy Email Date formula during normalization', () => {
+  const runtime = createRuntime({
+    existingRows: [['2026-01-10T08:00:00.000Z', '', '', '', '', '', '']],
+    existingFormulas: [['=DATE(2026,1,10)', '', '', '', '', '', '']],
+  });
+
+  assert.throws(() => runtime.context.normalizeMyCouponsEmailDates(), /must not be a formula/);
+  assert.equal(runtime.formulas[1][0], '=DATE(2026,1,10)');
+  assert.equal(runtime.numberFormats.length, 0);
+});
+
 test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
   const runtime = createRuntime({messages: [
     message({id: 'html-credits', htmlBody: '<p>Your account has 20 credits.</p>'}),
@@ -1244,7 +1255,9 @@ test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
     message({id: 'html-head-code', htmlBody: '<head><title>Coupon code: SAVE20</title></head><body></body>'}),
     message({id: 'html-template-code', htmlBody: '<template><template>x</template><p>Coupon code: SAVE20</p></template>'}),
     message({id: 'html-anchor-boundary', htmlBody: '<p>Promo <a href="https://example.test">not a </a>code: SAVE20</p>'}),
+    message({id: 'html-image-boundary', htmlBody: '<p>Promo <img src="cid:x" alt="not a ">code: SAVE20</p>'}),
     message({id: 'line-break-offer-context', htmlBody: '<p>Employment offer</p><p>Code: CANDIDATE123</p>'}),
+    message({id: 'savings-account', body: 'Access your savings account.\nUse code 928357'}),
   ]});
 
   assert.equal(runtime.context.runMyCouponsImport().imported, 0);

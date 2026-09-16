@@ -12,7 +12,7 @@
   "trashExpiredImported": true,
   "dailyHour": 8,
   "promotionContextDictionaries": {
-    "en": ["coupon", "deal code", "discount", "offer code", "promo", "promotion", "promotional offer", "saving", "savings", "special offer", "voucher"],
+    "en": ["coupon", "deal code", "discount", "offer code", "promo", "promotion", "promotional offer", "special offer", "voucher"],
     "it": ["buono sconto", "codice promo", "codice promozionale", "codice sconto", "coupon", "offerta speciale", "promozione", "sconto"],
     "es": ["código promocional", "cupón", "descuento", "oferta especial"],
     "fr": ["code promo", "code promotionnel", "coupon", "offre promotionnelle", "réduction"],

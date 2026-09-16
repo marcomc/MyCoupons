@@ -87,7 +87,8 @@ limit. It is cleared only after that fixed range completes.
    `promotionContextDictionaries` configuration uses bounded word lists by
    locale, starting with English, Italian, Spanish, French and German. Custom
    terms must remain promotion-specific (for example, `offer code`, not
-   `offer`) to avoid importing unrelated messages.
+   `offer`) to avoid importing unrelated messages. Broad financial terms such
+   as `saving` and `savings` are not promotion context.
    Letter-only codes must be long uppercase tokens; contextual prose is
    deliberately not interpreted.
 5. For every imported code, atomically append and verify a deduplicated Sheet

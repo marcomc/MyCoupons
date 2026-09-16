@@ -26,7 +26,7 @@ var MYCOUPONS_DEFAULTS = {
 // context; they never make a bare token importable by themselves.
 var MYCOUPONS_DEFAULT_PROMOTION_CONTEXT_DICTIONARIES = {
   de: ['aktionscode', 'gutschein', 'rabatt', 'sonderangebot'],
-  en: ['coupon', 'deal code', 'discount', 'offer code', 'promo', 'promotion', 'promotional offer', 'saving', 'savings', 'special offer', 'voucher'],
+  en: ['coupon', 'deal code', 'discount', 'offer code', 'promo', 'promotion', 'promotional offer', 'special offer', 'voucher'],
   es: ['código promocional', 'cupón', 'descuento', 'oferta especial'],
   fr: ['code promo', 'code promotionnel', 'coupon', 'offre promotionnelle', 'réduction'],
   it: ['buono sconto', 'codice promo', 'codice promozionale', 'codice sconto', 'coupon', 'offerta speciale', 'promozione', 'sconto'],
@@ -187,7 +187,14 @@ function normalizeMyCouponsEmailDates() {
     }
     var emailDateColumn = state.columns.emailDate + 1;
     var range = sheet.getRange(2, emailDateColumn, lastLegacyRow - 1, 1);
-    var normalized = range.getValues().map(function(row, index) {
+    var values = range.getValues();
+    var formulas = range.getFormulas();
+    formulas.forEach(function(row, index) {
+      if (row[0]) {
+        throw new Error('Email Date at row ' + (index + 2) + ' must not be a formula.');
+      }
+    });
+    var normalized = values.map(function(row, index) {
       return [normalizedLegacyEmailDate_(row[0], index + 2)];
     });
     var referenceFormat = sheet.getLastRow() >= 52 ? sheet.getRange(52, emailDateColumn, 1, 1).getNumberFormat() :
@@ -1387,6 +1394,7 @@ function htmlToCouponText_(html) {
     .replace(/<!--[\s\S]*?-->/gu, '')
     .replace(/<head\b[^>]*>[\s\S]*?<\/head\s*>/giu, '')
     .replace(/<a\b[^>]*>[\s\S]*?<\/a\s*>/giu, ' [link omitted] ')
+    .replace(/<img\b[^>]*>/giu, ' [image omitted] ')
     .replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote\s*>/giu, '')
     .replace(/<([A-Za-z][A-Za-z0-9:-]*)\b(?=[^>]*(?:\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']*["']))[^>]*>[\s\S]*?<\/\1\s*>/giu, '')
     .replace(/<(?:script|style|noscript|template|title)\b[^>]*>[\s\S]*?<\/(?:script|style|noscript|template|title)\s*>/giu, '');
