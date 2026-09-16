@@ -882,6 +882,8 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'currency-discount', body: 'Coupon code: $20 off'}),
     message({id: 'quoted-percentage-discount', body: 'Coupon code: "20%"'}),
     message({id: 'quoted-currency-discount', body: 'Coupon code: "$20"'}),
+    message({id: 'currency-suffix-discount', body: 'Codice sconto: 20€'}),
+    message({id: 'quoted-currency-suffix-discount', body: 'Codice sconto: "20€"'}),
     message({id: 'not-available', body: 'Coupon code: not-available'}),
     message({id: 'no-code', body: 'Coupon code: "no-code"'}),
     message({id: 'tbd', body: 'Coupon code: TBD'}),
@@ -928,6 +930,11 @@ test('does not import coupon codes found only in quoted reply or forward history
       id: 'on-wrote',
       subject: 'Re: promotion',
       body: 'Thanks for the details.\n\nOn Tue, Jan 6, 2026 at 10:00 AM Offers <offers@example.com> wrote:\nCoupon code: SAVE20',
+    }),
+    message({
+      id: 'wrapped-on-wrote',
+      subject: 'Re: promotion',
+      body: 'Thanks for the details.\n\nOn Tue, Jan 6, 2026 at 10:00 AM Offers\n<offers@example.com> wrote:\nCoupon code: SAVE20',
     }),
     message({
       id: 'leading-quote',
@@ -1058,6 +1065,8 @@ test('rejects absence markers and leading-apostrophe tokens without mutating Gma
     message({id: 'negated-italian-needed', body: 'Non occorre un codice sconto: AUTOAPPLIED'}),
     message({id: 'negated-contraction', body: "This offer doesn't require a promo code: AUTOAPPLIED"}),
     message({id: 'negated-typographic-contraction', body: 'This offer don’t need a promo code: AUTOAPPLIED'}),
+    message({id: 'negated-direct-article', body: 'This is not a coupon code: AUTOAPPLIED'}),
+    message({id: 'negated-direct-italian', body: 'Questo non è un codice sconto: AUTOAPPLIED'}),
     message({id: 'none', body: 'Coupon code: NONE'}),
     message({id: 'apostrophe', body: 'Coupon code: "\'=SAVE20"'}),
   ]});

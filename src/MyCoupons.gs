@@ -1306,12 +1306,27 @@ function stripQuotedReplyHistory_(plainText) {
   var lines = plainText.replace(/\r\n?/gu, '\n').split('\n');
   var retained = [];
   for (var index = 0; index < lines.length; index += 1) {
-    if (isQuotedReplyHistoryMarker_(lines[index]) || isOutlookQuotedHeaderBlock_(lines, index)) {
+    if (isQuotedReplyHistoryMarker_(lines[index]) || isWrappedQuotedReplyHistoryMarker_(lines, index) ||
+        isOutlookQuotedHeaderBlock_(lines, index)) {
       return {hadQuotedHistory: true, text: retained.join('\n')};
     }
     retained.push(lines[index]);
   }
   return {hadQuotedHistory: false, text: retained.join('\n')};
+}
+
+function isWrappedQuotedReplyHistoryMarker_(lines, index) {
+  if (!/^\s*On\s+\S.+$/iu.test(lines[index] || '')) {
+    return false;
+  }
+  for (var offset = 1; offset <= 2; offset += 1) {
+    var continuation = lines[index + offset] || '';
+    if (!continuation.trim()) {
+      continue;
+    }
+    return /\bwrote:\s*$/iu.test(continuation);
+  }
+  return false;
 }
 
 function isOutlookQuotedHeaderBlock_(lines, index) {
@@ -1362,7 +1377,9 @@ function collectExplicitCouponTokens_(text, found) {
 function hasNoCodeContextBeforeIntroducer_(text, introducerIndex) {
   var sameSentence = text.slice(0, introducerIndex).split(/[\n.!?]+/u).pop();
   var context = sameSentence.slice(-160);
-  return /\b(?:no(?:\s+need\s+for)?|without|none|do(?:es)?\s+not\s+(?:need|require)|do(?:es)?n['’]t\s+(?:need|require)|not\s+require)(?:\s+(?:an?|the))?\s*$/iu.test(context) ||
+  return /\bnot\s+(?:(?:an?|the)\s+)?$/iu.test(context) ||
+    /\bnon\s+(?:è|e)\s+(?:(?:un[oa]?|il|lo)\s+)?$/iu.test(context) ||
+    /\b(?:no(?:\s+need\s+for)?|without|none|do(?:es)?\s+not\s+(?:need|require)|do(?:es)?n['’]t\s+(?:need|require)|not\s+require)(?:\s+(?:an?|the))?\s*$/iu.test(context) ||
     /\b(?:nessun[oa]?(?:\s+bisogno\s+di)?|senza|non\s+richiede|non\s+serve|non\s+(?:è|e)\s+necessario|non\s+occorre)(?:\s+(?:alcun|un[oa]?|il|lo))?\s*$/iu.test(context);
 }
 
@@ -1382,7 +1399,7 @@ function acceptCouponToken_(token, quoted, hasFollowingWord) {
   if (/[.!?,;:]$/u.test(token) || /—/u.test(token)) {
     return null;
   }
-  if (/^(?:[$€£¥]\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?[%‰])$/u.test(token)) {
+  if (/^(?:[$€£¥]\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?(?:[$€£¥]|[%‰]))$/u.test(token)) {
     return null;
   }
   if (!quoted && !/[\p{N}\p{P}\p{S}]/u.test(token) && (token === token.toLowerCase() || hasFollowingWord)) {
