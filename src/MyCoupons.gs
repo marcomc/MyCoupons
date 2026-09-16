@@ -1069,7 +1069,14 @@ function watermarkTargetIdentity_(config, labelId, sheetId) {
 
 function scanConfigIdentity_(config, sheetId) {
   return JSON.stringify([config.ownerEmail.toLowerCase(), config.labelName, config.spreadsheetId, config.sheetName,
-    sheetId, config.archiveImported, config.initialDate.toISOString(), config.watermarkOverlapDays]);
+    sheetId, config.archiveImported, config.initialDate.toISOString(), config.watermarkOverlapDays,
+    promotionContextDictionaryIdentity_(config.promotionContextDictionaries)]);
+}
+
+function promotionContextDictionaryIdentity_(dictionaries) {
+  return Object.keys(dictionaries).sort().map(function(locale) {
+    return [locale, dictionaries[locale].slice().sort()];
+  });
 }
 
 function validScanTimestamp_(value, now) {
@@ -1294,39 +1301,44 @@ function extractPlainText_(payload, messageId) {
 
 function collectCouponTextParts_(part, couponText, messageId, budget) {
   if (isAttachedPart_(part)) {
-    return;
+    return true;
   }
   var mimeType = String(part.mimeType || '').toLowerCase();
   if (mimeType === 'multipart/alternative') {
     var alternatives = [];
+    var complete = true;
     (part.parts || []).forEach(function(child) {
       var childText = [];
-      collectCouponTextParts_(child, childText, messageId, budget);
+      if (!collectCouponTextParts_(child, childText, messageId, budget)) {
+        complete = false;
+      }
       alternatives.push(childText);
     });
-    couponText.push({alternatives: alternatives});
-    return;
+    couponText.push({alternatives: alternatives, complete: complete});
+    return complete;
   }
   if ((mimeType === 'text/plain' || mimeType === 'text/html') && part.body) {
     var encoded = part.body.data;
     if (part.body.size > MYCOUPONS_TEXT_PART_MAX_BYTES) {
-      return;
+      return false;
     }
     if (!encoded && validOpaqueGmailId_(part.body.attachmentId)) {
       var attachment = Gmail.Users.Messages.Attachments.get('me', messageId, part.body.attachmentId);
       encoded = attachment && attachment.data;
     }
     if (typeof encoded !== 'string' || encoded.length > Math.ceil(MYCOUPONS_TEXT_PART_MAX_BYTES * 4 / 3) + 4) {
-      return;
+      return false;
     }
     var decoded = decodeBase64UrlTextPart_(encoded, part);
     if (decoded !== null && decoded.length <= budget.remaining) {
       couponText.push(mimeType === 'text/html' ? htmlToCouponText_(decoded) : decoded);
       budget.remaining -= decoded.length;
+    } else {
+      return false;
     }
   }
-  (part.parts || []).forEach(function(child) {
-    collectCouponTextParts_(child, couponText, messageId, budget);
+  return (part.parts || []).every(function(child) {
+    return collectCouponTextParts_(child, couponText, messageId, budget);
   });
 }
 
@@ -1403,7 +1415,7 @@ function htmlToCouponText_(html) {
   }
   // Apps Script has no HTML/CSS renderer. A stylesheet means visibility cannot
   // be established reliably, so fail closed instead of importing preview text.
-  if (/<(?:blockquote|pre|script|style|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*(?:"[^"']*&[^"']*"|'[^"']*&[^"']*'|[^\s>]*&)|&(?!amp;|apos;|gt;|lt;|nbsp;|quot;)[a-z][a-z0-9]+;/iu.test(html)) {
+  if (/<(?:blockquote|pre|script|style|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*(?:"[^"']*&[^"']*"|'[^"']*&[^"']*'|[^\s>]*&)|&(?!#(?:x[0-9a-f]+|\d+);|(?:amp|apos|gt|lt|nbsp|quot);)[a-z#]/iu.test(html)) {
     return '';
   }
   var text = extractBoundedVisibleHtmlText_(html);
@@ -1451,11 +1463,11 @@ function extractBoundedVisibleHtmlText_(html) {
       output.push(name === 'a' ? ' [link omitted] ' : ' ');
     } else if (!closing && name === 'img') {
       output.push(' [image omitted] ');
-    } else if (!closing && /^(?:p|div|li|tr|h[1-6]|table|section|article)$/u.test(name)) {
+    } else if (!closing && /^(?:p|div|li|tr|td|th|h[1-6]|table|section|article)$/u.test(name)) {
       output.push('\u0000');
     } else if (!closing && (name === 'br' || name === 'hr')) {
       output.push('\u0000');
-    } else if (closing && /^(?:p|div|li|tr|h[1-6]|table|section|article)$/u.test(name)) {
+    } else if (closing && /^(?:p|div|li|tr|td|th|h[1-6]|table|section|article)$/u.test(name)) {
       output.push('\u0000');
     }
     index = tagEnd + 1;
@@ -1565,6 +1577,7 @@ function extractCouponCodes_(subject, plainText, promotionContextDictionaries) {
   if (subject && !isInheritedReplyOrForwardSubject_(subject)) {
     content.push(subject);
   }
+  var subjectCodes = extractCouponCodesFromTextParts_(content, promotionContextDictionaries);
   sourceParts.forEach(function(part) {
     if (typeof part !== 'string') {
       return;
@@ -1581,6 +1594,9 @@ function extractCouponCodes_(subject, plainText, promotionContextDictionaries) {
   }
   var found = extractCouponCodesFromTextParts_(content, promotionContextDictionaries);
   for (var groupIndex = 0; groupIndex < alternativeGroups.length; groupIndex += 1) {
+    if (!alternativeGroups[groupIndex].complete) {
+      return subjectCodes;
+    }
     var nonEmptySets = alternativeGroups[groupIndex].alternatives.map(function(parts) {
       return extractCouponCodesFromTextParts_(parts, promotionContextDictionaries);
     }).filter(function(codes) {

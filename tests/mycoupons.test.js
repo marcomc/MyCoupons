@@ -589,6 +589,16 @@ test('rejects conflicting coupon codes from multipart alternatives', () => {
   assert.equal(runtime.mutations.length, 0);
 });
 
+test('rejects an alternative group when its remaining representation exceeds the text budget', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'budgeted-alternatives', body: 'Coupon code: SAVE10\n' + 'x'.repeat(99980),
+    htmlBody: '<p>Coupon code: SAVE20</p>',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 0);
+  assert.equal(runtime.mutations.length, 0);
+});
+
 test('does not synthesize a coupon across subject and plain-text MIME body boundaries', () => {
   const runtime = createRuntime({messages: [message({
     id: 'split-subject-body', subject: 'Promo code:', body: 'SAVE20',
@@ -1290,10 +1300,12 @@ test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
     message({id: 'html-image-boundary', htmlBody: '<p>Promo <img src="cid:x" alt="not a ">code: SAVE20</p>'}),
     message({id: 'html-unsupported-entity', htmlBody: '<p>Coupon code: SAVE&ndash;20</p>'}),
     message({id: 'html-invalid-numeric-entity', htmlBody: '<p>Coupon code: SAVE&#x110000;20</p>'}),
+    message({id: 'html-semicolonless-entity', htmlBody: '<p>Coupon code: SAVE&amp-20</p>'}),
     message({id: 'line-break-offer-context', htmlBody: '<p>Employment offer</p><p>Code: CANDIDATE123</p>'}),
     message({id: 'inline-formatting-newline', htmlBody: '<p>This employment package includes a special offer\nCode: CANDIDATE123</p>'}),
     message({id: 'inline-entity-newline', htmlBody: '<p>This employment package includes a special offer&#10;Code: CANDIDATE123</p>'}),
     message({id: 'nested-block-boundary', htmlBody: '<div>cou<div>pon code: SAVE20</div></div>'}),
+    message({id: 'table-cell-boundary', htmlBody: '<tr><td>cou</td><td>pon code: SAVE20</td></tr>'}),
     message({id: 'savings-account', body: 'Access your savings account.\nUse code 928357'}),
   ]});
 
@@ -1998,12 +2010,12 @@ test('rejects a future initialDate before preflight or import can mutate resourc
 });
 
 test('read-only status validates persisted import state without mutating it', () => {
+  const identityRuntime = createRuntime();
+  const currentConfigIdentity = identityRuntime.context.scanConfigIdentity_(
+    identityRuntime.context.getMyCouponsConfig_(), 12345);
   const validScan = JSON.stringify({
     boundary: '2026-01-11T10:00:00.000Z',
-    configIdentity: JSON.stringify([
-      'owner@example.com', 'Coupon Code Discount', 'sheet-id', 'Coupon Manager', 12345, true,
-      '2026-01-01T00:00:00.000Z', 1,
-    ]),
+    configIdentity: currentConfigIdentity,
     labelId: 'Label_Imported',
     labelName: 'Coupon Code Discount',
     sheetId: 12345,
