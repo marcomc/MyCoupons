@@ -1022,7 +1022,7 @@ function toMyCouponsMessage_(message) {
     id: message.id,
     labelIds: message.labelIds || [],
     plainText: extractPlainText_(message.payload, message.id),
-    sourceAmbiguous: subjectHeaderCount > 1 || fromHeaderCount > 1,
+    sourceAmbiguous: subjectHeaderCount > 1 || fromHeaderCount !== 1 || !headers.from.trim(),
     subject: headers.subject || '',
     threadId: message.threadId,
   };
@@ -1208,6 +1208,7 @@ function hasReferralCouponContext_(text) {
     return false;
   }
   return /\b(?:share|refer|invite)\s+(?:your\s+)?(?:promo(?:tional)?|referral)\s+code\b/iu.test(text) ||
+    /\b(?:give|send)\s+(?:a\s+)?friend\s+(?:your\s+)?(?:promo(?:tional)?|referral)\s+code\b/iu.test(text) ||
     /\breferral\b/iu.test(text) ||
     /\b(?:share|refer|invite)\b/iu.test(text) && /\bfriends?\b/iu.test(text) ||
     /\b(?:invita|condividi|presenta)\s+(?:un\s+)?amic(?:o|a|i|he)\b/iu.test(text);

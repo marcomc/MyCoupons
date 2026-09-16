@@ -791,6 +791,7 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
   const runtime = createRuntime({messages: [
     message({id: 'referral', body: 'Share https://example.com/referral'}),
     message({id: 'referral-code', body: 'Share your promo code: FRIEND20 with a friend'}),
+    message({id: 'give-friend-referral', body: 'Give a friend your promo code: FRIEND20'}),
     message({id: 'refer-friend', body: 'Refer a friend with promo code: FRIEND20'}),
     message({id: 'invite-friends', body: 'Invite friends with discount code: FRIEND20'}),
     message({id: 'italian-invite-friend', body: 'Invita un amico. Codice sconto: FRIEND20'}),
@@ -979,6 +980,16 @@ test('skips a message with duplicate From headers without mutating Gmail', () =>
   const runtime = createRuntime({messages: [message({
     id: 'duplicate-from', body: 'Coupon code: SAVE20',
     additionalHeaders: [{name: 'From', value: 'other@example.com'}],
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 0);
+  assert.equal(runtime.rows.length, 1);
+  assert.equal(runtime.mutations.length, 0);
+});
+
+test('skips a message with a missing From header value without mutating Gmail', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'missing-from', from: '', body: 'Coupon code: SAVE20',
   })]});
 
   assert.equal(runtime.context.runMyCouponsImport().imported, 0);
