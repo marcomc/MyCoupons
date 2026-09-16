@@ -57,6 +57,7 @@ function createRuntime({
   corruptLastWrite = false,
   corruptLastWriteColumns = [],
   coerceLastWrite = false,
+  beforeLiveHeaderRead = null,
   beforeLiveDeduplicationRead = null,
   beforeLiveDeduplicationReadAt = 2,
   beforeSnapshotFormulaRead = null,
@@ -104,6 +105,7 @@ function createRuntime({
   const rangeListCalls = [];
   let externalAppendDone = false;
   let liveDeduplicationReadPending = Boolean(beforeLiveDeduplicationRead);
+  let liveHeaderReadPending = Boolean(beforeLiveHeaderRead);
   let snapshotFormulaReadPending = Boolean(beforeSnapshotFormulaRead);
   let appendFormatPending = Boolean(beforeAppendFormat);
   let finalGmailAuthorizationPending = Boolean(beforeFinalGmailAuthorization);
@@ -213,14 +215,18 @@ function createRuntime({
         },
         getValues: () => values.slice(row - 1, row - 1 + rowCount)
           .map(value => {
+            if (liveHeaderReadPending && row === 1) {
+              beforeLiveHeaderRead({formulas, values});
+              liveHeaderReadPending = false;
+            }
             const copy = value.slice(column - 1, column - 1 + columnCount);
-            if (corruptLastWrite && row === values.length) {
+            if (corruptLastWrite && row > 1 && row === values.length) {
               copy[5] = '';
             }
-            if (coerceLastWrite && row === values.length) {
+            if (coerceLastWrite && row > 1 && row === values.length) {
               copy[1] = 'SAVE2O';
             }
-            if (row === values.length) {
+            if (row > 1 && row === values.length) {
               corruptLastWriteColumns.forEach(column => { copy[column] = ''; });
             }
             return copy;
@@ -228,7 +234,7 @@ function createRuntime({
         getFormulas: () => formulas.slice(row - 1, row - 1 + rowCount)
           .map(value => {
             const copy = value.slice(column - 1, column - 1 + columnCount);
-            if (row === values.length) {
+            if (row > 1 && row === values.length) {
               formulaLastWriteColumns.forEach(column => { copy[column] = '=CORRUPTED'; });
             }
             return copy;
@@ -850,6 +856,10 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'no-code', body: 'Coupon code: "no-code"'}),
     message({id: 'tbd', body: 'Coupon code: TBD'}),
     message({id: 'email-address', body: 'Coupon code: support@example.com'}),
+    message({id: 'international-email-address', body: 'Promo code: support@bücher.de'}),
+    message({id: 'international-local-email-address', body: 'Promo code: utente@esempio.azienda'}),
+    message({id: 'italian-send-friend', body: 'Invia a un amico il tuo codice sconto: FRIEND20'}),
+    message({id: 'italian-forward-friend', body: 'Inoltra a un amico il tuo codice sconto: FRIEND20'}),
     message({id: 'uppercase-prose', body: 'Coupon code: FREE shipping'}),
     message({id: 'ambiguous-punctuation', body: 'Coupon code: SAVE20.'}),
     message({
@@ -2039,6 +2049,47 @@ test('surfaces incomplete retention through the daily result', () => {
   const outcome = runtime.context.runMyCouponsDaily();
   assert.equal(outcome.import.complete, true);
   assert.deepEqual(JSON.parse(JSON.stringify(outcome.retention)), {complete: false, trashed: 1});
+});
+
+test('refuses a scheduled invocation whose trigger no longer matches its stored identity', () => {
+  const current = createRuntime({
+    messages: [message({id: 'current-scheduled-message', body: 'Coupon code: SAFE20'})],
+    triggers: [{getHandlerFunction: () => 'runMyCouponsDaily'}],
+  });
+  assert.equal(current.context.runMyCouponsDaily({triggerUid: 'existing-trigger-0'}).import.imported, 1);
+
+  const runtime = createRuntime({
+    messages: [message({id: 'scheduled-message', body: 'Coupon code: SAFE20'})],
+    triggers: [{
+      getHandlerFunction: () => 'runMyCouponsDaily',
+      getUniqueId: () => 'replacement-trigger',
+    }],
+    dailyScheduleMetadata: JSON.stringify({
+      version: 2,
+      identity: JSON.stringify([
+        'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount',
+        'runMyCouponsDaily', 8, 'Europe/Rome',
+      ]),
+      triggerId: 'original-trigger',
+    }),
+  });
+
+  assert.throws(() => runtime.context.runMyCouponsDaily({triggerUid: 'replacement-trigger'}), /daily schedule/i);
+  assert.equal(runtime.rows.length, 1);
+  assert.deepEqual(runtime.mutations, []);
+});
+
+test('refuses to append when the live sheet header mapping changes after the snapshot', () => {
+  const runtime = createRuntime({
+    messages: [message({id: 'reordered-headers', body: 'Coupon code: SAFE20'})],
+    beforeLiveHeaderRead: ({values}) => {
+      [values[0][1], values[0][2]] = [values[0][2], values[0][1]];
+    },
+  });
+
+  assert.throws(() => runtime.context.runMyCouponsImport(), /headers changed/i);
+  assert.equal(runtime.rows.length, 1);
+  assert.deepEqual(runtime.mutations, []);
 });
 
 test('defers retention until an incomplete import scan has resumed and committed', () => {

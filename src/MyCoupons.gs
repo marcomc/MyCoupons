@@ -49,10 +49,11 @@ function runMyCouponsImport() {
  *
  * @return {{import: {complete: boolean, imported: number, scanned: number, watermark: string|null}, retention: {complete: boolean, trashed: number}}}
  */
-function runMyCouponsDaily() {
+function runMyCouponsDaily(event) {
   return withMyCouponsLock_(function() {
     var config = getMyCouponsConfig_();
     assertMyCouponsOwner_(config);
+    assertDailyScheduleInvocation_(config, event);
     var imported;
     var importError = null;
     try {
@@ -453,6 +454,24 @@ function assertDailyScheduleIdentity_(config, trigger) {
   }
 }
 
+function assertDailyScheduleInvocation_(config, event) {
+  // A manual invocation has no trigger identity. The scheduled invocation must
+  // prove that it still belongs to the configuration that installed it.
+  if (!event || typeof event.triggerUid !== 'string' || !event.triggerUid) {
+    return;
+  }
+  var triggers = ScriptApp.getProjectTriggers();
+  assertNoLegacyTimeBasedTriggers_(triggers);
+  var matching = triggers.filter(function(trigger) {
+    return trigger.getHandlerFunction() === MYCOUPONS_DAILY_HANDLER &&
+      typeof trigger.getUniqueId === 'function' && trigger.getUniqueId() === event.triggerUid;
+  });
+  if (matching.length !== 1) {
+    throw new Error('Scheduled MyCoupons trigger does not match the installed schedule. Resolve it deliberately.');
+  }
+  assertDailyScheduleIdentity_(config, matching[0]);
+}
+
 function parseInitialDate_(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw new Error('MYCOUPONS_CONFIG.initialDate must use YYYY-MM-DD.');
@@ -664,6 +683,9 @@ function sheetSemanticText_(value) {
 }
 
 function appendAndVerifyCouponRow_(sheet, row, sheetState, deduplicationKey) {
+  if (!hasCurrentCouponSheetHeaders_(sheet, sheetState)) {
+    throw new Error('Coupon sheet headers changed before append. Retry after concurrent edits finish.');
+  }
   var targetRow = sheet.getLastRow() + 1;
   if (targetRow !== sheetState.expectedLastRow + 1) {
     throw new Error('Coupon sheet row reservation changed before append.');
@@ -704,6 +726,9 @@ function verifiedLiveExpectedCouponRows_(sheet, sheetState, message, codes, conf
   if (sheet.getLastRow() !== sheetState.expectedLastRow || sheet.getLastColumn() !== sheetState.columnCount) {
     return false;
   }
+  if (!hasCurrentCouponSheetHeaders_(sheet, sheetState)) {
+    return false;
+  }
   return codes.every(function(code) {
     var deduplicationKey = message.id + '::' + code;
     var records = (sheetState.deduplicationCandidates[deduplicationKey] || []).map(function(record) {
@@ -712,6 +737,24 @@ function verifiedLiveExpectedCouponRows_(sheet, sheetState, message, codes, conf
     });
     var candidates = inspectDeduplicationCandidates_(records, message, code, sheetState.columns, config);
     return candidates.verified.length === 1 && !candidates.invalidCorrelated.length;
+  });
+}
+
+function hasCurrentCouponSheetHeaders_(sheet, sheetState) {
+  var headerRange = sheet.getRange(1, 1, 1, sheetState.columnCount);
+  var first = headerRange.getValues();
+  var confirmed = headerRange.getValues();
+  if (!sameSheetMatrix_(first, confirmed) || !confirmed.length || confirmed[0].length !== sheetState.columnCount) {
+    return false;
+  }
+  var columns;
+  try {
+    columns = resolveCouponColumns_(confirmed[0]);
+  } catch (error) {
+    return false;
+  }
+  return Object.keys(MYCOUPONS_COLUMNS).every(function(field) {
+    return columns[field] === sheetState.columns[field];
   });
 }
 
@@ -1230,11 +1273,9 @@ function hasReferralCouponContext_(text) {
   if (!introducer.test(text)) {
     return false;
   }
-  return /\b(?:share|refer|invite)\s+(?:your\s+)?(?:promo(?:tional)?|referral)\s+code\b/iu.test(text) ||
-    /\b(?:give|send)\s+(?:a\s+|to\s+a\s+)?friend\s+(?:your\s+)?(?:promo(?:tional)?|referral)\s+code\b/iu.test(text) ||
-    /\breferral\b/iu.test(text) ||
-    /\b(?:share|refer|invite)\b/iu.test(text) && /\bfriends?\b/iu.test(text) ||
-    /\b(?:invita|condividi|presenta)\s+(?:un\s+)?amic(?:o|a|i|he)\b/iu.test(text);
+  return /\breferral\b/iu.test(text) ||
+    /\b(?:share|refer|invite|give|send|invia|inoltra|invita|condividi|presenta)\b/iu.test(text) &&
+      /\b(?:friends?|amic(?:o|a|i|he))\b/iu.test(text);
 }
 
 function stripQuotedReplyHistory_(plainText) {
@@ -1349,7 +1390,9 @@ function isLinkLikeCouponToken_(token) {
 }
 
 function isEmailAddressCouponToken_(token) {
-  return /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/u.test(token);
+  // An @-bearing token is never imported. This deliberately accepts a false
+  // negative for uncommon coupon syntax rather than archiving an email address.
+  return /@/u.test(token);
 }
 
 function isCouponPlaceholder_(token) {
