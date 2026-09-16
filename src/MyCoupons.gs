@@ -406,7 +406,7 @@ function readCouponSheetState_(sheet, config) {
   var deduplicationRecords = {};
   values.slice(1).forEach(function(row, index) {
     var key = sheetSemanticText_(row[columns.deduplicationKey]);
-    if (key) {
+    if (key && parseDeduplicationKey_(key)) {
       if (Object.prototype.hasOwnProperty.call(deduplicationRecords, key)) {
         throw new Error('Coupon sheet contains a duplicate deduplication key.');
       }
@@ -417,11 +417,19 @@ function readCouponSheetState_(sheet, config) {
 }
 
 function parseDeduplicationKey_(key) {
+  if (typeof key !== 'string' || !key) {
+    return null;
+  }
   var separator = key.indexOf('::');
   if (separator <= 0 || separator === key.length - 2) {
     return null;
   }
-  return {code: key.slice(separator + 2), messageId: key.slice(0, separator)};
+  var messageId = key.slice(0, separator);
+  var code = key.slice(separator + 2);
+  if (!validOpaqueGmailId_(messageId) || acceptCouponToken_(code, true, false) !== code) {
+    return null;
+  }
+  return {code: code, messageId: messageId};
 }
 
 function resolveCouponColumns_(headers) {
@@ -810,7 +818,8 @@ function extractCouponCodes_(subject, plainText) {
   var unquoted = stripQuotedReplyHistory_(plainText);
   var content = [unquoted.hadQuotedHistory ? '' : subject || '', unquoted.text];
   if (content.some(function(text) {
-    return /\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b|\b(?:share|refer|invite)\s+(?:your\s+)?(?:promo(?:tional)?|referral)\s+code\b/iu.test(text);
+    return /\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b/iu.test(text) ||
+      hasReferralCouponContext_(text);
   })) {
     return [];
   }
@@ -819,6 +828,16 @@ function extractCouponCodes_(subject, plainText) {
     collectExplicitCouponTokens_(text, found);
   });
   return found;
+}
+
+function hasReferralCouponContext_(text) {
+  var introducer = /\b(?:coupon|promo(?:tional)?|discount)\s+code\b|\bcodice\s+sconto\b/iu;
+  if (!introducer.test(text)) {
+    return false;
+  }
+  return /\b(?:share|refer|invite)\s+(?:your\s+)?(?:promo(?:tional)?|referral)\s+code\b/iu.test(text) ||
+    /\breferral\b/iu.test(text) ||
+    /\b(?:share|refer|invite)\b/iu.test(text) && /\bfriends?\b/iu.test(text);
 }
 
 function stripQuotedReplyHistory_(plainText) {
@@ -881,7 +900,7 @@ function acceptCouponToken_(token, quoted, hasFollowingWord) {
 }
 
 function isCouponPlaceholder_(token) {
-  return /^(?:not|none|n\/?a|no|null|empty|required|not[-_]?available|no[-_]?code|(?:click|tap)[-_]?(?:here|link)|learn[-_]?more|shop[-_]?now|sign[-_]?up|copy[-_]?code|view[-_]?offer)[.!?,;:]*$/iu.test(token);
+  return /^(?:not|none|n\/?a|no|null|empty|required|tbd|not[-_]?available|no[-_]?code|(?:click|tap)[-_]?(?:here|link)|learn[-_]?more|shop[-_]?now|sign[-_]?up|copy[-_]?code|view[-_]?offer)[.!?,;:]*$/iu.test(token);
 }
 
 function withMyCouponsLock_(callback) {

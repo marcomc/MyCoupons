@@ -529,6 +529,9 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
   const runtime = createRuntime({messages: [
     message({id: 'referral', body: 'Share https://example.com/referral'}),
     message({id: 'referral-code', body: 'Share your promo code: FRIEND20 with a friend'}),
+    message({id: 'refer-friend', body: 'Refer a friend with promo code: FRIEND20'}),
+    message({id: 'invite-friends', body: 'Invite friends with discount code: FRIEND20'}),
+    message({id: 'friends-after-code', body: 'Promo code: FRIEND20 — invite friends'}),
     message({id: 'otp', body: 'Your verification code: 123456'}),
     message({id: 'generic', body: 'Use SAVE20 at checkout'}),
     message({id: 'ordinary-prose', body: 'No coupon code is required.'}),
@@ -546,6 +549,7 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'quoted-currency-discount', body: 'Coupon code: "$20"'}),
     message({id: 'not-available', body: 'Coupon code: not-available'}),
     message({id: 'no-code', body: 'Coupon code: "no-code"'}),
+    message({id: 'tbd', body: 'Coupon code: TBD'}),
     message({id: 'uppercase-prose', body: 'Coupon code: FREE shipping'}),
     message({id: 'ambiguous-punctuation', body: 'Coupon code: SAVE20.'}),
     message({
@@ -785,6 +789,23 @@ test('fails closed when the coupon sheet contains a duplicate deduplication key'
 
   assert.throws(() => runtime.context.runMyCouponsImport(), /duplicate deduplication key/i);
   assert.equal(runtime.mutations.length, 0);
+});
+
+test('ignores repeated legacy Notes values that are not generated deduplication keys', () => {
+  const legacyNoteRow = [
+    'legacy date', '', 'legacy subject', 'legacy sender', '', 'Imported manually', 'legacy',
+  ];
+  const runtime = createRuntime({
+    existingRows: [[...legacyNoteRow], [...legacyNoteRow]],
+    messages: [message({id: 'new-coupon', body: 'Coupon code: SAVE20'})],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.context.getMyCouponsInstallationStatus())), {
+    dailyTrigger: 'missing', importState: 'current', ready: true,
+  });
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows.length, 4);
+  assert.equal(runtime.rows[3][5], 'new-coupon::SAVE20');
 });
 
 test('writes all codes before making one exact Gmail mutation for their source message', () => {
