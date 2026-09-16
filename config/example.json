@@ -12,10 +12,10 @@
   "trashExpiredImported": true,
   "dailyHour": 8,
   "promotionContextDictionaries": {
-    "en": ["coupon", "deal", "discount", "offer", "promo", "promotion", "saving", "savings", "voucher"],
-    "it": ["buono", "codice promo", "codice promozionale", "codice sconto", "coupon", "offerta", "promozione", "sconto"],
-    "es": ["código promocional", "cupón", "descuento", "oferta", "vale"],
-    "fr": ["bon", "code promo", "code promotionnel", "coupon", "offre", "réduction"],
-    "de": ["angebot", "aktionscode", "gutschein", "rabatt"]
+    "en": ["coupon", "deal code", "discount", "offer code", "promo", "promotion", "promotional offer", "saving", "savings", "special offer", "voucher"],
+    "it": ["buono sconto", "codice promo", "codice promozionale", "codice sconto", "coupon", "offerta speciale", "promozione", "sconto"],
+    "es": ["código promocional", "cupón", "descuento", "oferta especial"],
+    "fr": ["code promo", "code promotionnel", "coupon", "offre promotionnelle", "réduction"],
+    "de": ["aktionscode", "gutschein", "rabatt", "sonderangebot"]
   }
 }

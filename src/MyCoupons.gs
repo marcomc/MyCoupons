@@ -1378,7 +1378,9 @@ function htmlToCouponText_(html) {
   if (typeof html !== 'string') {
     return '';
   }
-  if (/<(?:blockquote|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)/iu.test(html)) {
+  // Apps Script has no HTML/CSS renderer. A stylesheet means visibility cannot
+  // be established reliably, so fail closed instead of importing preview text.
+  if (/<(?:blockquote|style|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)/iu.test(html)) {
     return '';
   }
   var withoutInactiveContent = html

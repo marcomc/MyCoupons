@@ -75,15 +75,19 @@ limit. It is cleared only after that fixed range completes.
 3. Inspect only a non-reply/non-forward subject and bounded, non-quoted
    `text/plain` or `text/html` content. HTML is reduced to visible,
    line-oriented text; links, markup, scripts, styles and attachments never
-   become coupon input. A part without a content-type header is accepted only
-   as US-ASCII; uncertain decoding remains untouched.
+   become coupon input. Because Apps Script does not render CSS, an HTML part
+   containing a stylesheet or hidden-content marker is ignored entirely. A
+   part without a content-type header is accepted only as US-ASCII; uncertain
+   decoding remains untouched.
 4. Import only a complete code on a self-contained line that begins with an
    explicit form such as `coupon code`, `promo code`, `discount code`, `codice
    sconto`, `use code` or `usa il codice` (optionally `your`, `il tuo` or `la
    tua`). A generic `Code:` line is accepted only when the same decoded body
    establishes a promotion context. The owner-editable
    `promotionContextDictionaries` configuration uses bounded word lists by
-   locale, starting with English, Italian, Spanish, French and German.
+   locale, starting with English, Italian, Spanish, French and German. Custom
+   terms must remain promotion-specific (for example, `offer code`, not
+   `offer`) to avoid importing unrelated messages.
    Letter-only codes must be long uppercase tokens; contextual prose is
    deliberately not interpreted.
 5. For every imported code, atomically append and verify a deduplicated Sheet
