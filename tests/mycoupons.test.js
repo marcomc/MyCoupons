@@ -66,6 +66,7 @@ function createRuntime({
   beforeLiveDeduplicationRead = null,
   beforeLiveDeduplicationReadAt = 2,
   beforeSnapshotFormulaRead = null,
+  beforeLegacyDateRevalidation = null,
   beforeAppendFormat = null,
   beforeFinalGmailAuthorization = null,
   beforeRetentionRecheck = null,
@@ -115,6 +116,8 @@ function createRuntime({
   let liveDeduplicationReadPending = Boolean(beforeLiveDeduplicationRead);
   let liveHeaderReadPending = Boolean(beforeLiveHeaderRead);
   let snapshotFormulaReadPending = Boolean(beforeSnapshotFormulaRead);
+  let legacyDateRevalidationPending = Boolean(beforeLegacyDateRevalidation);
+  let legacyDateRangeValueReads = 0;
   let appendFormatPending = Boolean(beforeAppendFormat);
   let finalGmailAuthorizationPending = Boolean(beforeFinalGmailAuthorization);
   let retentionRecheckPending = Boolean(beforeRetentionRecheck);
@@ -223,6 +226,11 @@ function createRuntime({
         },
         getValues: () => values.slice(row - 1, row - 1 + rowCount)
           .map(value => {
+            if (legacyDateRevalidationPending && row === 2 && columnCount === 1 &&
+                (legacyDateRangeValueReads += 1) === 2) {
+              beforeLegacyDateRevalidation({formulas, values});
+              legacyDateRevalidationPending = false;
+            }
             if (liveHeaderReadPending && row === 1) {
               beforeLiveHeaderRead({formulas, values});
               liveHeaderReadPending = false;
@@ -1242,6 +1250,17 @@ test('refuses to replace a legacy Email Date formula during normalization', () =
   assert.equal(runtime.numberFormats.length, 0);
 });
 
+test('refuses to overwrite a concurrently changed legacy Email Date range', () => {
+  const runtime = createRuntime({
+    existingRows: [['2026-01-10T08:00:00.000Z', '', '', '', '', '', '']],
+    beforeLegacyDateRevalidation: ({formulas}) => { formulas[1][0] = '=NOW()'; },
+  });
+
+  assert.throws(() => runtime.context.normalizeMyCouponsEmailDates(), /changed before normalization/i);
+  assert.equal(runtime.formulas[1][0], '=NOW()');
+  assert.equal(runtime.numberFormats.length, 0);
+});
+
 test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
   const runtime = createRuntime({messages: [
     message({id: 'html-credits', htmlBody: '<p>Your account has 20 credits.</p>'}),
@@ -1256,6 +1275,7 @@ test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
     message({id: 'html-template-code', htmlBody: '<template><template>x</template><p>Coupon code: SAVE20</p></template>'}),
     message({id: 'html-anchor-boundary', htmlBody: '<p>Promo <a href="https://example.test">not a </a>code: SAVE20</p>'}),
     message({id: 'html-image-boundary', htmlBody: '<p>Promo <img src="cid:x" alt="not a ">code: SAVE20</p>'}),
+    message({id: 'html-unsupported-entity', htmlBody: '<p>Coupon code: SAVE&ndash;20</p>'}),
     message({id: 'line-break-offer-context', htmlBody: '<p>Employment offer</p><p>Code: CANDIDATE123</p>'}),
     message({id: 'savings-account', body: 'Access your savings account.\nUse code 928357'}),
   ]});

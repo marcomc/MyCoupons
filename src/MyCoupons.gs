@@ -197,6 +197,12 @@ function normalizeMyCouponsEmailDates() {
     var normalized = values.map(function(row, index) {
       return [normalizedLegacyEmailDate_(row[0], index + 2)];
     });
+    var confirmedValues = range.getValues();
+    var confirmedFormulas = range.getFormulas();
+    if (!sameSheetMatrix_(values, confirmedValues) || !sameSheetMatrix_(formulas, confirmedFormulas) ||
+        !sameSheetMatrixShape_(confirmedValues, confirmedFormulas)) {
+      throw new Error('Email Date range changed before normalization. Retry after concurrent edits finish.');
+    }
     var referenceFormat = sheet.getLastRow() >= 52 ? sheet.getRange(52, emailDateColumn, 1, 1).getNumberFormat() :
       'yyyy-mm-dd HH:mm:ss';
     range.setValues(normalized);
@@ -1387,7 +1393,7 @@ function htmlToCouponText_(html) {
   }
   // Apps Script has no HTML/CSS renderer. A stylesheet means visibility cannot
   // be established reliably, so fail closed instead of importing preview text.
-  if (/<(?:blockquote|style|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)/iu.test(html)) {
+  if (/<(?:blockquote|style|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)|&(?!amp;|apos;|gt;|lt;|nbsp;|quot;)[a-z][a-z0-9]+;/iu.test(html)) {
     return '';
   }
   var withoutInactiveContent = html
