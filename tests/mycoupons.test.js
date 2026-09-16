@@ -49,6 +49,7 @@ function createRuntime({
   coerceLastWrite = false,
   beforeLiveDeduplicationRead = null,
   beforeLiveDeduplicationReadAt = 2,
+  beforeAppendFormat = null,
   beforeFinalGmailAuthorization = null,
   beforeRetentionRecheck = null,
   formulaLastWriteColumns = [],
@@ -88,6 +89,7 @@ function createRuntime({
   const numberFormats = [];
   let externalAppendDone = false;
   let liveDeduplicationReadPending = Boolean(beforeLiveDeduplicationRead);
+  let appendFormatPending = Boolean(beforeAppendFormat);
   let finalGmailAuthorizationPending = Boolean(beforeFinalGmailAuthorization);
   let retentionRecheckPending = Boolean(beforeRetentionRecheck);
   let sheetValueReadCount = 0;
@@ -169,6 +171,10 @@ function createRuntime({
           rowCount,
         }) : sheetCanEdit,
         setNumberFormat: format => {
+          if (appendFormatPending) {
+            beforeAppendFormat({column, columnCount, formulas, row, rowCount, values});
+            appendFormatPending = false;
+          }
           numberFormats.push({column, columnCount, format, row, rowCount});
           return this;
         },
@@ -728,6 +734,9 @@ test('rejects overlong and URL-like code forms rather than importing truncated t
 test('rejects absence markers and leading-apostrophe tokens without mutating Gmail or Sheet', () => {
   const runtime = createRuntime({messages: [
     message({id: 'not-required', body: 'Coupon code: not required'}),
+    message({id: 'negated-subject', subject: 'No promo code: AUTOAPPLIED'}),
+    message({id: 'negated-body', body: 'No promo code: AUTOAPPLIED'}),
+    message({id: 'negated-article', body: 'Without a coupon code: AUTOAPPLIED'}),
     message({id: 'none', body: 'Coupon code: NONE'}),
     message({id: 'apostrophe', body: 'Coupon code: "\'=SAVE20"'}),
   ]});
@@ -882,7 +891,7 @@ test('fails closed when the coupon sheet contains a duplicate deduplication key'
   ];
   const runtime = createRuntime({
     existingRows: [row, [...row]],
-    messages: [message({id: 'message-1', body: 'Coupon code: SAVE20'})],
+    messages: [message({id: 'message-1', subject: 'Earlier', body: 'Coupon code: SAVE20'})],
   });
 
   assert.throws(() => runtime.context.runMyCouponsImport(), /duplicate deduplication key/i);
@@ -906,6 +915,39 @@ test('ignores repeated legacy Notes values that are not generated deduplication 
   assert.equal(runtime.rows[3][5], 'new-coupon::SAVE20');
 });
 
+test('ignores duplicate delimiter-shaped legacy Notes without row evidence', () => {
+  const legacy = [
+    'legacy date', 'OTHER', 'legacy subject', 'legacy sender', '', 'merchant::SAVE20', 'legacy',
+  ];
+  const runtime = createRuntime({
+    existingRows: [[...legacy], [...legacy]],
+    messages: [message({id: 'new-coupon', body: 'Coupon code: SAVE20'})],
+  });
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows.length, 4);
+  assert.equal(runtime.mutations.length, 1);
+});
+
+test('ignores a delimiter-shaped Notes row with an unrelated valid Gmail thread link', () => {
+  const unrelated = [
+    '2026-01-10T08:00:00.000Z', 'SAVE20', 'Earlier', 'offers@example.com',
+    'https://mail.google.com/mail/u/?authuser=owner%40example.com#all/unrelated-thread',
+    'new-coupon::SAVE20', 'imported',
+  ];
+  const runtime = createRuntime({
+    existingRows: [unrelated],
+    messages: [message({id: 'new-coupon', body: 'Coupon code: SAVE20'})],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.context.getMyCouponsInstallationStatus())), {
+    dailyTrigger: 'missing', importState: 'current', ready: true,
+  });
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows.length, 3);
+  assert.equal(runtime.mutations.length, 1);
+});
+
 test('writes all codes before making one exact Gmail mutation for their source message', () => {
   const runtime = createRuntime({messages: [message({
     id: 'message-2',
@@ -922,7 +964,7 @@ test('writes all codes before making one exact Gmail mutation for their source m
 
 test('re-verifies every appended code for one message before its Gmail mutation', () => {
   const runtime = createRuntime({
-    beforeLiveDeduplicationReadAt: 4,
+    beforeLiveDeduplicationReadAt: 18,
     beforeLiveDeduplicationRead: ({formulas, values}) => {
       values.splice(1, 1);
       formulas.splice(1, 1);
@@ -951,6 +993,20 @@ test('uses atomic append reservation without overwriting an interleaved external
   assert.equal(runtime.rows[1][1], 'SAFE20');
   assert.deepEqual(runtime.rows[2], external);
   assert.equal(runtime.mutations[0].id, 'atomic');
+});
+
+test('fails closed if an appended reservation is deleted during formatting', () => {
+  const runtime = createRuntime({
+    beforeAppendFormat: ({formulas, row, values}) => {
+      values.splice(row - 1, 1);
+      formulas.splice(row - 1, 1);
+    },
+    messages: [message({id: 'reservation-race', body: 'Coupon code: SAFE20'})],
+  });
+
+  assert.throws(() => runtime.context.runMyCouponsImport(), /reservation changed/i);
+  assert.equal(runtime.rows.length, 1);
+  assert.deepEqual(runtime.mutations, []);
 });
 
 test('uses exact epoch boundaries and persists the pre-list snapshot watermark', () => {
@@ -1601,9 +1657,12 @@ test('runs retention even when import fails', () => {
   ];
   const runtime = createRuntime({
     existingRows: [duplicate, [...duplicate]],
-    messages: [message({
-      id: 'old-imported', date: new Date('2025-01-01T00:00:00.000Z'), labels: ['Coupon Code Discount'],
-    })],
+    messages: [
+      message({id: 'message-1', subject: 'Earlier', body: 'Coupon code: SAVE20'}),
+      message({
+        id: 'old-imported', date: new Date('2025-01-01T00:00:00.000Z'), labels: ['Coupon Code Discount'],
+      }),
+    ],
   });
   assert.throws(() => runtime.context.runMyCouponsDaily(), /duplicate deduplication key/i);
   assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-imported'}]);

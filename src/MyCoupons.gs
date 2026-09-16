@@ -174,17 +174,20 @@ function runMyCouponsImport_(config) {
     var expectedCodes = [];
     extractCouponCodes_(message.subject, message.plainText).forEach(function(code) {
       var deduplicationKey = message.id + '::' + code;
-      if (sheetState.deduplicationRecords[deduplicationKey]) {
-        if (!verifiedExistingCouponRow_(sheetState.deduplicationRecords[deduplicationKey], message, code,
-          sheetState.columns, config)) {
-          throw new Error('Existing coupon deduplication row does not prove its complete message and code identity.');
-        }
+      var existingCandidates = inspectDeduplicationCandidates_(sheetState.deduplicationCandidates[deduplicationKey],
+        message, code, sheetState.columns, config);
+      if (existingCandidates.verified.length > 1) {
+        throw new Error('Coupon sheet contains a duplicate deduplication key with verified rows.');
+      }
+      if (existingCandidates.invalidCorrelated.length) {
+        throw new Error('Existing coupon deduplication row does not prove its complete message and code identity.');
+      }
+      if (existingCandidates.verified.length === 1) {
         expectedCodes.push(code);
         return;
       }
       var row = makeCouponRow_(sheetState.columns, sheetState.columnCount, message, code, deduplicationKey, config);
       appendAndVerifyCouponRow_(sheet, row, sheetState.columns, deduplicationKey);
-      sheetState.deduplicationRecords[deduplicationKey] = {valid: true};
       expectedCodes.push(code);
       imported += 1;
     });
@@ -497,17 +500,18 @@ function readCouponSheetState_(sheet, config) {
     throw new Error('Coupon sheet must contain its existing header row.');
   }
   var columns = resolveCouponColumns_(values[0]);
-  var deduplicationRecords = {};
+  var deduplicationCandidates = {};
   values.slice(1).forEach(function(row, index) {
     var key = sheetSemanticText_(row[columns.deduplicationKey]);
-    if (key && parseDeduplicationKey_(key)) {
-      if (Object.prototype.hasOwnProperty.call(deduplicationRecords, key)) {
-        throw new Error('Coupon sheet contains a duplicate deduplication key.');
+    var parsedKey = key && parseDeduplicationKey_(key);
+    if (parsedKey) {
+      if (!Object.prototype.hasOwnProperty.call(deduplicationCandidates, key)) {
+        deduplicationCandidates[key] = [];
       }
-      deduplicationRecords[key] = {row: row, formulas: formulas[index + 1]};
+      deduplicationCandidates[key].push({row: row, formulas: formulas[index + 1]});
     }
   });
-  return {columnCount: values[0].length, columns: columns, deduplicationRecords: deduplicationRecords};
+  return {columnCount: values[0].length, columns: columns, deduplicationCandidates: deduplicationCandidates};
 }
 
 function parseDeduplicationKey_(key) {
@@ -584,16 +588,12 @@ function sheetSemanticText_(value) {
 
 function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
   sheet.appendRow(row);
-  var reservation = findExactAppendedCouponRow_(sheet, columns, deduplicationKey);
-  if (!reservation) {
-    throw new Error('Coupon row reservation is ambiguous after append.');
-  }
-  var rowNumber = reservation.rowNumber;
   populatedCouponColumns_(columns).forEach(function(column) {
-    sheet.getRange(rowNumber, column + 1, 1, 1).setNumberFormat('@');
+    var reservation = verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey);
+    sheet.getRange(reservation.rowNumber, column + 1, 1, 1).setNumberFormat('@');
   });
-  var range = sheet.getRange(rowNumber, 1, 1, row.length);
-  range.setValues([row]);
+  var reservation = verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey);
+  var range = sheet.getRange(reservation.rowNumber, 1, 1, row.length);
   var written = range.getValues()[0];
   var formulas = range.getFormulas()[0];
   if (!verifiedCouponRow_(written, formulas, row, columns, deduplicationKey, null)) {
@@ -601,14 +601,23 @@ function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
   }
 }
 
-function findExactAppendedCouponRow_(sheet, columns, deduplicationKey) {
+function verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey) {
+  var reservation = findExactAppendedCouponRow_(sheet, row, columns, deduplicationKey);
+  if (!reservation || !verifiedCouponRow_(reservation.row, reservation.formulas, row, columns, deduplicationKey, null)) {
+    throw new Error('Coupon row reservation changed before its write could be authorized.');
+  }
+  return reservation;
+}
+
+function findExactAppendedCouponRow_(sheet, expectedRow, columns, deduplicationKey) {
   var data = sheet.getDataRange();
   var values = data.getValues();
   var formulas = data.getFormulas();
   var matches = [];
-  values.slice(1).forEach(function(row, index) {
-    if (sheetSemanticText_(row[columns.deduplicationKey]) === deduplicationKey) {
-      matches.push({rowNumber: index + 2, row: row, formulas: formulas[index + 1]});
+  values.slice(1).forEach(function(existingRow, index) {
+    if (sheetSemanticText_(existingRow[columns.deduplicationKey]) === deduplicationKey &&
+        verifiedCouponRow_(existingRow, formulas[index + 1], expectedRow, columns, deduplicationKey, null)) {
+      matches.push({rowNumber: index + 2, row: existingRow, formulas: formulas[index + 1]});
     }
   });
   return matches.length === 1 ? matches[0] : null;
@@ -633,9 +642,33 @@ function verifiedLiveExpectedCouponRows_(sheet, message, codes, config) {
   var liveState = readCouponSheetState_(sheet, config);
   return codes.every(function(code) {
     var deduplicationKey = message.id + '::' + code;
-    return verifiedExistingCouponRow_(liveState.deduplicationRecords[deduplicationKey], message, code,
-      liveState.columns, config);
+    var candidates = inspectDeduplicationCandidates_(liveState.deduplicationCandidates[deduplicationKey], message,
+      code, liveState.columns, config);
+    return candidates.verified.length === 1 && !candidates.invalidCorrelated.length;
   });
+}
+
+function inspectDeduplicationCandidates_(candidates, message, code, columns, config) {
+  var verified = [];
+  var invalidCorrelated = [];
+  (candidates || []).forEach(function(record) {
+    if (verifiedExistingCouponRow_(record, message, code, columns, config)) {
+      verified.push(record);
+    } else if (deduplicationCandidateCorrelatesMessage_(record, message, config, columns)) {
+      invalidCorrelated.push(record);
+    }
+  });
+  return {invalidCorrelated: invalidCorrelated, verified: verified};
+}
+
+function deduplicationCandidateCorrelatesMessage_(record, message, config, columns) {
+  if (!record || !Array.isArray(record.row)) {
+    return false;
+  }
+  var storedLink = sheetSemanticText_(record.row[columns.gmailLink]);
+  return storedLink === gmailLinkForMessage_(message.threadId, config) ||
+    storedLink === legacyGmailLinkForMessage_(message.id) ||
+    storedLink === ownerStableLegacyGmailLinkForMessage_(message.id, config);
 }
 
 function verifiedCouponRow_(written, formulas, expected, columns, deduplicationKey, legacyGmailLinks) {
@@ -1007,12 +1040,20 @@ function collectExplicitCouponTokens_(text, found) {
   [quoted, delimited].forEach(function(expression) {
     var match;
     while ((match = expression.exec(text)) !== null) {
+      if (isNegatedCouponIntroducer_(text, match.index)) {
+        continue;
+      }
       var code = acceptCouponToken_(match[1], expression === quoted, /\s+\p{L}/u.test(text.slice(expression.lastIndex)));
       if (code && found.indexOf(code) === -1) {
         found.push(code);
       }
     }
   });
+}
+
+function isNegatedCouponIntroducer_(text, introducerIndex) {
+  var preceding = text.slice(Math.max(0, introducerIndex - 80), introducerIndex);
+  return /(?:^|[\s.!?;:])(?:no|without|none|not|nessun[oa]?|non)(?:\s+(?:an?|un[oa]?))?\s*$/iu.test(preceding);
 }
 
 function acceptCouponToken_(token, quoted, hasFollowingWord) {
