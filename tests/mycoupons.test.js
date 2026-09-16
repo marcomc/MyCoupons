@@ -9,6 +9,7 @@ function message({
   id,
   threadId = id,
   attachmentText = '',
+  additionalHeaders = [],
   inlineAttachmentText = '',
   encodedBody = null,
   subject = '',
@@ -18,6 +19,7 @@ function message({
   labels = [],
 } = {}) {
   return {
+    additionalHeaders,
     attachmentText,
     body,
     date,
@@ -249,7 +251,7 @@ function createRuntime({
       headers: [
         {name: 'Subject', value: value.subject},
         {name: 'From', value: value.from},
-      ],
+      ].concat(value.additionalHeaders),
       mimeType: 'multipart/alternative',
       parts: [{
         body: value.inlineAttachmentText ? {attachmentId: 'inline-' + value.id} :
@@ -343,6 +345,14 @@ function createRuntime({
             }
             modifyMessageCount += 1;
             mutations.push({resource, userId, id});
+            const labels = gmailMessages.get(id).labelIds;
+            resource.addLabelIds.forEach(label => {
+              if (!labels.includes(label)) labels.push(label);
+            });
+            resource.removeLabelIds.forEach(label => {
+              const index = labels.indexOf(label);
+              if (index !== -1) labels.splice(index, 1);
+            });
           },
           trash: (userId, id) => {
             if (trashFailureAfter !== null && trashMessageCount >= trashFailureAfter) {
@@ -794,6 +804,11 @@ test('does not import coupon codes found only in quoted reply or forward history
       body: 'No new offer.\n\nFrom: Offers <offers@example.com>\nSent: Tuesday, January 6, 2026 10:00 AM\nTo: Owner <owner@example.com>\nCc: Team <team@example.com>\nSubject: Your promotion\nCoupon code: OLD20',
     }),
     message({
+      id: 'italian-outlook-header-block',
+      subject: 'Inoltro promozione',
+      body: 'Nessun nuovo codice.\n\nDa: Offerte <offers@example.com>\nInviato: martedì 6 gennaio 2026 10:00\nA: Owner <owner@example.com>\nCcn: Archivio <archive@example.com>\nRispondi a: support@example.com\nOggetto: Promozione precedente\nCodice sconto: OLD-IT20',
+    }),
+    message({
       id: 'new-top-content',
       subject: 'Re: promotion',
       body: 'Coupon code: NEW20\n\n---------- Forwarded Message ----------\nCoupon code: OLD20',
@@ -820,6 +835,19 @@ test('does not treat a standalone From line as quoted history', () => {
 
   assert.equal(runtime.context.runMyCouponsImport().imported, 1);
   assert.equal(runtime.rows[1][1], 'REAL20');
+});
+
+test('skips a message with duplicate Subject headers without mutating Gmail', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'duplicate-subject',
+    subject: 'First subject',
+    additionalHeaders: [{name: 'Subject', value: 'Second subject'}],
+    body: 'Coupon code: SAVE20',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().complete, true);
+  assert.equal(runtime.rows.length, 1);
+  assert.deepEqual(runtime.mutations, []);
 });
 
 test('requires the opened spreadsheet to have the exact configured name before Gmail mutation', () => {
@@ -872,6 +900,8 @@ test('rejects absence markers and leading-apostrophe tokens without mutating Gma
     message({id: 'negated-need', body: 'No need for a promo code: AUTOAPPLIED'}),
     message({id: 'negated-require', body: 'This offer does not require a promo code: AUTOAPPLIED'}),
     message({id: 'negated-italian', body: 'Questa offerta non richiede un codice sconto: AUTOAPPLIED'}),
+    message({id: 'negated-italian-necessary', body: 'Non è necessario alcun codice sconto: AUTOAPPLIED'}),
+    message({id: 'negated-italian-needed', body: 'Non occorre un codice sconto: AUTOAPPLIED'}),
     message({id: 'negated-contraction', body: "This offer doesn't require a promo code: AUTOAPPLIED"}),
     message({id: 'negated-typographic-contraction', body: 'This offer don’t need a promo code: AUTOAPPLIED'}),
     message({id: 'none', body: 'Coupon code: NONE'}),
@@ -1803,6 +1833,29 @@ test('surfaces incomplete retention through the daily result', () => {
   const outcome = runtime.context.runMyCouponsDaily();
   assert.equal(outcome.import.complete, true);
   assert.deepEqual(JSON.parse(JSON.stringify(outcome.retention)), {complete: false, trashed: 1});
+});
+
+test('defers retention until an incomplete import scan has resumed and committed', () => {
+  const runtime = createRuntime({
+    config: {retentionDays: 1},
+    modifyFailureAfter: 1,
+    messages: [
+      message({id: 'old-first', date: new Date('2026-01-10T08:00:00.000Z'), body: 'Coupon code: FIRST20'}),
+      message({id: 'old-second', date: new Date('2026-01-10T08:01:00.000Z'), body: 'Coupon code: SECOND20'}),
+    ],
+  });
+
+  const first = runtime.context.runMyCouponsDaily();
+  assert.equal(first.import.complete, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(first.retention)), {complete: false, trashed: 0});
+  assert.deepEqual(runtime.trashed, []);
+  assert.deepEqual(JSON.parse(runtime.properties.get('MYCOUPONS_SCAN_STATE')).pendingIds, ['old-second']);
+
+  runtime.setModifyFailureAfter(null);
+  const resumed = runtime.context.runMyCouponsDaily();
+  assert.equal(resumed.import.complete, true);
+  assert.deepEqual(runtime.mutations.map(mutation => mutation.id), ['old-first', 'old-second']);
+  assert.deepEqual(runtime.trashed.map(entry => entry.id), ['old-first', 'old-second']);
 });
 
 test('runs retention even when import fails', () => {

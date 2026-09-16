@@ -61,10 +61,16 @@ function runMyCouponsDaily() {
     }
     var retention;
     var retentionError = null;
-    try {
-      retention = cleanupExpiredImportedMessages_(config);
-    } catch (error) {
-      retentionError = error;
+    if (!importError && imported && !imported.complete) {
+      // Retention may trash mail that is still part of a resumable import page.
+      // Defer it until that exact scan has committed its watermark.
+      retention = {complete: false, trashed: 0};
+    } else {
+      try {
+        retention = cleanupExpiredImportedMessages_(config);
+      } catch (error) {
+        retentionError = error;
+      }
     }
     if (importError) {
       throw importError;
@@ -168,7 +174,7 @@ function runMyCouponsImport_(config) {
 
   function processMessage_(message) {
     scanned += 1;
-    if (message.date.getTime() < config.initialDate.getTime() || messageHasLabel_(message, label.id) ||
+    if (message.sourceAmbiguous || message.date.getTime() < config.initialDate.getTime() || messageHasLabel_(message, label.id) ||
         messageHasSystemExclusionLabel_(message)) {
       return true;
     }
@@ -958,9 +964,16 @@ function toMyCouponsMessage_(message) {
     throw new Error('Gmail returned an incomplete message.');
   }
   var headers = {};
+  var subjectHeaderCount = 0;
   (message.payload.headers || []).forEach(function(header) {
     if (header && typeof header.name === 'string' && typeof header.value === 'string') {
-      headers[header.name.toLowerCase()] = header.value;
+      var name = header.name.toLowerCase();
+      if (name === 'subject') {
+        subjectHeaderCount += 1;
+      }
+      if (!Object.prototype.hasOwnProperty.call(headers, name)) {
+        headers[name] = header.value;
+      }
     }
   });
   var milliseconds = Number(message.internalDate);
@@ -974,6 +987,7 @@ function toMyCouponsMessage_(message) {
     id: message.id,
     labelIds: message.labelIds || [],
     plainText: extractPlainText_(message.payload, message.id),
+    sourceAmbiguous: subjectHeaderCount > 1,
     subject: headers.subject || '',
     threadId: message.threadId,
   };
@@ -1080,17 +1094,22 @@ function stripQuotedReplyHistory_(plainText) {
 }
 
 function isOutlookQuotedHeaderBlock_(lines, index) {
-  var required = ['from', 'sent', 'to'];
-  if (!required.every(function(name, offset) {
-    return new RegExp('^\\s*' + name + '\\s*:\\s*\\S', 'iu').test(lines[index + offset] || '');
-  })) {
-    return false;
-  }
-  var subjectIndex = index + required.length;
-  while (/^\s*(?:cc|bcc|reply-to)\s*:\s*\S/iu.test(lines[subjectIndex] || '')) {
-    subjectIndex += 1;
-  }
-  return /^\s*subject\s*:\s*\S/iu.test(lines[subjectIndex] || '');
+  return [
+    {from: 'from', sent: 'sent', to: 'to', optional: 'cc|bcc|reply-to', subject: 'subject'},
+    {from: 'da', sent: 'inviato', to: 'a', optional: 'cc|ccn|rispondi\\s+a', subject: 'oggetto'},
+  ].some(function(labels) {
+    var required = [labels.from, labels.sent, labels.to];
+    if (!required.every(function(name, offset) {
+      return new RegExp('^\\s*' + name + '\\s*:\\s*\\S', 'iu').test(lines[index + offset] || '');
+    })) {
+      return false;
+    }
+    var subjectIndex = index + required.length;
+    while (new RegExp('^\\s*(?:' + labels.optional + ')\\s*:\\s*\\S', 'iu').test(lines[subjectIndex] || '')) {
+      subjectIndex += 1;
+    }
+    return new RegExp('^\\s*' + labels.subject + '\\s*:\\s*\\S', 'iu').test(lines[subjectIndex] || '');
+  });
 }
 
 function isQuotedReplyHistoryMarker_(line) {
@@ -1123,7 +1142,7 @@ function hasNoCodeContextBeforeIntroducer_(text, introducerIndex) {
   var sameSentence = text.slice(0, introducerIndex).split(/[\n.!?]+/u).pop();
   var context = sameSentence.slice(-160);
   return /\b(?:no(?:\s+need\s+for)?|without|none|do(?:es)?\s+not\s+(?:need|require)|do(?:es)?n['’]t\s+(?:need|require)|not\s+require)(?:\s+(?:an?|the))?\s*$/iu.test(context) ||
-    /\b(?:nessun[oa]?(?:\s+bisogno\s+di)?|senza|non\s+richiede|non\s+serve)(?:\s+(?:un[oa]?|il|lo))?\s*$/iu.test(context);
+    /\b(?:nessun[oa]?(?:\s+bisogno\s+di)?|senza|non\s+richiede|non\s+serve|non\s+(?:è|e)\s+necessario|non\s+occorre)(?:\s+(?:alcun|un[oa]?|il|lo))?\s*$/iu.test(context);
 }
 
 function acceptCouponToken_(token, quoted, hasFollowingWord) {
