@@ -889,6 +889,7 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'send-to-friend-referral', body: 'Send to a friend your promo code: FRIEND20'}),
     message({id: 'refer-friend', body: 'Refer a friend with promo code: FRIEND20'}),
     message({id: 'invite-friends', body: 'Invite friends with discount code: FRIEND20'}),
+    message({id: 'invite-action-code', body: 'Invite your friends today.\nUse code SHARING'}),
     message({id: 'italian-invite-friend', body: 'Invita un amico. Codice sconto: FRIEND20'}),
     message({id: 'friends-after-code', body: 'Promo code: FRIEND20 — invite friends'}),
     message({id: 'cross-field-referral', subject: 'Refer a friend today', body: 'Promo code: FRIEND20'}),

@@ -1466,7 +1466,7 @@ function extractCouponCodes_(subject, plainText, promotionContextDictionaries) {
   });
   var messageContext = content.join('\n');
   if (/\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b/iu.test(messageContext) ||
-      hasReferralCouponContext_(messageContext, promotionContextDictionaries)) {
+      hasReferralCouponContext_(messageContext)) {
     return [];
   }
   var found = [];
@@ -1480,10 +1480,7 @@ function isInheritedReplyOrForwardSubject_(subject) {
   return /^\s*(?:(?:re|fw|fwd)\s*:\s*)+/iu.test(subject);
 }
 
-function hasReferralCouponContext_(text, promotionContextDictionaries) {
-  if (!hasCouponPromotionContext_(text, promotionContextDictionaries)) {
-    return false;
-  }
+function hasReferralCouponContext_(text) {
   return /\breferral\b/iu.test(text) ||
     /\b(?:share|refer|invite|give|send|invia|inoltra|invita|condividi|presenta)\b/iu.test(text) &&
       /\b(?:friends?|amic(?:o|a|i|he))\b/iu.test(text);
