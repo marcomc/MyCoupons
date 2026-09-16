@@ -894,6 +894,7 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'friends-after-code', body: 'Promo code: FRIEND20 — invite friends'}),
     message({id: 'cross-field-referral', subject: 'Refer a friend today', body: 'Promo code: FRIEND20'}),
     message({id: 'otp', body: 'Your verification code: 123456'}),
+    message({id: 'standalone-otp-action-code', body: 'Your OTP is 123456.\nUse code 123456'}),
     message({id: 'sign-in-action-code', body: 'Your sign-in code is below.\nUse code 123456'}),
     message({id: 'security-action-code', body: 'Security code required.\nEnter code 867530'}),
     message({id: 'generic', body: 'Use SAVE20 at checkout'}),
@@ -1236,6 +1237,8 @@ test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
     message({id: 'html-referral', htmlBody: '<p>Share your promo code: FRIEND20 with a friend.</p>'}),
     message({id: 'html-bare-token', htmlBody: '<p><strong>SAVE20</strong></p>'}),
     message({id: 'html-link-code', htmlBody: '<p>Coupon code: <a href="https://example.test">SAVE20</a></p>'}),
+    message({id: 'html-quoted-code', htmlBody: '<p>Thanks</p><blockquote>Coupon code: SAVE20</blockquote>'}),
+    message({id: 'html-hidden-code', htmlBody: '<p hidden>Coupon code: SAVE20</p>'}),
   ]});
 
   assert.equal(runtime.context.runMyCouponsImport().imported, 0);

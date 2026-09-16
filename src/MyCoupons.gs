@@ -1381,6 +1381,8 @@ function htmlToCouponText_(html) {
   var withoutInactiveContent = html
     .replace(/<!--[\s\S]*?-->/gu, '')
     .replace(/<a\b[^>]*>[\s\S]*?<\/a\s*>/giu, '')
+    .replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote\s*>/giu, '')
+    .replace(/<([A-Za-z][A-Za-z0-9:-]*)\b(?=[^>]*(?:\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']*["']))[^>]*>[\s\S]*?<\/\1\s*>/giu, '')
     .replace(/<(?:script|style|noscript|template)\b[^>]*>[\s\S]*?<\/(?:script|style|noscript|template)\s*>/giu, '');
   var lineAware = withoutInactiveContent
     .replace(/<(?:br|hr)\b[^>]*>/giu, '\n')
@@ -1469,7 +1471,7 @@ function extractCouponCodes_(subject, plainText, promotionContextDictionaries) {
     }
   });
   var messageContext = content.join('\n');
-  if (/\b(?:otp|one[- ]time password|verification|authentication|sign[- ]in|login|security)\s+code\b|\bcodice\s+(?:(?:di\s+)?(?:verifica|accesso|sicurezza)|otp)\b/iu.test(messageContext) ||
+  if (/\botp\b|\b(?:one[- ]time password|verification|authentication|sign[- ]in|login|security)\s+code\b|\bcodice\s+(?:(?:di\s+)?(?:verifica|accesso|sicurezza)|otp)\b/iu.test(messageContext) ||
       hasReferralCouponContext_(messageContext)) {
     return [];
   }
