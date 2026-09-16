@@ -9,8 +9,8 @@
   Cloud project. Do not create replacement resources unless an audited existing
   resource is missing or ambiguous.
 - The baseline imports only explicitly introduced coupon or promotional codes
-  from subject and plain-text email content. It has no AI, image processing or
-  review UI.
+  from subject and bounded visible `text/plain` or `text/html` email content.
+  It has no AI, image processing or review UI.
 - A no-code, referral-only, authentication or ambiguous message remains
   untouched.
 - Write and verify each Sheet row before labeling and archiving its source
