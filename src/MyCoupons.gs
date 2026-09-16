@@ -252,14 +252,26 @@ function cleanupExpiredImportedMessages_(config) {
   var trashed = 0;
   var label = resolveImportedLabel_(config);
   var listed = listFirstGmailMessagePage_(buildRetentionQuery_(config, threshold));
-  listed.messages.forEach(function(message) {
+  for (var index = 0; index < listed.messages.length; index += 1) {
+    var message;
+    try {
+      message = toMyCouponsMessage_(Gmail.Users.Messages.get('me', listed.messages[index].id, {format: 'full'}));
+    } catch (error) {
+      if (isGmailRateLimitError_(error)) {
+        return {complete: false, trashed: trashed};
+      }
+      if (isExactGmailMessageNotFound_(error)) {
+        continue;
+      }
+      throw error;
+    }
     if (!messageHasLabel_(message, label.id) || message.date.getTime() >= threshold.getTime() ||
         messageHasSystemExclusionLabel_(message)) {
-      return;
+      continue;
     }
     Gmail.Users.Messages.trash('me', message.id);
     trashed += 1;
-  });
+  }
   return {complete: listed.complete, trashed: trashed};
 }
 
@@ -567,7 +579,7 @@ function mutateImportedMessage_(messageId, labelId, archiveImported) {
 }
 
 function buildImportQuery_(scan) {
-  return 'after:' + Math.floor(new Date(scan.start).getTime() / 1000) +
+  return 'in:anywhere after:' + Math.floor(new Date(scan.start).getTime() / 1000) +
     ' before:' + Math.floor(new Date(scan.boundary).getTime() / 1000);
 }
 
@@ -858,6 +870,7 @@ function stripQuotedReplyHistory_(plainText) {
 function isQuotedReplyHistoryMarker_(line) {
   return /^\s*>/u.test(line) ||
     /^\s*On\s+.+\bwrote:\s*$/iu.test(line) ||
+    /^\s*Il\s+giorno\s+.{1,500}\s+ha\s+scritto:\s*$/iu.test(line) ||
     /^\s*(?:-+\s*)?(?:Original Message|Forwarded Message|Messaggio inoltrato)(?:\s*-+)?\s*:?\s*$/iu.test(line) ||
     /^\s*Begin forwarded message:\s*$/iu.test(line);
 }

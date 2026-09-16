@@ -48,6 +48,7 @@ function createRuntime({
   corruptLastWriteColumns = [],
   coerceLastWrite = false,
   beforeLiveDeduplicationRead = null,
+  beforeRetentionRecheck = null,
   formulaLastWriteColumns = [],
   attachmentText = '',
   advanceClockOnList = false,
@@ -79,6 +80,7 @@ function createRuntime({
   const numberFormats = [];
   let externalAppendDone = false;
   let liveDeduplicationReadPending = Boolean(beforeLiveDeduplicationRead);
+  let retentionRecheckPending = Boolean(beforeRetentionRecheck);
   let sheetValueReadCount = 0;
   const properties = new Map();
   const installedConfig = {
@@ -227,6 +229,10 @@ function createRuntime({
         Messages: {
           get: (userId, id) => {
             assert.equal(userId, 'me');
+            if (retentionRecheckPending && getMessageCount === 1) {
+              beforeRetentionRecheck(gmailMessages);
+              retentionRecheckPending = false;
+            }
             if (missingMessageIds.includes(id)) {
               throw {code: 404, message: 'Requested entity was not found.'};
             }
@@ -443,6 +449,7 @@ test('keeps a multi-page import query stable after importing and labeling an ear
   assert.equal(runtime.context.runMyCouponsImport().imported, 2);
   assert.equal(runtime.queries.length, 2);
   assert.equal(runtime.queries[0], runtime.queries[1]);
+  assert.match(runtime.queries[0], /^in:anywhere after:\d+ before:\d+$/u);
   assert.doesNotMatch(runtime.queries[0], /(?:-label:|-in:spam|-in:trash)/u);
   assert.equal(runtime.mutations.length, 2);
 });
@@ -582,6 +589,11 @@ test('does not import coupon codes found only in quoted reply or forward history
       id: 'italian-forward',
       subject: 'Inoltro promozione',
       body: 'Nessun nuovo codice.\n\nMessaggio inoltrato\nCoupon code: SAVE20',
+    }),
+    message({
+      id: 'italian-reply',
+      subject: 'Re: promozione',
+      body: 'Nessun nuovo codice.\n\nIl giorno mar 6 gen 2026 alle 10:00 Offers <offers@example.com> ha scritto:\nCodice sconto: SAVE20',
     }),
     message({
       id: 'new-top-content',
@@ -1261,6 +1273,43 @@ test('moves only old imported messages to Gmail Trash during retention', () => {
   assert.equal(outcome.complete, true);
   assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-imported'}]);
   assert.match(runtime.queries[0], new RegExp(`before:${Math.floor(Date.parse('2025-07-15T10:00:00.000Z') / 1000)}`));
+});
+
+test('revalidates each retention candidate immediately before trashing it', () => {
+  const transitions = [
+    gmailMessages => { gmailMessages.get('old-imported').labelIds = []; },
+    gmailMessages => { gmailMessages.get('old-imported').labelIds.push('DRAFT'); },
+  ];
+  transitions.forEach(beforeRetentionRecheck => {
+    const runtime = createRuntime({
+      beforeRetentionRecheck,
+      messages: [message({
+        id: 'old-imported',
+        date: new Date('2025-01-01T00:00:00.000Z'),
+        labels: ['Coupon Code Discount'],
+      })],
+    });
+
+    assert.deepEqual(JSON.parse(JSON.stringify(runtime.context.cleanupExpiredImportedMessages())), {
+      complete: true, trashed: 0,
+    });
+    assert.equal(runtime.trashed.length, 0);
+  });
+});
+
+test('stops retention safely when an immediate candidate recheck is rate limited', () => {
+  const runtime = createRuntime({
+    fetchFailureAfter: 3,
+    messages: [
+      message({id: 'old-first', date: new Date('2025-01-01T00:00:00.000Z'), labels: ['Coupon Code Discount']}),
+      message({id: 'old-second', date: new Date('2025-01-02T00:00:00.000Z'), labels: ['Coupon Code Discount']}),
+    ],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.context.cleanupExpiredImportedMessages())), {
+    complete: false, trashed: 1,
+  });
+  assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-first'}]);
 });
 
 test('reports an incomplete retention page after safely trashing its processed messages', () => {
