@@ -1385,10 +1385,11 @@ function htmlToCouponText_(html) {
   }
   var withoutInactiveContent = html
     .replace(/<!--[\s\S]*?-->/gu, '')
+    .replace(/<head\b[^>]*>[\s\S]*?<\/head\s*>/giu, '')
     .replace(/<a\b[^>]*>[\s\S]*?<\/a\s*>/giu, ' [link omitted] ')
     .replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote\s*>/giu, '')
     .replace(/<([A-Za-z][A-Za-z0-9:-]*)\b(?=[^>]*(?:\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']*["']))[^>]*>[\s\S]*?<\/\1\s*>/giu, '')
-    .replace(/<(?:script|style|noscript|template)\b[^>]*>[\s\S]*?<\/(?:script|style|noscript|template)\s*>/giu, '');
+    .replace(/<(?:script|style|noscript|template|title)\b[^>]*>[\s\S]*?<\/(?:script|style|noscript|template|title)\s*>/giu, '');
   var lineAware = withoutInactiveContent
     .replace(/<(?:br|hr)\b[^>]*>/giu, '\n')
     .replace(/<\/(?:p|div|li|tr|h[1-6]|table|section|article|blockquote)\s*>/giu, '\n')
@@ -1507,7 +1508,7 @@ function hasCouponPromotionContext_(text, promotionContextDictionaries) {
 }
 
 function escapePromotionContextTerm_(term) {
-  return term.replace(/[|\\{}()[\]^$+*?.]/gu, '\\$&').replace(/ /gu, '\\s+');
+  return term.replace(/[|\\{}()[\]^$+*?.]/gu, '\\$&').replace(/ /gu, '[ \\t]+');
 }
 
 function stripQuotedReplyHistory_(plainText) {
