@@ -9,6 +9,7 @@ var MYCOUPONS_DAILY_SCHEDULE_VERSION = 2;
 var MYCOUPONS_DAILY_HANDLER = 'runMyCouponsDaily';
 var MYCOUPONS_SEARCH_PAGE_SIZE = 100;
 var MYCOUPONS_SHEET_CELL_MAX_LENGTH = 50000;
+var MYCOUPONS_TEXT_PART_MAX_BYTES = 100000;
 
 var MYCOUPONS_DEFAULTS = {
   archiveImported: true,
@@ -62,7 +63,7 @@ function runMyCouponsDaily() {
     var retention;
     var retentionError = null;
     if ((!importError && imported && !imported.complete) ||
-        (importError && hasPersistedImportScanState_())) {
+        (importError && hasActiveImportScanState_(config))) {
       // Retention may trash mail that is still part of a resumable import page.
       // Defer it until that exact scan has committed its watermark.
       retention = {complete: false, trashed: 0};
@@ -92,7 +93,7 @@ function cleanupExpiredImportedMessages() {
   return withMyCouponsLock_(function() {
     var config = getMyCouponsConfig_();
     assertMyCouponsOwner_(config);
-    if (hasPersistedImportScanState_()) {
+    if (hasActiveImportScanState_(config)) {
       return {complete: false, trashed: 0};
     }
     return cleanupExpiredImportedMessages_(config);
@@ -936,8 +937,21 @@ function saveScanState_(scan) {
   PropertiesService.getScriptProperties().setProperty(MYCOUPONS_SCAN_STATE_PROPERTY, JSON.stringify(scan));
 }
 
-function hasPersistedImportScanState_() {
-  return !!PropertiesService.getScriptProperties().getProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
+function hasActiveImportScanState_(config) {
+  var properties = PropertiesService.getScriptProperties();
+  var raw = properties.getProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
+  if (!raw) {
+    return false;
+  }
+  try {
+    var label = resolveImportedLabel_(config);
+    var sheetId = resolveCouponSheetId_(resolveCouponSheet_(config));
+    var scan = parseStoredScanState_(raw, new Date());
+    return scan.configIdentity === scanConfigIdentity_(config, sheetId) && scan.labelName === config.labelName &&
+      scan.labelId === label.id && scan.sheetId === sheetId;
+  } catch (error) {
+    return true;
+  }
 }
 
 function gmailListOptions_(query, pageToken) {
@@ -1021,27 +1035,34 @@ function validOpaqueGmailId_(value) {
 
 function extractPlainText_(payload, messageId) {
   var plainText = [];
-  collectPlainTextParts_(payload, plainText, messageId);
+  collectPlainTextParts_(payload, plainText, messageId, {remaining: MYCOUPONS_TEXT_PART_MAX_BYTES});
   return plainText.join('\n');
 }
 
-function collectPlainTextParts_(part, plainText, messageId) {
+function collectPlainTextParts_(part, plainText, messageId, budget) {
   if (isAttachedPart_(part)) {
     return;
   }
   if (String(part.mimeType || '').toLowerCase() === 'text/plain' && part.body) {
     var encoded = part.body.data;
+    if (part.body.size > MYCOUPONS_TEXT_PART_MAX_BYTES) {
+      return;
+    }
     if (!encoded && validOpaqueGmailId_(part.body.attachmentId)) {
       var attachment = Gmail.Users.Messages.Attachments.get('me', messageId, part.body.attachmentId);
       encoded = attachment && attachment.data;
     }
+    if (typeof encoded !== 'string' || encoded.length > Math.ceil(MYCOUPONS_TEXT_PART_MAX_BYTES * 4 / 3) + 4) {
+      return;
+    }
     var decoded = decodeBase64UrlTextPart_(encoded, part);
-    if (decoded !== null) {
+    if (decoded !== null && decoded.length <= budget.remaining) {
       plainText.push(decoded);
+      budget.remaining -= decoded.length;
     }
   }
   (part.parts || []).forEach(function(child) {
-    collectPlainTextParts_(child, plainText, messageId);
+    collectPlainTextParts_(child, plainText, messageId, budget);
   });
 }
 
@@ -1093,6 +1114,9 @@ function declaredPlainTextCharset_(part) {
       }
       charsets.push((match[1] || match[2]).toLowerCase());
     }
+  }
+  if (!charsets.length) {
+    return 'US-ASCII';
   }
   if (charsets.length !== 1) {
     return null;

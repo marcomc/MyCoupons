@@ -11,6 +11,7 @@ function message({
   attachmentText = '',
   additionalHeaders = [],
   plainTextHeaders = [],
+  plainTextSize = undefined,
   inlineAttachmentText = '',
   encodedBody = null,
   subject = '',
@@ -30,6 +31,7 @@ function message({
     inlineAttachmentText,
     encodedBody,
     plainTextHeaders,
+    plainTextSize,
     subject,
     threadId,
   };
@@ -265,7 +267,7 @@ function createRuntime({
       mimeType: 'multipart/alternative',
       parts: [{
         body: value.inlineAttachmentText ? {attachmentId: 'inline-' + value.id} :
-          {data: value.encodedBody ?? Buffer.from(value.body).toString('base64url')},
+          {data: value.encodedBody ?? Buffer.from(value.body).toString('base64url'), ...(value.plainTextSize === undefined ? {} : {size: value.plainTextSize})},
         headers: value.plainTextHeaders,
         mimeType: 'text/plain',
       }].concat(value.attachmentText ? [{
@@ -530,6 +532,16 @@ test('preserves an explicitly declared ISO-8859-1 coupon code without UTF-8 corr
   assert.deepEqual(runtime.mutations.map(entry => entry.id), ['latin1-coupon']);
 });
 
+test('decodes an ASCII MIME part that declares text/plain without a charset', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'implicit-ascii', body: 'Coupon code: ASCII20',
+    plainTextHeaders: [{name: 'Content-Type', value: 'text/plain'}],
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'ASCII20');
+});
+
 test('skips lossy or unsupported MIME text charsets without blocking later messages', () => {
   const runtime = createRuntime({messages: [
     message({id: 'malformed-utf8', encodedBody: Buffer.from([67, 111, 100, 101, 58, 32, 0xc8, 50, 48]).toString('base64url')}),
@@ -543,6 +555,17 @@ test('skips lossy or unsupported MIME text charsets without blocking later messa
   assert.equal(runtime.context.runMyCouponsImport().imported, 1);
   assert.equal(runtime.rows[1][1], 'SAFE20');
   assert.deepEqual(runtime.mutations.map(entry => entry.id), ['valid-after-charset']);
+});
+
+test('skips an oversized plain-text MIME part before decoding and continues the scan', () => {
+  const runtime = createRuntime({messages: [
+    message({id: 'oversized-plain-text', body: 'Coupon code: LARGE20', plainTextSize: 100_001}),
+    message({id: 'valid-after-oversized-text', body: 'Coupon code: SAFE20'}),
+  ]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'SAFE20');
+  assert.deepEqual(runtime.mutations.map(entry => entry.id), ['valid-after-oversized-text']);
 });
 
 test('skips oversized Sheet metadata without blocking later valid Gmail messages', () => {
@@ -2020,6 +2043,31 @@ test('continues retention when import preflight fails before a scan is persisted
   assert.throws(() => runtime.context.runMyCouponsDaily(), /not editable/i);
   assert.equal(runtime.properties.has('MYCOUPONS_SCAN_STATE'), false);
   assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-imported'}]);
+});
+
+test('does not let a stale scan state defer retention after a replacement target preflight fails', () => {
+  const oldIdentity = JSON.stringify([
+    'owner@example.com', 'Coupon Code Discount', 'sheet-id', 'Coupon Manager', 12345, true,
+    '2026-01-01T00:00:00.000Z', 1,
+  ]);
+  const runtime = createRuntime({
+    config: {archiveImported: false},
+    scanState: JSON.stringify({
+      boundary: '2026-01-11T10:00:00.000Z', configIdentity: oldIdentity, labelId: 'Label_Imported',
+      labelName: 'Coupon Code Discount', listedFinalPage: false, pageToken: '', pendingIds: [], sheetId: 12345,
+      start: '2026-01-01T00:00:00.000Z', version: 3,
+    }),
+    sheetCanEdit: false,
+    messages: [message({
+      id: 'old-imported', date: new Date('2025-01-01T00:00:00.000Z'), labels: ['Coupon Code Discount'],
+    })],
+  });
+
+  assert.throws(() => runtime.context.runMyCouponsDaily(), /not editable/i);
+  assert.deepEqual(runtime.trashed, [{userId: 'me', id: 'old-imported'}]);
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.context.cleanupExpiredImportedMessages())), {
+    complete: true, trashed: 1,
+  });
 });
 
 test('does not extract a code found only in a text attachment', () => {
