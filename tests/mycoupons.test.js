@@ -712,6 +712,11 @@ test('does not import coupon codes found only in quoted reply or forward history
       body: 'No new offer.\n\nFrom: Offers <offers@example.com>\nSent: Tuesday, January 6, 2026 10:00 AM\nTo: Owner <owner@example.com>\nSubject: Your promotion\nCoupon code: SAVE20',
     }),
     message({
+      id: 'outlook-header-block-with-cc',
+      subject: 'FW: promotion',
+      body: 'No new offer.\n\nFrom: Offers <offers@example.com>\nSent: Tuesday, January 6, 2026 10:00 AM\nTo: Owner <owner@example.com>\nCc: Team <team@example.com>\nSubject: Your promotion\nCoupon code: OLD20',
+    }),
+    message({
       id: 'new-top-content',
       subject: 'Re: promotion',
       body: 'Coupon code: NEW20\n\n---------- Forwarded Message ----------\nCoupon code: OLD20',

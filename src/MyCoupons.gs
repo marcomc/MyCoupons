@@ -1022,10 +1022,17 @@ function stripQuotedReplyHistory_(plainText) {
 }
 
 function isOutlookQuotedHeaderBlock_(lines, index) {
-  var headers = ['from', 'sent', 'to', 'subject'];
-  return headers.every(function(name, offset) {
+  var required = ['from', 'sent', 'to'];
+  if (!required.every(function(name, offset) {
     return new RegExp('^\\s*' + name + '\\s*:\\s*\\S', 'iu').test(lines[index + offset] || '');
-  });
+  })) {
+    return false;
+  }
+  var subjectIndex = index + required.length;
+  while (/^\s*(?:cc|bcc|reply-to)\s*:\s*\S/iu.test(lines[subjectIndex] || '')) {
+    subjectIndex += 1;
+  }
+  return /^\s*subject\s*:\s*\S/iu.test(lines[subjectIndex] || '');
 }
 
 function isQuotedReplyHistoryMarker_(line) {
