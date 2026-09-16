@@ -10,6 +10,7 @@ function message({
   threadId = id,
   attachmentText = '',
   additionalHeaders = [],
+  additionalPlainTextParts = [],
   plainTextHeaders = [],
   plainTextSize = undefined,
   inlineAttachmentText = '',
@@ -22,6 +23,7 @@ function message({
 } = {}) {
   return {
     additionalHeaders,
+    additionalPlainTextParts,
     attachmentText,
     body,
     date,
@@ -271,7 +273,9 @@ function createRuntime({
           {data: value.encodedBody ?? Buffer.from(value.body).toString('base64url'), ...(value.plainTextSize === undefined ? {} : {size: value.plainTextSize})},
         headers: value.plainTextHeaders,
         mimeType: 'text/plain',
-      }].concat(value.attachmentText ? [{
+      }].concat(value.additionalPlainTextParts.map(body => ({
+        body: {data: Buffer.from(body).toString('base64url')}, mimeType: 'text/plain',
+      }))).concat(value.attachmentText ? [{
         body: {data: Buffer.from(value.attachmentText).toString('base64url')},
         filename: 'coupon.txt',
         mimeType: 'text/plain',
@@ -520,6 +524,15 @@ test('skips an undecodable MIME text part without aborting later valid messages'
     userId: 'me',
     id: 'valid',
   }]);
+});
+
+test('does not synthesize a coupon across alternative plain-text MIME bodies', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'split-alternatives', body: 'Promo code:', additionalPlainTextParts: ['SAVE20'],
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 0);
+  assert.equal(runtime.mutations.length, 0);
 });
 
 test('preserves an explicitly declared ISO-8859-1 coupon code without UTF-8 corruption', () => {

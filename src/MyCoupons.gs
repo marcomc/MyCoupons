@@ -341,7 +341,7 @@ function cleanupExpiredImportedMessages_(config) {
   for (var index = 0; index < listed.messageIds.length; index += 1) {
     var message;
     try {
-      message = toMyCouponsMessage_(Gmail.Users.Messages.get('me', listed.messageIds[index], {format: 'full'}));
+      message = toMyCouponsMessage_(Gmail.Users.Messages.get('me', listed.messageIds[index], {format: 'full'}), false);
     } catch (error) {
       if (isGmailRateLimitError_(error)) {
         return {complete: false, trashed: trashed};
@@ -1004,7 +1004,7 @@ function isExactGmailMessageNotFound_(error) {
     message === 'API call to gmail.users.messages.get failed with error: Requested entity was not found.';
 }
 
-function toMyCouponsMessage_(message) {
+function toMyCouponsMessage_(message, includePlainText) {
   if (!message || !validOpaqueGmailId_(message.id) || !validOpaqueGmailId_(message.threadId) || !message.payload) {
     throw new Error('Gmail returned an incomplete message.');
   }
@@ -1035,7 +1035,7 @@ function toMyCouponsMessage_(message) {
     from: headers.from || '',
     id: message.id,
     labelIds: message.labelIds || [],
-    plainText: extractPlainText_(message.payload, message.id),
+    plainText: includePlainText === false ? [] : extractPlainText_(message.payload, message.id),
     sourceAmbiguous: subjectHeaderCount > 1 || fromHeaderCount !== 1 || !headers.from.trim(),
     subject: headers.subject || '',
     threadId: message.threadId,
@@ -1050,7 +1050,7 @@ function validOpaqueGmailId_(value) {
 function extractPlainText_(payload, messageId) {
   var plainText = [];
   collectPlainTextParts_(payload, plainText, messageId, {remaining: MYCOUPONS_TEXT_PART_MAX_BYTES});
-  return plainText.join('\n');
+  return plainText;
 }
 
 function collectPlainTextParts_(part, plainText, messageId, budget) {
@@ -1202,8 +1202,11 @@ function messageHasSystemExclusionLabel_(message) {
 }
 
 function extractCouponCodes_(subject, plainText) {
-  var unquoted = stripQuotedReplyHistory_(plainText);
-  var content = [unquoted.hadQuotedHistory ? '' : subject || '', unquoted.text];
+  var sourceParts = Array.isArray(plainText) ? plainText : [plainText];
+  var content = sourceParts.map(function(part) {
+    var unquoted = stripQuotedReplyHistory_(part);
+    return [unquoted.hadQuotedHistory ? '' : subject || '', unquoted.text].join('\n');
+  });
   var messageContext = content.join('\n');
   if (/\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b/iu.test(messageContext) ||
       hasReferralCouponContext_(messageContext)) {
