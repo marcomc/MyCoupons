@@ -58,6 +58,7 @@ function createRuntime({
   fetchFailureAfter = null,
   listFailureAfter = null,
   modifyFailureAfter = null,
+  rateLimitError = "Quota exceeded for quota metric 'Total Query Cost'.",
   trashFailureAfter = null,
   listPageSize = 100,
   missingMessageIds = [],
@@ -264,7 +265,7 @@ function createRuntime({
               throw {code: 404, message: 'Requested entity was not found.'};
             }
             if (fetchFailureAfter !== null && getMessageCount >= fetchFailureAfter) {
-              throw new Error("Quota exceeded for quota metric 'Total Query Cost'.");
+              throw new Error(rateLimitError);
             }
             getMessageCount += 1;
             return gmailMessages.get(id);
@@ -273,7 +274,7 @@ function createRuntime({
             assert.equal(userId, 'me');
             queries.push(options.q);
             if (listFailureAfter !== null && listMessageCount >= listFailureAfter) {
-              throw new Error("Quota exceeded for quota metric 'Total Query Cost'.");
+              throw new Error(rateLimitError);
             }
             listMessageCount += 1;
             if (advanceClockOnList) {
@@ -298,14 +299,14 @@ function createRuntime({
           },
           modify: (resource, userId, id) => {
             if (modifyFailureAfter !== null && modifyMessageCount >= modifyFailureAfter) {
-              throw new Error("Quota exceeded for quota metric 'Total Query Cost'.");
+              throw new Error(rateLimitError);
             }
             modifyMessageCount += 1;
             mutations.push({resource, userId, id});
           },
           trash: (userId, id) => {
             if (trashFailureAfter !== null && trashMessageCount >= trashFailureAfter) {
-              throw new Error("Quota exceeded for quota metric 'Total Query Cost'.");
+              throw new Error(rateLimitError);
             }
             trashMessageCount += 1;
             trashed.push({userId, id});
@@ -445,6 +446,19 @@ test('keeps the watermark unchanged after a Gmail rate limit while committing th
   assert.equal(outcome.watermark, null);
   assert.equal(runtime.properties.has('MYCOUPONS_WATERMARK'), false);
   assert.deepEqual(runtime.mutations, []);
+  assert.ok(runtime.properties.has('MYCOUPONS_SCAN_STATE'));
+});
+
+test('treats the exact Apps Script service-throttling error as a resumable Gmail rate limit', () => {
+  const runtime = createRuntime({
+    fetchFailureAfter: 0,
+    rateLimitError: 'Service invoked too many times in a short time: Gmail.',
+    messages: [message({id: 'service-throttle', body: 'Coupon code: SAVE20'})],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.context.runMyCouponsImport())), {
+    complete: false, imported: 0, scanned: 0, watermark: null,
+  });
   assert.ok(runtime.properties.has('MYCOUPONS_SCAN_STATE'));
 });
 
@@ -611,6 +625,7 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'referral-code', body: 'Share your promo code: FRIEND20 with a friend'}),
     message({id: 'refer-friend', body: 'Refer a friend with promo code: FRIEND20'}),
     message({id: 'invite-friends', body: 'Invite friends with discount code: FRIEND20'}),
+    message({id: 'italian-invite-friend', body: 'Invita un amico. Codice sconto: FRIEND20'}),
     message({id: 'friends-after-code', body: 'Promo code: FRIEND20 — invite friends'}),
     message({id: 'cross-field-referral', subject: 'Refer a friend today', body: 'Promo code: FRIEND20'}),
     message({id: 'otp', body: 'Your verification code: 123456'}),
@@ -723,6 +738,7 @@ test('rejects overlong and URL-like code forms rather than importing truncated t
     message({id: 'url', body: 'Promo code: https://example.com/referral'}),
     message({id: 'bare-domain', body: 'Promo code: deals.example.com'}),
     message({id: 'bare-domain-path', body: 'Promo code: deals.example.com/ref/SAVE20?source=email'}),
+    message({id: 'unmatched-wrapper', body: 'Promo code: SAVE20)'}),
   ]});
 
   const outcome = runtime.context.runMyCouponsImport();
@@ -731,12 +747,27 @@ test('rejects overlong and URL-like code forms rather than importing truncated t
   assert.equal(runtime.rows.length, 1);
 });
 
+test('accepts one balanced outer token wrapper but rejects nested or unmatched wrappers', () => {
+  const runtime = createRuntime({messages: [
+    message({id: 'balanced-wrapper', body: 'Promo code: (SAVE20)'}),
+    message({id: 'nested-wrapper', body: 'Promo code: ((NESTED20))'}),
+    message({id: 'opening-wrapper', body: 'Promo code: (OPEN20'}),
+  ]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'SAVE20');
+  assert.equal(runtime.mutations.length, 1);
+});
+
 test('rejects absence markers and leading-apostrophe tokens without mutating Gmail or Sheet', () => {
   const runtime = createRuntime({messages: [
     message({id: 'not-required', body: 'Coupon code: not required'}),
     message({id: 'negated-subject', subject: 'No promo code: AUTOAPPLIED'}),
     message({id: 'negated-body', body: 'No promo code: AUTOAPPLIED'}),
     message({id: 'negated-article', body: 'Without a coupon code: AUTOAPPLIED'}),
+    message({id: 'negated-need', body: 'No need for a promo code: AUTOAPPLIED'}),
+    message({id: 'negated-require', body: 'This offer does not require a promo code: AUTOAPPLIED'}),
+    message({id: 'negated-italian', body: 'Questa offerta non richiede un codice sconto: AUTOAPPLIED'}),
     message({id: 'none', body: 'Coupon code: NONE'}),
     message({id: 'apostrophe', body: 'Coupon code: "\'=SAVE20"'}),
   ]});

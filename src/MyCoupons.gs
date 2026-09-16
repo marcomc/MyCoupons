@@ -889,7 +889,7 @@ function listFirstGmailMessagePage_(query) {
 }
 
 function isGmailRateLimitError_(error) {
-  return error && /(?:quota exceeded|rate limit|user-rate limit)/iu.test(String(error.message || error));
+  return error && /(?:quota exceeded|rate limit|user-rate limit|service invoked too many times(?:\s+(?:in a short time|for one day))?\s*:)/iu.test(String(error.message || error));
 }
 
 function isExactGmailMessageNotFound_(error) {
@@ -1000,7 +1000,8 @@ function hasReferralCouponContext_(text) {
   }
   return /\b(?:share|refer|invite)\s+(?:your\s+)?(?:promo(?:tional)?|referral)\s+code\b/iu.test(text) ||
     /\breferral\b/iu.test(text) ||
-    /\b(?:share|refer|invite)\b/iu.test(text) && /\bfriends?\b/iu.test(text);
+    /\b(?:share|refer|invite)\b/iu.test(text) && /\bfriends?\b/iu.test(text) ||
+    /\b(?:invita|condividi|presenta)\s+(?:un\s+)?amic(?:o|a|i|he)\b/iu.test(text);
 }
 
 function stripQuotedReplyHistory_(plainText) {
@@ -1040,7 +1041,7 @@ function collectExplicitCouponTokens_(text, found) {
   [quoted, delimited].forEach(function(expression) {
     var match;
     while ((match = expression.exec(text)) !== null) {
-      if (isNegatedCouponIntroducer_(text, match.index)) {
+      if (hasNoCodeContextBeforeIntroducer_(text, match.index)) {
         continue;
       }
       var code = acceptCouponToken_(match[1], expression === quoted, /\s+\p{L}/u.test(text.slice(expression.lastIndex)));
@@ -1051,12 +1052,17 @@ function collectExplicitCouponTokens_(text, found) {
   });
 }
 
-function isNegatedCouponIntroducer_(text, introducerIndex) {
-  var preceding = text.slice(Math.max(0, introducerIndex - 80), introducerIndex);
-  return /(?:^|[\s.!?;:])(?:no|without|none|not|nessun[oa]?|non)(?:\s+(?:an?|un[oa]?))?\s*$/iu.test(preceding);
+function hasNoCodeContextBeforeIntroducer_(text, introducerIndex) {
+  var sameSentence = text.slice(0, introducerIndex).split(/[\n.!?]+/u).pop();
+  var context = sameSentence.slice(-160);
+  return /\b(?:no(?:\s+need\s+for)?|without|none|does\s+not\s+require|do(?:es)?\s+not\s+need|not\s+require)(?:\s+(?:an?|the))?\s*$/iu.test(context) ||
+    /\b(?:nessun[oa]?(?:\s+bisogno\s+di)?|senza|non\s+richiede|non\s+serve)(?:\s+(?:un[oa]?|il|lo))?\s*$/iu.test(context);
 }
 
 function acceptCouponToken_(token, quoted, hasFollowingWord) {
+  if (!quoted) {
+    token = normalizeUnquotedCouponToken_(token);
+  }
   if (!token || isLinkLikeCouponToken_(token) || isEmailAddressCouponToken_(token) || !/[\p{L}\p{N}]/u.test(token)) {
     return null;
   }
@@ -1076,6 +1082,19 @@ function acceptCouponToken_(token, quoted, hasFollowingWord) {
     return null;
   }
   return token;
+}
+
+function normalizeUnquotedCouponToken_(token) {
+  if (!/[()[\]{}]/u.test(token)) {
+    return token;
+  }
+  var matching = {'(': ')', '[': ']', '{': '}'};
+  var first = token.charAt(0);
+  if (!Object.prototype.hasOwnProperty.call(matching, first) || token.charAt(token.length - 1) !== matching[first]) {
+    return null;
+  }
+  var inner = token.slice(1, -1);
+  return inner && !/[()[\]{}]/u.test(inner) ? inner : null;
 }
 
 function isLinkLikeCouponToken_(token) {
