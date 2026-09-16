@@ -70,6 +70,7 @@ function createRuntime({
   advanceClockOnList = false,
   fetchFailureAfter = null,
   listFailureAfter = null,
+  rejectPageTokenOnce = false,
   modifyFailureAfter = null,
   rateLimitError = "Quota exceeded for quota metric 'Total Query Cost'.",
   trashFailureAfter = null,
@@ -99,6 +100,7 @@ function createRuntime({
   let getMessageCount = 0;
   let attachmentGetCount = 0;
   let listMessageCount = 0;
+  let pageTokenRejectionPending = rejectPageTokenOnce;
   let modifyMessageCount = 0;
   let trashMessageCount = 0;
   const numberFormats = [];
@@ -339,6 +341,10 @@ function createRuntime({
           list: (userId, options) => {
             assert.equal(userId, 'me');
             queries.push(options.q);
+            if (pageTokenRejectionPending && options.pageToken) {
+              pageTokenRejectionPending = false;
+              throw {code: 400, message: 'Invalid page token'};
+            }
             if (listFailureAfter !== null && listMessageCount >= listFailureAfter) {
               throw new Error(rateLimitError);
             }
@@ -453,6 +459,7 @@ function createRuntime({
     setFetchFailureAfter: value => { fetchFailureAfter = value; },
     setAttachmentFetchFailureAfter: value => { attachmentFetchFailureAfter = value; },
     setListFailureAfter: value => { listFailureAfter = value; },
+    rejectPageTokenOnce: () => { pageTokenRejectionPending = true; },
     setModifyFailureAfter: value => { modifyFailureAfter = value; },
     setSheetId: value => { sheetId = value; },
   };
@@ -732,6 +739,29 @@ test('resumes a durable page cursor after a list rate limit instead of repeating
   assert.equal(runtime.queries.at(-1), runtime.queries[0]);
 });
 
+test('restarts the unchanged scan range after Gmail rejects a persisted page token', () => {
+  const runtime = createRuntime({
+    listFailureAfter: 1,
+    listPageSize: 1,
+    messages: [
+      message({id: 'irrelevant-prefix', body: 'Nothing to import here'}),
+      message({id: 'coupon-after-token-reset', body: 'Coupon code: SAFE20'}),
+    ],
+  });
+
+  assert.equal(runtime.context.runMyCouponsImport().complete, false);
+  assert.equal(JSON.parse(runtime.properties.get('MYCOUPONS_SCAN_STATE')).pageToken, '1');
+
+  runtime.setListFailureAfter(null);
+  runtime.rejectPageTokenOnce();
+  const resumed = runtime.context.runMyCouponsImport();
+
+  assert.equal(resumed.complete, true);
+  assert.equal(resumed.imported, 1);
+  assert.equal(runtime.rows[1][1], 'SAFE20');
+  assert.equal(runtime.properties.has('MYCOUPONS_SCAN_STATE'), false);
+});
+
 test('keeps a multi-page import query stable after importing and labeling an earlier page', () => {
   const runtime = createRuntime({
     listPageSize: 1,
@@ -874,6 +904,22 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
   assert.equal(outcome.imported, 0);
   assert.equal(runtime.rows.length, 1);
   assert.deepEqual(runtime.mutations, []);
+});
+
+test('leaves an unusually large explicit coupon catalogue untouched and continues later mail', () => {
+  const catalogue = Array.from({length: 21}, (_, index) => 'Promo code: TOKEN' + (index + 10)).join('\n');
+  const runtime = createRuntime({messages: [
+    message({id: 'large-catalogue', body: catalogue}),
+    message({id: 'ordinary-after-catalogue', body: 'Coupon code: SAFE20'}),
+  ]});
+
+  const outcome = runtime.context.runMyCouponsImport();
+
+  assert.equal(outcome.complete, true);
+  assert.equal(outcome.imported, 1);
+  assert.equal(runtime.rows.length, 2);
+  assert.equal(runtime.rows[1][1], 'SAFE20');
+  assert.deepEqual(runtime.mutations.map(mutation => mutation.id), ['ordinary-after-catalogue']);
 });
 
 test('does not import coupon codes found only in quoted reply or forward history', () => {

@@ -10,6 +10,7 @@ var MYCOUPONS_DAILY_HANDLER = 'runMyCouponsDaily';
 var MYCOUPONS_SEARCH_PAGE_SIZE = 100;
 var MYCOUPONS_SHEET_CELL_MAX_LENGTH = 50000;
 var MYCOUPONS_TEXT_PART_MAX_BYTES = 100000;
+var MYCOUPONS_MAX_CODES_PER_MESSAGE = 20;
 
 var MYCOUPONS_DEFAULTS = {
   archiveImported: true,
@@ -201,8 +202,14 @@ function runMyCouponsImport_(config) {
     if (hasOversizedSheetMetadata_(message)) {
       return true;
     }
+    var extractedCodes = extractCouponCodes_(message.subject, message.plainText);
+    // A message containing an unusually large code catalogue remains untouched.
+    // Missing it is safer than allowing one message to exhaust the whole run.
+    if (extractedCodes.length > MYCOUPONS_MAX_CODES_PER_MESSAGE) {
+      return true;
+    }
     var expectedCodes = [];
-    extractCouponCodes_(message.subject, message.plainText).forEach(function(code) {
+    extractedCodes.forEach(function(code) {
       var deduplicationKey = message.id + '::' + code;
       var existingCandidates = inspectDeduplicationCandidates_(sheetState.deduplicationCandidates[deduplicationKey],
         message, code, sheetState.columns, config);
@@ -301,6 +308,15 @@ function runMyCouponsImport_(config) {
         saveScanState_(scan);
         return {complete: false, imported: imported, scanned: scanned, watermark: null};
       }
+      if (scan.pageToken && isExactGmailPageTokenError_(error)) {
+        // Re-list the unchanged range from its beginning. Already labeled or
+        // fully verified rows are skipped, so replay cannot duplicate a source.
+        scan.pageToken = '';
+        scan.pendingIds = [];
+        scan.listedFinalPage = false;
+        saveScanState_(scan);
+        continue;
+      }
       throw error;
     }
     var references = page && Array.isArray(page.messages) ? page.messages : [];
@@ -320,6 +336,11 @@ function runMyCouponsImport_(config) {
     scan.listedFinalPage = !scan.pageToken;
     saveScanState_(scan);
   }
+}
+
+function isExactGmailPageTokenError_(error) {
+  return Boolean(error && Number(error.code) === 400 &&
+    typeof error.message === 'string' && /\bpage\s*token\b/iu.test(error.message));
 }
 
 function cleanupExpiredImportedMessages_(config) {
