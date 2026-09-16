@@ -1331,7 +1331,11 @@ function collectCouponTextParts_(part, couponText, messageId, budget) {
     }
     var decoded = decodeBase64UrlTextPart_(encoded, part);
     if (decoded !== null && decoded.length <= budget.remaining) {
-      couponText.push(mimeType === 'text/html' ? htmlToCouponText_(decoded) : decoded);
+      var couponPart = mimeType === 'text/html' ? htmlToCouponText_(decoded) : decoded;
+      if (couponPart === null) {
+        return false;
+      }
+      couponText.push(couponPart);
       budget.remaining -= decoded.length;
     } else {
       return false;
@@ -1411,19 +1415,20 @@ function declaredTextPartCharset_(part) {
 
 function htmlToCouponText_(html) {
   if (typeof html !== 'string') {
-    return '';
+    return null;
   }
   // Apps Script has no HTML/CSS renderer. A stylesheet means visibility cannot
   // be established reliably, so fail closed instead of importing preview text.
   if (/<(?:blockquote|pre|script|style|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*(?:"[^"']*&[^"']*"|'[^"']*&[^"']*'|[^\s>]*&)|&(?!#(?:x[0-9a-f]+|\d+);|(?:amp|apos|gt|lt|nbsp|quot);)[a-z#]/iu.test(html)) {
-    return '';
+    return null;
   }
   var text = extractBoundedVisibleHtmlText_(html);
-  return text === null ? '' : text.replace(/\r\n?/gu, '\n');
+  return text === null ? null : text.replace(/\r\n?/gu, '\n');
 }
 
 function extractBoundedVisibleHtmlText_(html) {
   var output = [];
+  var anchorDepth = 0;
   var ignoredElement = null;
   var index = 0;
   while (index < html.length) {
@@ -1458,9 +1463,15 @@ function extractBoundedVisibleHtmlText_(html) {
       if (closing && name === ignoredElement) {
         ignoredElement = null;
       }
-    } else if (!closing && (name === 'a' || name === 'head' || name === 'noscript' || name === 'script' || name === 'title')) {
+    } else if (!closing && name === 'a') {
+      anchorDepth += 1;
+      output.push(' [link text: ');
+    } else if (closing && name === 'a' && anchorDepth) {
+      anchorDepth -= 1;
+      output.push('] ');
+    } else if (!closing && (name === 'head' || name === 'noscript' || name === 'script' || name === 'title')) {
       ignoredElement = name;
-      output.push(name === 'a' ? ' [link omitted] ' : ' ');
+      output.push(' ');
     } else if (!closing && name === 'img') {
       output.push(' [image omitted] ');
     } else if (!closing && /^(?:p|div|li|tr|td|th|h[1-6]|table|section|article)$/u.test(name)) {
@@ -1473,7 +1484,7 @@ function extractBoundedVisibleHtmlText_(html) {
     index = tagEnd + 1;
   }
   var decoded = decodeHtmlEntities_(output.join(''));
-  return ignoredElement || decoded === null ? null : decoded.split('\u0000').map(function(segment) {
+  return ignoredElement || anchorDepth || decoded === null ? null : decoded.split('\u0000').map(function(segment) {
     return segment.replace(/[\t\r\n\f ]+/gu, ' ');
   }).join('\n');
 }

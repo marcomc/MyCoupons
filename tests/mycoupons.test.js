@@ -599,6 +599,16 @@ test('rejects an alternative group when its remaining representation exceeds the
   assert.equal(runtime.mutations.length, 0);
 });
 
+test('rejects an alternative group when its HTML representation is unsafe', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'unsafe-html-alternative', body: 'Coupon code: SAVE10',
+    htmlBody: '<style>.hidden { display:none }</style><p>Coupon code: SAVE20</p>',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 0);
+  assert.equal(runtime.mutations.length, 0);
+});
+
 test('does not synthesize a coupon across subject and plain-text MIME body boundaries', () => {
   const runtime = createRuntime({messages: [message({
     id: 'split-subject-body', subject: 'Promo code:', body: 'SAVE20',
@@ -1297,6 +1307,7 @@ test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
     message({id: 'html-script-head-code', htmlBody: '<head><script>var x="</head>";\nCoupon code: SAVE20</script></head>'}),
     message({id: 'html-template-code', htmlBody: '<template><template>x</template><p>Coupon code: SAVE20</p></template>'}),
     message({id: 'html-anchor-boundary', htmlBody: '<p>Promo <a href="https://example.test">not a </a>code: SAVE20</p>'}),
+    message({id: 'html-anchor-referral', htmlBody: '<p>Promo code: FRIEND20</p><a href="#">Invite friends</a>'}),
     message({id: 'html-image-boundary', htmlBody: '<p>Promo <img src="cid:x" alt="not a ">code: SAVE20</p>'}),
     message({id: 'html-unsupported-entity', htmlBody: '<p>Coupon code: SAVE&ndash;20</p>'}),
     message({id: 'html-invalid-numeric-entity', htmlBody: '<p>Coupon code: SAVE&#x110000;20</p>'}),
