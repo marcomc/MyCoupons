@@ -1239,6 +1239,8 @@ test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
     message({id: 'html-link-code', htmlBody: '<p>Coupon code: <a href="https://example.test">SAVE20</a></p>'}),
     message({id: 'html-quoted-code', htmlBody: '<p>Thanks</p><blockquote>Coupon code: SAVE20</blockquote>'}),
     message({id: 'html-hidden-code', htmlBody: '<div hidden><div>Heading</div><p>Coupon code: SAVE20</p></div>'}),
+    message({id: 'html-unquoted-hidden-code', htmlBody: '<p style=display:none>Coupon code: SAVE20</p>'}),
+    message({id: 'html-template-code', htmlBody: '<template><template>x</template><p>Coupon code: SAVE20</p></template>'}),
     message({id: 'html-anchor-boundary', htmlBody: '<p>Promo <a href="https://example.test">not a </a>code: SAVE20</p>'}),
   ]});
 

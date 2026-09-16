@@ -1378,7 +1378,7 @@ function htmlToCouponText_(html) {
   if (typeof html !== 'string') {
     return '';
   }
-  if (/<blockquote\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']/iu.test(html)) {
+  if (/<(?:blockquote|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)/iu.test(html)) {
     return '';
   }
   var withoutInactiveContent = html
