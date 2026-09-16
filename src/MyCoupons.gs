@@ -216,17 +216,17 @@ function runMyCouponsImport_(config) {
         return;
       }
       var row = makeCouponRow_(sheetState.columns, sheetState.columnCount, message, code, deduplicationKey, config);
-      appendAndVerifyCouponRow_(sheet, row, sheetState.columns, deduplicationKey);
+      appendAndVerifyCouponRow_(sheet, row, sheetState, deduplicationKey);
       expectedCodes.push(code);
       imported += 1;
     });
     if (expectedCodes.length) {
-      if (!verifiedLiveExpectedCouponRows_(sheet, message, expectedCodes, config)) {
+      if (!verifiedLiveExpectedCouponRows_(sheet, sheetState, message, expectedCodes, config)) {
         throw new Error('Verified coupon rows changed and no longer prove their complete message and code identity before Gmail mutation.');
       }
       var currentMessage;
       try {
-        currentMessage = toMyCouponsMessage_(Gmail.Users.Messages.get('me', message.id, {format: 'full'}));
+        currentMessage = toMyCouponsMessage_(Gmail.Users.Messages.get('me', message.id, {format: 'full'}), false);
       } catch (error) {
         if (isGmailRateLimitError_(error)) {
           return false;
@@ -538,10 +538,11 @@ function readCouponSheetState_(sheet, config) {
       if (!Object.prototype.hasOwnProperty.call(deduplicationCandidates, key)) {
         deduplicationCandidates[key] = [];
       }
-      deduplicationCandidates[key].push({row: row, formulas: formulas[index + 1]});
+      deduplicationCandidates[key].push({row: row, formulas: formulas[index + 1], rowNumber: index + 2});
     }
   });
-  return {columnCount: values[0].length, columns: columns, deduplicationCandidates: deduplicationCandidates};
+  return {columnCount: values[0].length, columns: columns, deduplicationCandidates: deduplicationCandidates,
+    expectedLastRow: values.length};
 }
 
 function readStableCouponSheetSnapshot_(sheet) {
@@ -662,37 +663,31 @@ function sheetSemanticText_(value) {
   return /^'/.test(text) ? text.slice(1) : text;
 }
 
-function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
+function appendAndVerifyCouponRow_(sheet, row, sheetState, deduplicationKey) {
+  var targetRow = sheet.getLastRow() + 1;
+  if (targetRow !== sheetState.expectedLastRow + 1) {
+    throw new Error('Coupon sheet row reservation changed before append.');
+  }
   sheet.appendRow(row);
-  var reservation = verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey);
-  var range = sheet.getRange(reservation.rowNumber, 1, 1, row.length);
+  if (sheet.getLastRow() !== targetRow) {
+    throw new Error('Coupon sheet row reservation changed during append.');
+  }
+  var range = sheet.getRange(targetRow, 1, 1, row.length);
   var written = range.getValues()[0];
   var formulas = range.getFormulas()[0];
-  if (!verifiedCouponRow_(written, formulas, row, columns, deduplicationKey, null)) {
+  var confirmed = range.getValues()[0];
+  var confirmedFormulas = range.getFormulas()[0];
+  if (!sameSheetMatrix_([written], [confirmed]) || !sameSheetMatrix_([formulas], [confirmedFormulas])) {
+    throw new Error('Coupon row changed during verification.');
+  }
+  if (!verifiedCouponRow_(confirmed, confirmedFormulas, row, sheetState.columns, deduplicationKey, null)) {
     throw new Error('Coupon row verification failed before Gmail mutation.');
   }
-}
-
-function verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey) {
-  var reservation = findExactAppendedCouponRow_(sheet, row, columns, deduplicationKey);
-  if (!reservation || !verifiedCouponRow_(reservation.row, reservation.formulas, row, columns, deduplicationKey, null)) {
-    throw new Error('Coupon row reservation changed before its write could be authorized.');
+  sheetState.expectedLastRow = targetRow;
+  if (!Object.prototype.hasOwnProperty.call(sheetState.deduplicationCandidates, deduplicationKey)) {
+    sheetState.deduplicationCandidates[deduplicationKey] = [];
   }
-  return reservation;
-}
-
-function findExactAppendedCouponRow_(sheet, expectedRow, columns, deduplicationKey) {
-  var snapshot = readStableCouponSheetSnapshot_(sheet);
-  var values = snapshot.values;
-  var formulas = snapshot.formulas;
-  var matches = [];
-  values.slice(1).forEach(function(existingRow, index) {
-    if (sheetSemanticText_(existingRow[columns.deduplicationKey]) === deduplicationKey &&
-        verifiedCouponRow_(existingRow, formulas[index + 1], expectedRow, columns, deduplicationKey, null)) {
-      matches.push({rowNumber: index + 2, row: existingRow, formulas: formulas[index + 1]});
-    }
-  });
-  return matches.length === 1 ? matches[0] : null;
+  sheetState.deduplicationCandidates[deduplicationKey].push({row: confirmed, formulas: confirmedFormulas, rowNumber: targetRow});
 }
 
 function verifiedExistingCouponRow_(record, message, code, columns, config) {
@@ -705,12 +700,17 @@ function verifiedExistingCouponRow_(record, message, code, columns, config) {
     [legacyGmailLinkForMessage_(message.id), ownerStableLegacyGmailLinkForMessage_(message.id, config)]);
 }
 
-function verifiedLiveExpectedCouponRows_(sheet, message, codes, config) {
-  var liveState = readCouponSheetState_(sheet, config);
+function verifiedLiveExpectedCouponRows_(sheet, sheetState, message, codes, config) {
+  if (sheet.getLastRow() !== sheetState.expectedLastRow || sheet.getLastColumn() !== sheetState.columnCount) {
+    return false;
+  }
   return codes.every(function(code) {
     var deduplicationKey = message.id + '::' + code;
-    var candidates = inspectDeduplicationCandidates_(liveState.deduplicationCandidates[deduplicationKey], message,
-      code, liveState.columns, config);
+    var records = (sheetState.deduplicationCandidates[deduplicationKey] || []).map(function(record) {
+      var range = sheet.getRange(record.rowNumber, 1, 1, sheetState.columnCount);
+      return {row: range.getValues()[0], formulas: range.getFormulas()[0], rowNumber: record.rowNumber};
+    });
+    var candidates = inspectDeduplicationCandidates_(records, message, code, sheetState.columns, config);
     return candidates.verified.length === 1 && !candidates.invalidCorrelated.length;
   });
 }
@@ -1203,9 +1203,15 @@ function messageHasSystemExclusionLabel_(message) {
 
 function extractCouponCodes_(subject, plainText) {
   var sourceParts = Array.isArray(plainText) ? plainText : [plainText];
-  var content = sourceParts.map(function(part) {
+  var content = [];
+  if (subject) {
+    content.push(subject);
+  }
+  sourceParts.forEach(function(part) {
     var unquoted = stripQuotedReplyHistory_(part);
-    return [unquoted.hadQuotedHistory ? '' : subject || '', unquoted.text].join('\n');
+    if (unquoted.text) {
+      content.push(unquoted.text);
+    }
   });
   var messageContext = content.join('\n');
   if (/\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b/iu.test(messageContext) ||

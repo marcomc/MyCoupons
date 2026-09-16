@@ -535,6 +535,24 @@ test('does not synthesize a coupon across alternative plain-text MIME bodies', (
   assert.equal(runtime.mutations.length, 0);
 });
 
+test('does not synthesize a coupon across subject and plain-text MIME body boundaries', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'split-subject-body', subject: 'Promo code:', body: 'SAVE20',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 0);
+  assert.equal(runtime.mutations.length, 0);
+});
+
+test('imports an explicit subject coupon when every plain-text part is unavailable', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'subject-only', subject: 'Promo code: SUBJECT20', encodedBody: '%not-base64url%',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'SUBJECT20');
+});
+
 test('preserves an explicitly declared ISO-8859-1 coupon code without UTF-8 corruption', () => {
   const runtime = createRuntime({messages: [message({
     id: 'latin1-coupon',
@@ -1280,7 +1298,7 @@ test('writes all codes before making one exact Gmail mutation for their source m
   assert.equal(runtime.mutations[0].id, 'message-2');
 });
 
-test('re-verifies every appended code for one message before its Gmail mutation', () => {
+test('verifies every appended code for one message before its Gmail mutation', () => {
   const runtime = createRuntime({
     beforeLiveDeduplicationReadAt: 6,
     beforeLiveDeduplicationRead: ({formulas, values}) => {
@@ -1293,11 +1311,11 @@ test('re-verifies every appended code for one message before its Gmail mutation'
     })],
   });
 
-  assert.throws(() => runtime.context.runMyCouponsImport(), /rows changed.*Gmail mutation|snapshot read/i);
-  assert.equal(runtime.mutations.length, 0);
+  assert.equal(runtime.context.runMyCouponsImport().imported, 2);
+  assert.deepEqual(runtime.mutations.map(entry => entry.id), ['multi-code-race']);
 });
 
-test('uses atomic append reservation without overwriting an interleaved external row', () => {
+test('fails closed without overwriting an interleaved external row', () => {
   const external = [
     'external-date', 'EXTERNAL', 'External subject', 'external@example.com',
     'https://mail.google.com/mail/u/?authuser=external%40example.com#all/external', 'external::EXTERNAL', 'external',
@@ -1307,10 +1325,10 @@ test('uses atomic append reservation without overwriting an interleaved external
     messages: [message({id: 'atomic', body: 'Coupon code: SAFE20'})],
   });
 
-  runtime.context.runMyCouponsImport();
+  assert.throws(() => runtime.context.runMyCouponsImport(), /row reservation changed during append/i);
   assert.equal(runtime.rows[1][1], 'SAFE20');
   assert.deepEqual(runtime.rows[2], external);
-  assert.equal(runtime.mutations[0].id, 'atomic');
+  assert.equal(runtime.mutations.length, 0);
   assert.ok(runtime.sheetDataRangeReadCount <= 6);
 });
 
