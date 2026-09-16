@@ -21,6 +21,17 @@ var MYCOUPONS_DEFAULTS = {
   watermarkOverlapDays: 1,
 };
 
+// Owners can extend these from MYCOUPONS_CONFIG.promotionContextDictionaries
+// without changing the extraction algorithm. Terms describe a promotion
+// context; they never make a bare token importable by themselves.
+var MYCOUPONS_DEFAULT_PROMOTION_CONTEXT_DICTIONARIES = {
+  de: ['aktionscode', 'gutschein', 'rabatt', 'sonderangebot'],
+  en: ['coupon', 'deal code', 'discount', 'offer code', 'promo', 'promotion', 'promotional offer', 'special offer', 'voucher'],
+  es: ['código promocional', 'cupón', 'descuento', 'oferta especial'],
+  fr: ['code promo', 'code promotionnel', 'coupon', 'offre promotionnelle', 'réduction'],
+  it: ['buono sconto', 'codice promo', 'codice promozionale', 'codice sconto', 'coupon', 'offerta speciale', 'promozione', 'sconto'],
+};
+
 var MYCOUPONS_COLUMNS = {
   emailDate: ['email date'],
   couponCode: ['coupon code'],
@@ -100,6 +111,122 @@ function cleanupExpiredImportedMessages() {
     }
     return cleanupExpiredImportedMessages_(config);
   });
+}
+
+/**
+ * Removes only obsolete AI and mailbox-run properties left by the retired
+ * importer, and rewrites the shared configuration to the baseline contract.
+ * It deliberately preserves active baseline scan, watermark, and schedule
+ * state so it cannot restart or interrupt a valid import.
+ *
+ * @return {{removed: string[]}}
+ */
+function cleanupMyCouponsLegacyProperties() {
+  return withMyCouponsLock_(function() {
+    var config = getMyCouponsConfig_();
+    assertMyCouponsOwner_(config);
+    var properties = PropertiesService.getScriptProperties();
+    var legacyNames = [
+      'GE' + 'MINI_API_KEY',
+      'MYCOUPONS_GE' + 'MINI_VER' + 'TEX_UNTIL',
+      'MYCOUPONS_MAILBOX_CONTINUATION',
+      'MYCOUPONS_MAILBOX_SCAN_STATE',
+      'MYCOUPONS_NOTIFICATION_STATE',
+      'MYCOUPONS_PENDING_NOTIFICATION',
+    ];
+    var removed = legacyNames.filter(function(name) {
+      return properties.getProperty(name) !== null;
+    });
+    properties.setProperty(MYCOUPONS_CONFIG_PROPERTY, JSON.stringify(serializedBaselineConfig_(config)));
+    removed.forEach(function(name) {
+      properties.deleteProperty(name);
+    });
+    return {removed: removed};
+  });
+}
+
+/**
+ * Clears only resumable baseline import state so the next import starts at the
+ * configured initial date. Existing Sheet rows, Gmail labels, and messages are
+ * not changed by this operation.
+ *
+ * @return {{restarted: boolean}}
+ */
+function restartMyCouponsImportFromInitialDate() {
+  return withMyCouponsLock_(function() {
+    var config = getMyCouponsConfig_();
+    assertMyCouponsOwner_(config);
+    var properties = PropertiesService.getScriptProperties();
+    [
+      MYCOUPONS_SCAN_STATE_PROPERTY,
+      MYCOUPONS_WATERMARK_PROPERTY,
+      MYCOUPONS_WATERMARK_IDENTITY_PROPERTY,
+    ].forEach(function(name) {
+      properties.deleteProperty(name);
+    });
+    return {restarted: true};
+  });
+}
+
+/**
+ * Converts legacy string values in the Email Date column through row 51 into
+ * real Sheet dates and applies the format used by row 52. No other columns or
+ * rows are changed.
+ *
+ * @return {{normalized: number}}
+ */
+function normalizeMyCouponsEmailDates() {
+  return withMyCouponsLock_(function() {
+    var config = getMyCouponsConfig_();
+    assertMyCouponsOwner_(config);
+    var sheet = resolveCouponSheet_(config);
+    var state = readCouponSheetState_(sheet, config);
+    var lastLegacyRow = Math.min(51, sheet.getLastRow());
+    if (lastLegacyRow < 2) {
+      return {normalized: 0};
+    }
+    var emailDateColumn = state.columns.emailDate + 1;
+    var range = sheet.getRange(2, emailDateColumn, lastLegacyRow - 1, 1);
+    var values = range.getValues();
+    var formulas = range.getFormulas();
+    formulas.forEach(function(row, index) {
+      if (row[0]) {
+        throw new Error('Email Date at row ' + (index + 2) + ' must not be a formula.');
+      }
+    });
+    var normalized = values.map(function(row, index) {
+      return [normalizedLegacyEmailDate_(row[0], index + 2)];
+    });
+    var confirmedValues = range.getValues();
+    var confirmedFormulas = range.getFormulas();
+    if (!sameSheetMatrix_(values, confirmedValues) || !sameSheetMatrix_(formulas, confirmedFormulas) ||
+        !sameSheetMatrixShape_(confirmedValues, confirmedFormulas)) {
+      throw new Error('Email Date range changed before normalization. Retry after concurrent edits finish.');
+    }
+    var referenceFormat = sheet.getLastRow() >= 52 ? sheet.getRange(52, emailDateColumn, 1, 1).getNumberFormat() :
+      'yyyy-mm-dd HH:mm:ss';
+    range.setValues(normalized);
+    range.setNumberFormat(referenceFormat);
+    return {normalized: normalized.length};
+  });
+}
+
+function normalizedLegacyEmailDate_(value, rowNumber) {
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) {
+    return value;
+  }
+  var match = typeof value === 'string' && /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z$/u.exec(value);
+  if (!match) {
+    throw new Error('Email Date at row ' + rowNumber + ' must use an unambiguous ISO 8601 timestamp.');
+  }
+  var parsed = new Date(value);
+  if (isNaN(parsed.getTime()) || parsed.getUTCFullYear() !== Number(match[1]) ||
+      parsed.getUTCMonth() + 1 !== Number(match[2]) || parsed.getUTCDate() !== Number(match[3]) ||
+      parsed.getUTCHours() !== Number(match[4]) || parsed.getUTCMinutes() !== Number(match[5]) ||
+      parsed.getUTCSeconds() !== Number(match[6]) || parsed.getUTCMilliseconds() !== Number(match[7] || 0)) {
+    throw new Error('Email Date at row ' + rowNumber + ' must use a real ISO 8601 timestamp.');
+  }
+  return parsed;
 }
 
 /**
@@ -202,7 +329,8 @@ function runMyCouponsImport_(config) {
     if (hasOversizedSheetMetadata_(message)) {
       return true;
     }
-    var extractedCodes = extractCouponCodes_(message.subject, message.plainText);
+    var extractedCodes = extractCouponCodes_(message.subject, message.plainText,
+      config.promotionContextDictionaries);
     // A message containing an unusually large code catalogue remains untouched.
     // Missing it is safer than allowing one message to exhaust the whole run.
     if (extractedCodes.length > MYCOUPONS_MAX_CODES_PER_MESSAGE) {
@@ -427,7 +555,54 @@ function getMyCouponsConfig_() {
       throw new Error('MYCOUPONS_CONFIG.' + key + ' must be a boolean.');
     }
   });
+  config.promotionContextDictionaries = parsePromotionContextDictionaries_(parsed.promotionContextDictionaries);
   return config;
+}
+
+function parsePromotionContextDictionaries_(value) {
+  var dictionaries = JSON.parse(JSON.stringify(MYCOUPONS_DEFAULT_PROMOTION_CONTEXT_DICTIONARIES));
+  if (value === undefined) {
+    return dictionaries;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('MYCOUPONS_CONFIG.promotionContextDictionaries must be an object.');
+  }
+  Object.keys(value).forEach(function(locale) {
+    if (!/^[a-z]{2,8}(?:-[a-z0-9]{2,8})?$/iu.test(locale) || !Array.isArray(value[locale]) ||
+        value[locale].length > 100) {
+      throw new Error('MYCOUPONS_CONFIG.promotionContextDictionaries has an invalid locale dictionary.');
+    }
+    var merged = dictionaries[locale] || [];
+    value[locale].forEach(function(term) {
+      if (typeof term !== 'string' || term !== term.trim() || term.length < 2 || term.length > 64 ||
+          !/[\p{L}]/u.test(term) || !/^[\p{L}\p{N}][\p{L}\p{N} .'-]*$/u.test(term)) {
+        throw new Error('MYCOUPONS_CONFIG.promotionContextDictionaries contains an invalid term.');
+      }
+      if (!merged.some(function(existing) { return existing.toLocaleLowerCase() === term.toLocaleLowerCase(); })) {
+        merged.push(term);
+      }
+    });
+    dictionaries[locale] = merged;
+  });
+  return dictionaries;
+}
+
+function serializedBaselineConfig_(config) {
+  return {
+    archiveImported: config.archiveImported,
+    dailyHour: config.dailyHour,
+    initialDate: config.initialDate.toISOString().slice(0, 10),
+    labelName: config.labelName,
+    ownerEmail: config.ownerEmail,
+    promotionContextDictionaries: config.promotionContextDictionaries,
+    retentionDays: config.retentionDays,
+    sheetName: config.sheetName,
+    spreadsheetId: config.spreadsheetId,
+    spreadsheetName: config.spreadsheetName,
+    timeZone: config.timeZone,
+    trashExpiredImported: config.trashExpiredImported,
+    watermarkOverlapDays: config.watermarkOverlapDays,
+  };
 }
 
 function validIanaTimeZone_(value) {
@@ -1112,16 +1287,17 @@ function validOpaqueGmailId_(value) {
 }
 
 function extractPlainText_(payload, messageId) {
-  var plainText = [];
-  collectPlainTextParts_(payload, plainText, messageId, {remaining: MYCOUPONS_TEXT_PART_MAX_BYTES});
-  return plainText;
+  var couponText = [];
+  collectCouponTextParts_(payload, couponText, messageId, {remaining: MYCOUPONS_TEXT_PART_MAX_BYTES});
+  return couponText;
 }
 
-function collectPlainTextParts_(part, plainText, messageId, budget) {
+function collectCouponTextParts_(part, couponText, messageId, budget) {
   if (isAttachedPart_(part)) {
     return;
   }
-  if (String(part.mimeType || '').toLowerCase() === 'text/plain' && part.body) {
+  var mimeType = String(part.mimeType || '').toLowerCase();
+  if ((mimeType === 'text/plain' || mimeType === 'text/html') && part.body) {
     var encoded = part.body.data;
     if (part.body.size > MYCOUPONS_TEXT_PART_MAX_BYTES) {
       return;
@@ -1135,12 +1311,12 @@ function collectPlainTextParts_(part, plainText, messageId, budget) {
     }
     var decoded = decodeBase64UrlTextPart_(encoded, part);
     if (decoded !== null && decoded.length <= budget.remaining) {
-      plainText.push(decoded);
+      couponText.push(mimeType === 'text/html' ? htmlToCouponText_(decoded) : decoded);
       budget.remaining -= decoded.length;
     }
   }
   (part.parts || []).forEach(function(child) {
-    collectPlainTextParts_(child, plainText, messageId, budget);
+    collectCouponTextParts_(child, couponText, messageId, budget);
   });
 }
 
@@ -1157,7 +1333,7 @@ function isAttachedPart_(part) {
 function decodeBase64UrlTextPart_(encoded, part) {
   try {
     var bytes = Utilities.base64DecodeWebSafe(encoded);
-    var charset = declaredPlainTextCharset_(part);
+    var charset = declaredTextPartCharset_(part);
     if (!charset || !validTextPartBytes_(bytes, charset)) {
       return null;
     }
@@ -1168,7 +1344,7 @@ function decodeBase64UrlTextPart_(encoded, part) {
   }
 }
 
-function declaredPlainTextCharset_(part) {
+function declaredTextPartCharset_(part) {
   var contentTypes = (part.headers || []).filter(function(header) {
     return header && typeof header.name === 'string' && typeof header.value === 'string' &&
       header.name.toLowerCase() === 'content-type';
@@ -1180,7 +1356,7 @@ function declaredPlainTextCharset_(part) {
     return null;
   }
   var pieces = contentTypes[0].value.split(';');
-  if (!/^\s*text\/plain\s*$/iu.test(pieces.shift())) {
+  if (!/^\s*text\/(?:plain|html)\s*$/iu.test(pieces.shift())) {
     return null;
   }
   var charsets = [];
@@ -1209,6 +1385,43 @@ function declaredPlainTextCharset_(part) {
     return 'ISO-8859-1';
   }
   return null;
+}
+
+function htmlToCouponText_(html) {
+  if (typeof html !== 'string') {
+    return '';
+  }
+  // Apps Script has no HTML/CSS renderer. A stylesheet means visibility cannot
+  // be established reliably, so fail closed instead of importing preview text.
+  if (/<(?:blockquote|style|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)|&(?!amp;|apos;|gt;|lt;|nbsp;|quot;)[a-z][a-z0-9]+;/iu.test(html)) {
+    return '';
+  }
+  var withoutInactiveContent = html
+    .replace(/<!--[\s\S]*?-->/gu, '')
+    .replace(/<head\b[^>]*>[\s\S]*?<\/head\s*>/giu, '')
+    .replace(/<a\b[^>]*>[\s\S]*?<\/a\s*>/giu, ' [link omitted] ')
+    .replace(/<img\b[^>]*>/giu, ' [image omitted] ')
+    .replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote\s*>/giu, '')
+    .replace(/<([A-Za-z][A-Za-z0-9:-]*)\b(?=[^>]*(?:\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']*["']))[^>]*>[\s\S]*?<\/\1\s*>/giu, '')
+    .replace(/<(?:script|style|noscript|template|title)\b[^>]*>[\s\S]*?<\/(?:script|style|noscript|template|title)\s*>/giu, '');
+  var lineAware = withoutInactiveContent
+    .replace(/<(?:br|hr)\b[^>]*>/giu, '\n')
+    .replace(/<\/(?:p|div|li|tr|h[1-6]|table|section|article|blockquote)\s*>/giu, '\n')
+    .replace(/<[^>]*>/gu, '');
+  return decodeHtmlEntities_(lineAware).replace(/\r\n?/gu, '\n');
+}
+
+function decodeHtmlEntities_(value) {
+  var named = {amp: '&', apos: "'", gt: '>', lt: '<', nbsp: ' ', quot: '"'};
+  return value.replace(/&(#x[0-9a-f]+|#\d+|amp|apos|gt|lt|nbsp|quot);/giu, function(entity, encoded) {
+    var key = encoded.toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(named, key)) {
+      return named[key];
+    }
+    var codePoint = key.indexOf('#x') === 0 ? parseInt(key.slice(2), 16) : parseInt(key.slice(1), 10);
+    return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 1114111 &&
+      !(codePoint >= 55296 && codePoint <= 57343) ? String.fromCodePoint(codePoint) : entity;
+  });
 }
 
 function validTextPartBytes_(bytes, charset) {
@@ -1265,7 +1478,7 @@ function messageHasSystemExclusionLabel_(message) {
     message.labelIds.indexOf('TRASH') !== -1;
 }
 
-function extractCouponCodes_(subject, plainText) {
+function extractCouponCodes_(subject, plainText, promotionContextDictionaries) {
   var sourceParts = Array.isArray(plainText) ? plainText : [plainText];
   var content = [];
   if (subject && !isInheritedReplyOrForwardSubject_(subject)) {
@@ -1278,13 +1491,13 @@ function extractCouponCodes_(subject, plainText) {
     }
   });
   var messageContext = content.join('\n');
-  if (/\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b/iu.test(messageContext) ||
+  if (/\botp\b|\b(?:one[- ]time password|verification|authentication|sign[- ]in|login|security)\s+code\b|\bcodice\s+(?:(?:di\s+)?(?:verifica|accesso|sicurezza)|otp)\b/iu.test(messageContext) ||
       hasReferralCouponContext_(messageContext)) {
     return [];
   }
   var found = [];
   content.forEach(function(text) {
-    collectExplicitCouponTokens_(text, found);
+    collectExplicitCouponTokens_(text, found, promotionContextDictionaries);
   });
   return found;
 }
@@ -1294,13 +1507,22 @@ function isInheritedReplyOrForwardSubject_(subject) {
 }
 
 function hasReferralCouponContext_(text) {
-  var introducer = /\b(?:coupon|promo(?:tional)?|discount)\s+code\b|\bcodice\s+sconto\b/iu;
-  if (!introducer.test(text)) {
-    return false;
-  }
   return /\breferral\b/iu.test(text) ||
     /\b(?:share|refer|invite|give|send|invia|inoltra|invita|condividi|presenta)\b/iu.test(text) &&
       /\b(?:friends?|amic(?:o|a|i|he))\b/iu.test(text);
+}
+
+function hasCouponPromotionContext_(text, promotionContextDictionaries) {
+  return Object.keys(promotionContextDictionaries).some(function(locale) {
+    return promotionContextDictionaries[locale].some(function(term) {
+      return new RegExp('(^|[^\\p{L}\\p{N}])' + escapePromotionContextTerm_(term) +
+        '(?=$|[^\\p{L}\\p{N}])', 'iu').test(text);
+    });
+  });
+}
+
+function escapePromotionContextTerm_(term) {
+  return term.replace(/[|\\{}()[\]^$+*?.]/gu, '\\$&').replace(/ /gu, '[ \\t]+');
 }
 
 function stripQuotedReplyHistory_(plainText) {
@@ -1360,15 +1582,19 @@ function isQuotedReplyHistoryMarker_(line) {
     /^\s*Begin forwarded message:\s*$/iu.test(line);
 }
 
-function collectExplicitCouponTokens_(text, found) {
+function collectExplicitCouponTokens_(text, found, promotionContextDictionaries) {
   if (typeof text !== 'string') {
     return;
   }
   // The baseline intentionally recognizes only a self-contained coupon line.
   // It leaves contextual prose, replies, referrals and ambiguous offers alone.
-  var introducer = '^\\s*(?:(?:your|il tuo|la tua)\\s+)?(?:\\b(?:coupon|promo(?:tional)?|discount)\\s+code\\b|\\bcodice\\s+sconto\\b)';
+  var explicitIntroducer = '(?:(?:your|il tuo|la tua)\\s+)?(?:\\b(?:coupon|promo(?:tional)?|discount)\\s+code\\b|\\bcodice\\s+sconto\\b)';
+  var couponContext = hasCouponPromotionContext_(text, promotionContextDictionaries);
+  var actionIntroducer = couponContext ? '(?:(?:use|enter|apply|redeem|copy)\\s+(?:(?:the|your)\\s+)?code|(?:usa|inserisci|applica|riscatta)\\s+(?:(?:il tuo|la tua)\\s+)?codice)' : '(?!)';
+  var genericCodeIntroducer = couponContext ? '\\bcode\\b|\\bcodice\\b' : '(?!)';
+  var introducer = '^\\s*(?:' + explicitIntroducer + '|' + actionIntroducer + '|' + genericCodeIntroducer + ')';
   var quoted = new RegExp(introducer + '\\s*(?::|=|-|–)?\\s*["“]([^\\s<>{}\\[\\]"“”]{1,64})["”]\\s*$', 'iu');
-  var delimited = new RegExp(introducer + '\\s*(?::|=|-|–)\\s*([^\\s<>{}\\[\\]"“”]{1,64})\\s*$', 'iu');
+  var delimited = new RegExp(introducer + '\\s*(?::|=|-|–|\\s)\\s*([^\\s<>{}\\[\\]"“”]{1,64})\\s*$', 'iu');
   text.replace(/\r\n?/gu, '\n').split('\n').forEach(function(line) {
     [quoted, delimited].forEach(function(expression) {
       var match = expression.exec(line);
@@ -1376,11 +1602,22 @@ function collectExplicitCouponTokens_(text, found) {
         return;
       }
       var code = acceptCouponToken_(match[1], expression === quoted, false);
-      if (code && /\p{N}/u.test(code) && found.indexOf(code) === -1) {
+      if (code && isRecognizedCouponCode_(code) && found.indexOf(code) === -1) {
         found.push(code);
       }
     });
   });
+}
+
+function isRecognizedCouponCode_(code) {
+  if (/\p{N}/u.test(code)) {
+    return true;
+  }
+  // Letter-only coupons are accepted only when their line already has a
+  // promotion-specific introducer. Requiring a long uppercase token avoids
+  // treating ordinary prose such as "Code: Welcome" as a coupon.
+  return /^[\p{Lu}][\p{Lu}_-]{5,63}$/u.test(code) &&
+    !/^(?:CODE|COUPON|DISCOUNT|OFFER|PROMO|PROMOTION|WELCOME|APPLY|REDEEM)$/iu.test(code);
 }
 
 function acceptCouponToken_(token, quoted, hasFollowingWord) {

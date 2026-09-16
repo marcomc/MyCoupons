@@ -9,12 +9,14 @@
   Cloud project. Do not create replacement resources unless an audited existing
   resource is missing or ambiguous.
 - The baseline imports only explicitly introduced coupon or promotional codes
-  from subject and plain-text email content. It has no AI, image processing or
-  review UI.
+  from subject and bounded visible `text/plain` or `text/html` email content.
+  It has no AI, image processing or review UI.
 - A no-code, referral-only, authentication or ambiguous message remains
   untouched.
-- Write and verify the Sheet row before labeling and archiving its source
-  message. Advance the watermark only after a complete successful scan.
+- Write and verify each Sheet row before labeling and archiving its source
+  message. Advance the watermark only after a complete successful scan; on a
+  Gmail rate-limit failure, commit only verified rows and exact labels, keep
+  the watermark unchanged, and let the next scan exclude labeled messages.
 - Delete retained imported messages by moving them to Gmail Trash, never by an
   irreversible deletion.
 

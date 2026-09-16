@@ -11,6 +11,8 @@ function message({
   attachmentText = '',
   additionalHeaders = [],
   additionalPlainTextParts = [],
+  htmlBody = '',
+  htmlHeaders = [],
   plainTextHeaders = [],
   plainTextSize = undefined,
   inlineAttachmentText = '',
@@ -28,6 +30,8 @@ function message({
     body,
     date,
     from,
+    htmlBody,
+    htmlHeaders,
     id,
     labels,
     inlineAttachmentText,
@@ -62,6 +66,7 @@ function createRuntime({
   beforeLiveDeduplicationRead = null,
   beforeLiveDeduplicationReadAt = 2,
   beforeSnapshotFormulaRead = null,
+  beforeLegacyDateRevalidation = null,
   beforeAppendFormat = null,
   beforeFinalGmailAuthorization = null,
   beforeRetentionRecheck = null,
@@ -79,6 +84,7 @@ function createRuntime({
   missingMessageIds = [],
   now = new Date('2026-01-11T10:00:00.000Z'),
   labels = [{id: 'Label_Imported', name: 'Coupon Code Discount', type: 'user'}],
+  referenceDateNumberFormat = 'yyyy-mm-dd HH:mm:ss',
   listedMessageIds = messages.map(value => value.id),
   openedSpreadsheetName = undefined,
   sheetCanEdit = true,
@@ -110,6 +116,8 @@ function createRuntime({
   let liveDeduplicationReadPending = Boolean(beforeLiveDeduplicationRead);
   let liveHeaderReadPending = Boolean(beforeLiveHeaderRead);
   let snapshotFormulaReadPending = Boolean(beforeSnapshotFormulaRead);
+  let legacyDateRevalidationPending = Boolean(beforeLegacyDateRevalidation);
+  let legacyDateRangeValueReads = 0;
   let appendFormatPending = Boolean(beforeAppendFormat);
   let finalGmailAuthorizationPending = Boolean(beforeFinalGmailAuthorization);
   let retentionRecheckPending = Boolean(beforeRetentionRecheck);
@@ -218,6 +226,11 @@ function createRuntime({
         },
         getValues: () => values.slice(row - 1, row - 1 + rowCount)
           .map(value => {
+            if (legacyDateRevalidationPending && row === 2 && columnCount === 1 &&
+                (legacyDateRangeValueReads += 1) === 2) {
+              beforeLegacyDateRevalidation({formulas, values});
+              legacyDateRevalidationPending = false;
+            }
             if (liveHeaderReadPending && row === 1) {
               beforeLiveHeaderRead({formulas, values});
               liveHeaderReadPending = false;
@@ -245,6 +258,7 @@ function createRuntime({
             }
             return copy;
           }),
+        getNumberFormat: () => referenceDateNumberFormat,
       };
     },
     getRangeList(a1Notations) {
@@ -287,7 +301,9 @@ function createRuntime({
         mimeType: 'text/plain',
       }].concat(value.additionalPlainTextParts.map(body => ({
         body: {data: Buffer.from(body).toString('base64url')}, mimeType: 'text/plain',
-      }))).concat(value.attachmentText ? [{
+      }))).concat(value.htmlBody ? [{
+        body: {data: Buffer.from(value.htmlBody).toString('base64url')}, headers: value.htmlHeaders, mimeType: 'text/html',
+      }] : []).concat(value.attachmentText ? [{
         body: {data: Buffer.from(value.attachmentText).toString('base64url')},
         filename: 'coupon.txt',
         mimeType: 'text/plain',
@@ -881,10 +897,14 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'send-to-friend-referral', body: 'Send to a friend your promo code: FRIEND20'}),
     message({id: 'refer-friend', body: 'Refer a friend with promo code: FRIEND20'}),
     message({id: 'invite-friends', body: 'Invite friends with discount code: FRIEND20'}),
+    message({id: 'invite-action-code', body: 'Invite your friends today.\nUse code SHARING'}),
     message({id: 'italian-invite-friend', body: 'Invita un amico. Codice sconto: FRIEND20'}),
     message({id: 'friends-after-code', body: 'Promo code: FRIEND20 — invite friends'}),
     message({id: 'cross-field-referral', subject: 'Refer a friend today', body: 'Promo code: FRIEND20'}),
     message({id: 'otp', body: 'Your verification code: 123456'}),
+    message({id: 'standalone-otp-action-code', body: 'Your OTP is 123456.\nUse code 123456'}),
+    message({id: 'sign-in-action-code', body: 'Your sign-in code is below.\nUse code 123456'}),
+    message({id: 'security-action-code', body: 'Security code required.\nEnter code 867530'}),
     message({id: 'generic', body: 'Use SAVE20 at checkout'}),
     message({id: 'ordinary-prose', body: 'No coupon code is required.'}),
     message({id: 'expiry-prose', body: 'Coupon code expires tomorrow'}),
@@ -1089,6 +1109,180 @@ test('accepts one balanced outer token wrapper but rejects nested or unmatched w
   assert.equal(runtime.context.runMyCouponsImport().imported, 1);
   assert.equal(runtime.rows[1][1], 'SAVE20');
   assert.equal(runtime.mutations.length, 1);
+});
+
+test('imports an explicitly introduced coupon rendered only in HTML', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'html-coupon',
+    body: 'This message has no usable plain-text coupon.',
+    htmlBody: '<p>Special offer</p><p>Use code <strong>SAVE20</strong></p>',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'SAVE20');
+  assert.equal(runtime.mutations.length, 1);
+});
+
+test('imports a letter-only coupon from a coupon-context HTML Code line', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'html-letter-only-coupon',
+    body: 'No usable plain-text coupon is available.',
+    htmlBody: '<p>Here is your extra coupon.</p><p>Code: <strong>WELCOMEPURIFY</strong></p>',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'WELCOMEPURIFY');
+  assert.equal(runtime.mutations.length, 1);
+});
+
+test('imports a letter-only code when a supported multilingual promotion context is explicit', () => {
+  const runtime = createRuntime({messages: [
+    message({id: 'english-offer', htmlBody: '<p>Exclusive special offer</p><p>Code: AUTUMNSALE</p>'}),
+    message({id: 'italian-offer', htmlBody: '<p>Offerta speciale</p><p>Codice: AUTUNNO2026</p>'}),
+    message({id: 'french-offer', htmlBody: '<p>Offre promotionnelle</p><p>Code: AUTOMNE2026</p>'}),
+  ]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 3);
+  assert.deepEqual(runtime.rows.slice(1).map(row => row[1]).sort(), [
+    'AUTOMNE2026', 'AUTUMNSALE', 'AUTUNNO2026',
+  ]);
+  assert.equal(runtime.mutations.length, 3);
+});
+
+test('imports an explicit code from an owner-added promotion dictionary', () => {
+  const runtime = createRuntime({
+    config: {promotionContextDictionaries: {ja: ['割引']}},
+    messages: [message({
+      id: 'custom-dictionary',
+      htmlBody: '<p>割引</p><p>Code: SPRINGSALE</p>',
+      htmlHeaders: [{name: 'Content-Type', value: 'text/html; charset=UTF-8'}],
+    })],
+  });
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'SPRINGSALE');
+});
+
+test('does not import a letter-only Code line without coupon context', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'bare-letter-only-code', htmlBody: '<p>Code: WELCOMEPURIFY</p>',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 0);
+  assert.equal(runtime.rows.length, 1);
+  assert.equal(runtime.mutations.length, 0);
+});
+
+test('removes only known legacy properties while preserving baseline scan state', () => {
+  const runtime = createRuntime({scanState: JSON.stringify({version: 3, pendingIds: []})});
+  runtime.properties.set('GEMINI_API_KEY', 'legacy-secret');
+  runtime.properties.set('MYCOUPONS_GEMINI_VERTEX_UNTIL', '123');
+  runtime.properties.set('MYCOUPONS_MAILBOX_CONTINUATION', '{}');
+  runtime.properties.set('MYCOUPONS_MAILBOX_SCAN_STATE', '{}');
+  runtime.properties.set('MYCOUPONS_NOTIFICATION_STATE', '{}');
+  runtime.properties.set('MYCOUPONS_PENDING_NOTIFICATION', '{}');
+  runtime.properties.set('UNRELATED_PROPERTY', 'preserved');
+
+  const result = runtime.context.cleanupMyCouponsLegacyProperties();
+  const config = JSON.parse(runtime.properties.get('MYCOUPONS_CONFIG'));
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.removed)).sort(), [
+    'GEMINI_API_KEY', 'MYCOUPONS_GEMINI_VERTEX_UNTIL', 'MYCOUPONS_MAILBOX_CONTINUATION',
+    'MYCOUPONS_MAILBOX_SCAN_STATE', 'MYCOUPONS_NOTIFICATION_STATE', 'MYCOUPONS_PENDING_NOTIFICATION',
+  ]);
+  assert.deepEqual(Object.keys(config).sort(), [
+    'archiveImported', 'dailyHour', 'initialDate', 'labelName', 'ownerEmail', 'promotionContextDictionaries',
+    'retentionDays', 'sheetName', 'spreadsheetId', 'spreadsheetName', 'timeZone',
+    'trashExpiredImported', 'watermarkOverlapDays',
+  ]);
+  assert.equal(runtime.properties.get('MYCOUPONS_SCAN_STATE'), JSON.stringify({version: 3, pendingIds: []}));
+  assert.equal(runtime.properties.get('UNRELATED_PROPERTY'), 'preserved');
+});
+
+test('restarts a baseline import from its configured initial date without changing rows or labels', () => {
+  const runtime = createRuntime({
+    scanState: JSON.stringify({version: 3, pendingIds: ['pending']}),
+    watermark: '2026-09-16T00:00:00.000Z',
+    messages: [message({id: 'existing-row', body: 'Coupon code: SAVE20'})],
+  });
+
+  const result = runtime.context.restartMyCouponsImportFromInitialDate();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {restarted: true});
+  assert.equal(runtime.properties.get('MYCOUPONS_SCAN_STATE'), undefined);
+  assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK'), undefined);
+  assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY'), undefined);
+  assert.equal(runtime.rows.length, 1);
+  assert.equal(runtime.mutations.length, 0);
+});
+
+test('normalizes legacy Email Date strings through row 51 using the later row format', () => {
+  const existingRows = Array.from({length: 52}, (_, index) => [
+    '2026-01-' + String(index % 28 + 1).padStart(2, '0') + 'T08:00:00.000Z',
+    '', '', '', '', '', '',
+  ]);
+  const runtime = createRuntime({existingRows, referenceDateNumberFormat: 'dd/MM/yyyy HH:mm'});
+
+  const result = runtime.context.normalizeMyCouponsEmailDates();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {normalized: 50});
+  assert.deepEqual(runtime.numberFormats.at(-1), {
+    column: 1, columnCount: 1, format: 'dd/MM/yyyy HH:mm', row: 2, rowCount: 50,
+  });
+});
+
+test('refuses an ambiguous legacy Email Date string before changing the Sheet', () => {
+  const runtime = createRuntime({existingRows: [['10/11/2026', '', '', '', '', '', '']]});
+
+  assert.throws(() => runtime.context.normalizeMyCouponsEmailDates(), /unambiguous ISO 8601/);
+  assert.equal(runtime.rows[1][0], '10/11/2026');
+  assert.equal(runtime.numberFormats.length, 0);
+});
+
+test('refuses to replace a legacy Email Date formula during normalization', () => {
+  const runtime = createRuntime({
+    existingRows: [['2026-01-10T08:00:00.000Z', '', '', '', '', '', '']],
+    existingFormulas: [['=DATE(2026,1,10)', '', '', '', '', '', '']],
+  });
+
+  assert.throws(() => runtime.context.normalizeMyCouponsEmailDates(), /must not be a formula/);
+  assert.equal(runtime.formulas[1][0], '=DATE(2026,1,10)');
+  assert.equal(runtime.numberFormats.length, 0);
+});
+
+test('refuses to overwrite a concurrently changed legacy Email Date range', () => {
+  const runtime = createRuntime({
+    existingRows: [['2026-01-10T08:00:00.000Z', '', '', '', '', '', '']],
+    beforeLegacyDateRevalidation: ({formulas}) => { formulas[1][0] = '=NOW()'; },
+  });
+
+  assert.throws(() => runtime.context.normalizeMyCouponsEmailDates(), /changed before normalization/i);
+  assert.equal(runtime.formulas[1][0], '=NOW()');
+  assert.equal(runtime.numberFormats.length, 0);
+});
+
+test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
+  const runtime = createRuntime({messages: [
+    message({id: 'html-credits', htmlBody: '<p>Your account has 20 credits.</p>'}),
+    message({id: 'html-referral', htmlBody: '<p>Share your promo code: FRIEND20 with a friend.</p>'}),
+    message({id: 'html-bare-token', htmlBody: '<p><strong>SAVE20</strong></p>'}),
+    message({id: 'html-link-code', htmlBody: '<p>Coupon code: <a href="https://example.test">SAVE20</a></p>'}),
+    message({id: 'html-quoted-code', htmlBody: '<p>Thanks</p><blockquote>Coupon code: SAVE20</blockquote>'}),
+    message({id: 'html-hidden-code', htmlBody: '<div hidden><div>Heading</div><p>Coupon code: SAVE20</p></div>'}),
+    message({id: 'html-unquoted-hidden-code', htmlBody: '<p style=display:none>Coupon code: SAVE20</p>'}),
+    message({id: 'html-stylesheet-hidden-code', htmlBody: '<style>.preview { display:none }</style><div class="preview">Coupon code: SAVE20</div>'}),
+    message({id: 'html-head-code', htmlBody: '<head><title>Coupon code: SAVE20</title></head><body></body>'}),
+    message({id: 'html-template-code', htmlBody: '<template><template>x</template><p>Coupon code: SAVE20</p></template>'}),
+    message({id: 'html-anchor-boundary', htmlBody: '<p>Promo <a href="https://example.test">not a </a>code: SAVE20</p>'}),
+    message({id: 'html-image-boundary', htmlBody: '<p>Promo <img src="cid:x" alt="not a ">code: SAVE20</p>'}),
+    message({id: 'html-unsupported-entity', htmlBody: '<p>Coupon code: SAVE&ndash;20</p>'}),
+    message({id: 'line-break-offer-context', htmlBody: '<p>Employment offer</p><p>Code: CANDIDATE123</p>'}),
+    message({id: 'savings-account', body: 'Access your savings account.\nUse code 928357'}),
+  ]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 0);
+  assert.equal(runtime.rows.length, 1);
+  assert.equal(runtime.mutations.length, 0);
 });
 
 test('rejects absence markers and leading-apostrophe tokens without mutating Gmail or Sheet', () => {
