@@ -557,7 +557,7 @@ function resolveCouponColumns_(headers) {
 function makeCouponRow_(columns, columnCount, message, code, deduplicationKey, config) {
   var row = Array(columnCount).fill('');
   row[columns.emailDate] = message.date.toISOString();
-  row[columns.couponCode] = asSheetLiteral_(code);
+  row[columns.couponCode] = asCouponCodeSheetLiteral_(code);
   row[columns.sourceSubject] = asSheetLiteral_(message.subject);
   row[columns.sender] = asSheetLiteral_(message.from);
   row[columns.gmailLink] = asSheetLiteral_(gmailLinkForMessage_(message.threadId, config));
@@ -590,9 +590,13 @@ function asSheetLiteral_(value) {
   return /^[=+\-@]/.test(text) ? "'" + text : text;
 }
 
+function asCouponCodeSheetLiteral_(code) {
+  return /^[0-9]+$/u.test(code) ? "'" + code : asSheetLiteral_(code);
+}
+
 function sheetSemanticText_(value) {
   var text = String(value);
-  return /^'[=+\-@]/.test(text) ? text.slice(1) : text;
+  return /^'(?:[=+\-@]|\d)/.test(text) ? text.slice(1) : text;
 }
 
 function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
@@ -920,7 +924,7 @@ function toMyCouponsMessage_(message) {
     from: headers.from || '',
     id: message.id,
     labelIds: message.labelIds || [],
-    plainText: extractPlainText_(message.payload),
+    plainText: extractPlainText_(message.payload, message.id),
     subject: headers.subject || '',
     threadId: message.threadId,
   };
@@ -931,24 +935,29 @@ function validOpaqueGmailId_(value) {
     !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
-function extractPlainText_(payload) {
+function extractPlainText_(payload, messageId) {
   var plainText = [];
-  collectPlainTextParts_(payload, plainText);
+  collectPlainTextParts_(payload, plainText, messageId);
   return plainText.join('\n');
 }
 
-function collectPlainTextParts_(part, plainText) {
+function collectPlainTextParts_(part, plainText, messageId) {
   if (isAttachedPart_(part)) {
     return;
   }
-  if (String(part.mimeType || '').toLowerCase() === 'text/plain' && part.body && part.body.data) {
-    var decoded = decodeBase64UrlUtf8_(part.body.data);
+  if (String(part.mimeType || '').toLowerCase() === 'text/plain' && part.body) {
+    var encoded = part.body.data;
+    if (!encoded && validOpaqueGmailId_(part.body.attachmentId)) {
+      var attachment = Gmail.Users.Messages.Attachments.get('me', messageId, part.body.attachmentId);
+      encoded = attachment && attachment.data;
+    }
+    var decoded = decodeBase64UrlUtf8_(encoded);
     if (decoded !== null) {
       plainText.push(decoded);
     }
   }
   (part.parts || []).forEach(function(child) {
-    collectPlainTextParts_(child, plainText);
+    collectPlainTextParts_(child, plainText, messageId);
   });
 }
 

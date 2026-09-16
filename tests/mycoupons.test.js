@@ -9,6 +9,7 @@ function message({
   id,
   threadId = id,
   attachmentText = '',
+  inlineAttachmentText = '',
   encodedBody = null,
   subject = '',
   body = '',
@@ -23,6 +24,7 @@ function message({
     from,
     id,
     labels,
+    inlineAttachmentText,
     encodedBody,
     subject,
     threadId,
@@ -54,6 +56,7 @@ function createRuntime({
   beforeRetentionRecheck = null,
   formulaLastWriteColumns = [],
   attachmentText = '',
+  attachmentFetchFailureAfter = null,
   advanceClockOnList = false,
   fetchFailureAfter = null,
   listFailureAfter = null,
@@ -84,6 +87,7 @@ function createRuntime({
   const queries = [];
   const createdTriggers = [];
   let getMessageCount = 0;
+  let attachmentGetCount = 0;
   let listMessageCount = 0;
   let modifyMessageCount = 0;
   let trashMessageCount = 0;
@@ -155,7 +159,7 @@ function createRuntime({
     appendRow(row) {
       values.push(row.map(cell => {
         const text = String(cell);
-        return /^'[=+\-@]/.test(text) ? text.slice(1) : text;
+        return /^'(?:[=+\-@]|\d)/.test(text) ? text.slice(1) : text;
       }));
       formulas.push(row.map(cell => String(cell).startsWith('=') ? String(cell) : ''));
       if (externalAppendRow && !externalAppendDone) {
@@ -185,7 +189,7 @@ function createRuntime({
           rows.forEach((value, index) => {
             values[row - 1 + index] = value.map(cell => {
               const text = String(cell);
-              return /^'[=+\-@]/.test(text) ? text.slice(1) : text;
+              return /^'(?:[=+\-@]|\d)/.test(text) ? text.slice(1) : text;
             });
             formulas[row - 1 + index] = value.map(cell => String(cell).startsWith('=') ? String(cell) : '');
           });
@@ -229,7 +233,8 @@ function createRuntime({
       ],
       mimeType: 'multipart/alternative',
       parts: [{
-        body: {data: value.encodedBody ?? Buffer.from(value.body).toString('base64url')},
+        body: value.inlineAttachmentText ? {attachmentId: 'inline-' + value.id} :
+          {data: value.encodedBody ?? Buffer.from(value.body).toString('base64url')},
         mimeType: 'text/plain',
       }].concat(value.attachmentText ? [{
         body: {data: Buffer.from(value.attachmentText).toString('base64url')},
@@ -239,6 +244,9 @@ function createRuntime({
     },
     threadId: value.threadId,
   }]));
+  const inlineAttachments = new Map(messages.filter(value => value.inlineAttachmentText).map(value => [
+    'inline-' + value.id, Buffer.from(value.inlineAttachmentText).toString('base64url'),
+  ]));
   const context = {
     Date: class extends Date {
       constructor(...args) {
@@ -271,6 +279,17 @@ function createRuntime({
             }
             getMessageCount += 1;
             return gmailMessages.get(id);
+          },
+          Attachments: {
+            get: (userId, messageId, attachmentId) => {
+              assert.equal(userId, 'me');
+              assert.ok(gmailMessages.has(messageId));
+              if (attachmentFetchFailureAfter !== null && attachmentGetCount >= attachmentFetchFailureAfter) {
+                throw new Error(rateLimitError);
+              }
+              attachmentGetCount += 1;
+              return {data: inlineAttachments.get(attachmentId)};
+            },
           },
           list: (userId, options) => {
             assert.equal(userId, 'me');
@@ -374,6 +393,7 @@ function createRuntime({
     context, createdTriggers, formulas, mutations, numberFormats, properties, queries, rows: values, trashed,
     get sheetDataRangeReadCount() { return sheetDataRangeReadCount; },
     setFetchFailureAfter: value => { fetchFailureAfter = value; },
+    setAttachmentFetchFailureAfter: value => { attachmentFetchFailureAfter = value; },
     setListFailureAfter: value => { listFailureAfter = value; },
     setModifyFailureAfter: value => { modifyFailureAfter = value; },
     setSheetId: value => { sheetId = value; },
@@ -402,6 +422,26 @@ test('imports an explicitly introduced code, then labels and archives its exact 
     'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount', 'Label_Imported', 12345,
   ]));
   assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
+});
+
+test('preserves a leading-zero numeric coupon as text through retry repair', () => {
+  const runtime = createRuntime({
+    modifyFailureAfter: 0,
+    messages: [message({id: 'numeric-code', body: 'Coupon code: 012345'})],
+  });
+
+  const first = runtime.context.runMyCouponsImport();
+  assert.equal(first.complete, false);
+  assert.equal(runtime.rows[1][1], '012345');
+  assert.equal(runtime.rows[1][5], 'numeric-code::012345');
+  assert.deepEqual(runtime.mutations, []);
+
+  runtime.setModifyFailureAfter(null);
+  const resumed = runtime.context.runMyCouponsImport();
+  assert.equal(resumed.complete, true);
+  assert.equal(resumed.imported, 0);
+  assert.equal(runtime.rows[1][1], '012345');
+  assert.equal(runtime.mutations[0].id, 'numeric-code');
 });
 
 test('skips an undecodable MIME text part without aborting later valid messages', () => {
@@ -1739,6 +1779,36 @@ test('does not extract a code found only in a text attachment', () => {
 
   assert.equal(outcome.imported, 0);
   assert.equal(runtime.mutations.length, 0);
+});
+
+test('imports an inline plain-text MIME attachment fetched by attachment ID', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'inline-part',
+    inlineAttachmentText: 'Coupon code: INLINE20',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'INLINE20');
+  assert.equal(runtime.mutations[0].id, 'inline-part');
+});
+
+test('keeps an inline plain-text attachment message pending when its fetch is rate limited', () => {
+  const runtime = createRuntime({
+    attachmentFetchFailureAfter: 0,
+    messages: [message({id: 'inline-rate', inlineAttachmentText: 'Coupon code: INLINE20'})],
+  });
+
+  const first = runtime.context.runMyCouponsImport();
+  assert.deepEqual(JSON.parse(JSON.stringify(first)), {
+    complete: false, imported: 0, scanned: 0, watermark: null,
+  });
+  assert.deepEqual(JSON.parse(runtime.properties.get('MYCOUPONS_SCAN_STATE')).pendingIds, ['inline-rate']);
+  assert.equal(runtime.rows.length, 1);
+  assert.deepEqual(runtime.mutations, []);
+
+  runtime.setAttachmentFetchFailureAfter(null);
+  assert.equal(runtime.context.runMyCouponsImport().complete, true);
+  assert.equal(runtime.rows[1][1], 'INLINE20');
 });
 
 test('installs one daily trigger and rejects an ambiguous duplicate trigger set', () => {
