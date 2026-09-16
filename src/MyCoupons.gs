@@ -1393,7 +1393,7 @@ function htmlToCouponText_(html) {
   }
   // Apps Script has no HTML/CSS renderer. A stylesheet means visibility cannot
   // be established reliably, so fail closed instead of importing preview text.
-  if (/<(?:blockquote|script|style|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*(?:"[^"']*&[^"']*"|'[^"']*&[^"']*'|[^\s>]*&)|&(?!amp;|apos;|gt;|lt;|nbsp;|quot;)[a-z][a-z0-9]+;/iu.test(html)) {
+  if (/<(?:blockquote|pre|script|style|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*(?:"[^"']*&[^"']*"|'[^"']*&[^"']*'|[^\s>]*&)|&(?!amp;|apos;|gt;|lt;|nbsp;|quot;)[a-z][a-z0-9]+;/iu.test(html)) {
     return '';
   }
   var text = extractBoundedVisibleHtmlText_(html);
@@ -1442,13 +1442,15 @@ function extractBoundedVisibleHtmlText_(html) {
     } else if (!closing && name === 'img') {
       output.push(' [image omitted] ');
     } else if (!closing && (name === 'br' || name === 'hr')) {
-      output.push('\n');
+      output.push('\u0000');
     } else if (closing && /^(?:p|div|li|tr|h[1-6]|table|section|article)$/u.test(name)) {
-      output.push('\n');
+      output.push('\u0000');
     }
     index = tagEnd + 1;
   }
-  return ignoredElement ? null : output.join('');
+  return ignoredElement ? null : output.join('').split('\u0000').map(function(segment) {
+    return segment.replace(/[\t\r\n\f ]+/gu, ' ');
+  }).join('\n');
 }
 
 function findHtmlTagEnd_(html, start) {

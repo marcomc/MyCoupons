@@ -76,7 +76,8 @@ limit. It is cleared only after that fixed range completes.
    `text/plain` or `text/html` content. HTML is reduced to visible,
    line-oriented text; links, markup, scripts, styles and attachments never
    become coupon input. Because Apps Script does not render CSS, an HTML part
-   containing a stylesheet, script or hidden-content marker is ignored entirely. A
+   containing a stylesheet, script, preformatted or hidden-content marker is
+   ignored entirely. A
    part without a content-type header is accepted only as US-ASCII. Uncertain
    decoding or unsupported named HTML entities leaves the part untouched.
 4. Import only a complete code on a self-contained line that begins with an

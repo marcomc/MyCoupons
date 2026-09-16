@@ -1280,6 +1280,7 @@ test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
     message({id: 'html-image-boundary', htmlBody: '<p>Promo <img src="cid:x" alt="not a ">code: SAVE20</p>'}),
     message({id: 'html-unsupported-entity', htmlBody: '<p>Coupon code: SAVE&ndash;20</p>'}),
     message({id: 'line-break-offer-context', htmlBody: '<p>Employment offer</p><p>Code: CANDIDATE123</p>'}),
+    message({id: 'inline-formatting-newline', htmlBody: '<p>This employment package includes a special offer\nCode: CANDIDATE123</p>'}),
     message({id: 'savings-account', body: 'Access your savings account.\nUse code 928357'}),
   ]});
 
