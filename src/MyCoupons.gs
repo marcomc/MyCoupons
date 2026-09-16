@@ -587,10 +587,12 @@ function ownerStableLegacyGmailLinkForMessage_(messageId, config) {
 
 function asSheetLiteral_(value) {
   var text = String(value);
-  return /^[=+\-@]/.test(text) ? "'" + text : text;
+  return /^'/.test(text) || /^[=+\-@]/.test(text) ? "'" + text : text;
 }
 
 function asCouponCodeSheetLiteral_(code) {
+  // Coupon codes are always supplied as text literals before append: formatting
+  // after append cannot recover a value that Sheets has already coerced.
   return "'" + code;
 }
 
@@ -602,7 +604,7 @@ function sheetSemanticText_(value) {
 function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
   sheet.appendRow(row);
   var reservation = verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey);
-  sheet.getRange(reservation.rowNumber, 1, 1, row.length).setNumberFormat('@');
+  setCouponRowTextFormats_(sheet, reservation.rowNumber, populatedCouponColumns_(columns));
   reservation = verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey);
   var range = sheet.getRange(reservation.rowNumber, 1, 1, row.length);
   var written = range.getValues()[0];
@@ -610,6 +612,39 @@ function appendAndVerifyCouponRow_(sheet, row, columns, deduplicationKey) {
   if (!verifiedCouponRow_(written, formulas, row, columns, deduplicationKey, null)) {
     throw new Error('Coupon row verification failed before Gmail mutation.');
   }
+}
+
+function populatedCouponColumns_(columns) {
+  return [
+    columns.emailDate,
+    columns.couponCode,
+    columns.sourceSubject,
+    columns.sender,
+    columns.gmailLink,
+    columns.deduplicationKey,
+    columns.status,
+  ];
+}
+
+function setCouponRowTextFormats_(sheet, rowNumber, columns) {
+  var a1Notations = columns.map(function(column) { return columnToA1_(column + 1) + rowNumber; });
+  if (typeof sheet.getRangeList === 'function') {
+    sheet.getRangeList(a1Notations).setNumberFormat('@');
+    return;
+  }
+  columns.forEach(function(column) {
+    sheet.getRange(rowNumber, column + 1, 1, 1).setNumberFormat('@');
+  });
+}
+
+function columnToA1_(columnNumber) {
+  var result = '';
+  while (columnNumber > 0) {
+    var remainder = (columnNumber - 1) % 26;
+    result = String.fromCharCode(65 + remainder) + result;
+    columnNumber = Math.floor((columnNumber - 1) / 26);
+  }
+  return result;
 }
 
 function verifiedCurrentCouponReservation_(sheet, row, columns, deduplicationKey) {
@@ -679,19 +714,33 @@ function deduplicationCandidateCorrelatesMessage_(record, message, config, colum
 
 function verifiedCouponRow_(written, formulas, expected, columns, deduplicationKey, legacyGmailLinks) {
   if (!Array.isArray(written) || !Array.isArray(formulas) ||
-      sheetSemanticText_(written[columns.deduplicationKey]) !== deduplicationKey ||
-      sheetSemanticText_(written[columns.emailDate]) !== sheetSemanticText_(expected[columns.emailDate]) ||
-      sheetSemanticText_(written[columns.couponCode]) !== sheetSemanticText_(expected[columns.couponCode]) ||
-      sheetSemanticText_(written[columns.sourceSubject]) !== sheetSemanticText_(expected[columns.sourceSubject]) ||
-      sheetSemanticText_(written[columns.sender]) !== sheetSemanticText_(expected[columns.sender]) ||
-      sheetSemanticText_(written[columns.status]) !== sheetSemanticText_(expected[columns.status]) ||
+      !matchesExpectedSheetValue_(written[columns.deduplicationKey], expected[columns.deduplicationKey]) ||
+      !matchesExpectedSheetValue_(written[columns.emailDate], expected[columns.emailDate]) ||
+      !matchesForcedCouponCode_(written[columns.couponCode], expected[columns.couponCode]) ||
+      !matchesExpectedSheetValue_(written[columns.sourceSubject], expected[columns.sourceSubject]) ||
+      !matchesExpectedSheetValue_(written[columns.sender], expected[columns.sender]) ||
+      !matchesExpectedSheetValue_(written[columns.status], expected[columns.status]) ||
       formulas[columns.deduplicationKey] || formulas[columns.emailDate] || formulas[columns.couponCode] ||
       formulas[columns.gmailLink] || formulas[columns.sourceSubject] || formulas[columns.sender] || formulas[columns.status]) {
     return false;
   }
-  var storedLink = sheetSemanticText_(written[columns.gmailLink]);
-  return storedLink === sheetSemanticText_(expected[columns.gmailLink]) || Array.isArray(legacyGmailLinks) &&
+  var storedLink = String(written[columns.gmailLink]);
+  return storedLink === expectedSheetStoredText_(expected[columns.gmailLink]) || Array.isArray(legacyGmailLinks) &&
     legacyGmailLinks.indexOf(storedLink) !== -1;
+}
+
+function matchesExpectedSheetValue_(written, expected) {
+  return String(written) === expectedSheetStoredText_(expected);
+}
+
+function matchesForcedCouponCode_(written, expected) {
+  var text = String(expected);
+  return /^'/.test(text) && String(written) === text.slice(1);
+}
+
+function expectedSheetStoredText_(expected) {
+  var text = String(expected);
+  return /^'(?:['=+\-@]|\d)/.test(text) ? text.slice(1) : text;
 }
 
 function mutateImportedMessage_(messageId, labelId, archiveImported) {

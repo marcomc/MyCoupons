@@ -92,6 +92,7 @@ function createRuntime({
   let modifyMessageCount = 0;
   let trashMessageCount = 0;
   const numberFormats = [];
+  const rangeListCalls = [];
   let externalAppendDone = false;
   let liveDeduplicationReadPending = Boolean(beforeLiveDeduplicationRead);
   let appendFormatPending = Boolean(beforeAppendFormat);
@@ -100,6 +101,10 @@ function createRuntime({
   let sheetValueReadCount = 0;
   let sheetDataRangeReadCount = 0;
   const properties = new Map();
+  const normalizeSheetInput = cell => {
+    const text = String(cell);
+    return /^'/.test(text) ? text.slice(1) : text;
+  };
   const installedConfig = {
     ownerEmail: 'owner@example.com',
     spreadsheetId: 'sheet-id',
@@ -157,10 +162,7 @@ function createRuntime({
     getLastRow: () => values.length,
     getSheetId: () => sheetId,
     appendRow(row) {
-      values.push(row.map(cell => {
-        const text = String(cell);
-        return /^'/.test(text) ? text.slice(1) : text;
-      }));
+      values.push(row.map(normalizeSheetInput));
       formulas.push(row.map(cell => String(cell).startsWith('=') ? String(cell) : ''));
       if (externalAppendRow && !externalAppendDone) {
         values.push([...externalAppendRow]);
@@ -187,10 +189,7 @@ function createRuntime({
         },
         setValues: rows => {
           rows.forEach((value, index) => {
-            values[row - 1 + index] = value.map(cell => {
-              const text = String(cell);
-              return /^'/.test(text) ? text.slice(1) : text;
-            });
+            values[row - 1 + index] = value.map(normalizeSheetInput);
             formulas[row - 1 + index] = value.map(cell => String(cell).startsWith('=') ? String(cell) : '');
           });
           return this;
@@ -217,6 +216,26 @@ function createRuntime({
             }
             return copy;
           }),
+      };
+    },
+    getRangeList(a1Notations) {
+      return {
+        setNumberFormat(format) {
+          rangeListCalls.push({a1Notations: [...a1Notations], format});
+          a1Notations.forEach(notation => {
+            const match = /^([A-Z]+)(\d+)$/u.exec(notation);
+            assert.ok(match);
+            let column = 0;
+            match[1].split('').forEach(letter => { column = column * 26 + letter.charCodeAt(0) - 64; });
+            const row = Number(match[2]);
+            if (appendFormatPending) {
+              beforeAppendFormat({column, columnCount: 1, formulas, row, rowCount: 1, values});
+              appendFormatPending = false;
+            }
+            numberFormats.push({column, columnCount: 1, format, row, rowCount: 1});
+          });
+          return this;
+        },
       };
     },
   };
@@ -390,7 +409,7 @@ function createRuntime({
   vm.createContext(context);
   vm.runInContext(source, context, {filename: 'src/MyCoupons.gs'});
   return {
-    context, createdTriggers, formulas, mutations, numberFormats, properties, queries, rows: values, trashed,
+    context, createdTriggers, formulas, mutations, numberFormats, properties, queries, rangeListCalls, rows: values, trashed,
     get sheetDataRangeReadCount() { return sheetDataRangeReadCount; },
     setFetchFailureAfter: value => { fetchFailureAfter = value; },
     setAttachmentFetchFailureAfter: value => { attachmentFetchFailureAfter = value; },
@@ -421,6 +440,9 @@ test('imports an explicitly introduced code, then labels and archives its exact 
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY'), JSON.stringify([
     'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount', 'Label_Imported', 12345,
   ]));
+  assert.deepEqual(runtime.rangeListCalls, [{
+    a1Notations: ['A2', 'B2', 'C2', 'D2', 'E2', 'F2', 'G2'], format: '@',
+  }]);
   assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
 });
 
@@ -676,7 +698,10 @@ test('preserves the 26-column legacy sheet layout and writes legacy aliases at t
   assert.equal(row[20], 'legacy-message::SAVE20');
   assert.equal(row[21], 'imported');
   assert.equal(row[25], '');
-  assert.deepEqual(runtime.numberFormats.map(format => [format.column, format.columnCount, format.format]), [[1, 26, '@']]);
+  assert.deepEqual(runtime.numberFormats.map(format => [format.column, format.columnCount, format.format]), [
+    [4, 1, '@'], [5, 1, '@'], [6, 1, '@'], [7, 1, '@'],
+    [14, 1, '@'], [21, 1, '@'], [22, 1, '@'],
+  ]);
 });
 
 test('preserves case, Unicode, and supported punctuation only after an explicit introducer', () => {
@@ -873,9 +898,26 @@ test('treats untrusted Gmail text as literal Sheet text rather than a formula', 
   assert.equal(runtime.rows[1][2], '=IMPORTXML("https://example.com")');
   assert.equal(runtime.rows[1][3], '+attacker@example.com');
   assert.deepEqual(runtime.numberFormats.map(format => [format.column, format.columnCount, format.format]), [
-    [1, 7, '@'],
+    [1, 1, '@'], [2, 1, '@'], [3, 1, '@'], [4, 1, '@'],
+    [5, 1, '@'], [6, 1, '@'], [7, 1, '@'],
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(runtime.formulas[1].slice(1, 6))), ['', '', '', '', '']);
+});
+
+test('preserves genuine leading apostrophes in source metadata', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'leading-apostrophe',
+    subject: "'=literal-subject",
+    from: "'+literal@example.com",
+    body: 'Coupon code: SAVE20',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][2], "'=literal-subject");
+  assert.equal(runtime.rows[1][3], "'+literal@example.com");
+  assert.equal(runtime.formulas[1][2], '');
+  assert.equal(runtime.formulas[1][3], '');
+  assert.equal(runtime.mutations.length, 1);
 });
 
 test('deduplicates a previous verified row and repairs its missing Gmail mutation without another row', () => {
