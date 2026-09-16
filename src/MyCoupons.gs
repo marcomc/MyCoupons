@@ -1367,8 +1367,8 @@ function collectExplicitCouponTokens_(text, found) {
   // The baseline intentionally recognizes only a self-contained coupon line.
   // It leaves contextual prose, replies, referrals and ambiguous offers alone.
   var introducer = '^\\s*(?:(?:your|il tuo|la tua)\\s+)?(?:\\b(?:coupon|promo(?:tional)?|discount)\\s+code\\b|\\bcodice\\s+sconto\\b)';
-  var quoted = new RegExp(introducer + '\\s*(?::|=|-|–)?\\s*["“]([^\\s<>{}\\[\\]"“”]{1,64})["”](?=$|\\s|[.!?,;:])', 'iu');
-  var delimited = new RegExp(introducer + '\\s*(?::|=|-|–)\\s*([^\\s<>{}\\[\\]"“”]{1,64})(?=$|\\s)', 'iu');
+  var quoted = new RegExp(introducer + '\\s*(?::|=|-|–)?\\s*["“]([^\\s<>{}\\[\\]"“”]{1,64})["”]\\s*$', 'iu');
+  var delimited = new RegExp(introducer + '\\s*(?::|=|-|–)\\s*([^\\s<>{}\\[\\]"“”]{1,64})\\s*$', 'iu');
   text.replace(/\r\n?/gu, '\n').split('\n').forEach(function(line) {
     [quoted, delimited].forEach(function(expression) {
       var match = expression.exec(line);

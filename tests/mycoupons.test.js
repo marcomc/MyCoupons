@@ -847,7 +847,7 @@ test('preserves the 26-column legacy sheet layout and writes legacy aliases at t
 test('preserves case, Unicode, and supported punctuation only after an explicit introducer', () => {
   const runtime = createRuntime({messages: [message({
     id: 'unicode-punctuation',
-    body: 'Promo code: "MiXeDÈ/20+VIP". Use NOT-A-CODE normally.',
+    body: 'Promo code: "MiXeDÈ/20+VIP"',
     plainTextHeaders: [{name: 'Content-Type', value: 'text/plain; charset=UTF-8'}],
   })]});
 
@@ -875,6 +875,7 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'expiry-prose', body: 'Coupon code expires tomorrow'}),
     message({id: 'needed-prose', body: 'Coupon code is not needed'}),
     message({id: 'available-prose', body: 'Coupon code: available after signup'}),
+    message({id: 'alternative-codes', body: 'Coupon code: SAVE20 or SAVE30'}),
     message({id: 'expires-prose', body: 'Coupon code: expires tomorrow'}),
     message({id: 'click-prose', body: 'Promo code: click here'}),
     message({id: 'click-here', body: 'Promo code: click-here'}),
