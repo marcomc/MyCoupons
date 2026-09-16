@@ -2,7 +2,8 @@ var MYCOUPONS_CONFIG_PROPERTY = 'MYCOUPONS_CONFIG';
 var MYCOUPONS_WATERMARK_PROPERTY = 'MYCOUPONS_WATERMARK';
 var MYCOUPONS_WATERMARK_IDENTITY_PROPERTY = 'MYCOUPONS_WATERMARK_TARGET_IDENTITY';
 var MYCOUPONS_SCAN_STATE_PROPERTY = 'MYCOUPONS_SCAN_STATE';
-var MYCOUPONS_SCAN_STATE_VERSION = 2;
+var MYCOUPONS_SCAN_STATE_VERSION = 3;
+var MYCOUPONS_LEGACY_SCAN_STATE_VERSION = 2;
 var MYCOUPONS_DAILY_SCHEDULE_PROPERTY = 'MYCOUPONS_DAILY_SCHEDULE';
 var MYCOUPONS_DAILY_SCHEDULE_VERSION = 2;
 var MYCOUPONS_DAILY_HANDLER = 'runMyCouponsDaily';
@@ -134,9 +135,10 @@ function getMyCouponsInstallationStatus() {
   assertMyCouponsOwner_(config);
   var label = resolveImportedLabel_(config);
   var sheet = resolveCouponSheet_(config);
+  var sheetId = resolveCouponSheetId_(sheet);
   assertCouponSheetEditable_(sheet);
   readCouponSheetState_(sheet, config);
-  var importState = inspectPersistedImportState_(config, label.id, now);
+  var importState = inspectPersistedImportState_(config, label.id, sheetId, now);
   var matching = ScriptApp.getProjectTriggers().filter(function(trigger) {
       return trigger.getHandlerFunction() === MYCOUPONS_DAILY_HANDLER;
   });
@@ -156,9 +158,10 @@ function runMyCouponsImport_(config) {
   assertInitialDateNotFuture_(config, now);
   var label = resolveImportedLabel_(config);
   var sheet = resolveCouponSheet_(config);
+  var sheetId = resolveCouponSheetId_(sheet);
   assertCouponSheetEditable_(sheet);
   var sheetState = readCouponSheetState_(sheet, config);
-  var scan = loadOrStartScanState_(config, label.id, now);
+  var scan = loadOrStartScanState_(config, label.id, sheetId, now);
   var imported = 0;
   var scanned = 0;
 
@@ -166,7 +169,7 @@ function runMyCouponsImport_(config) {
     scanned += 1;
     if (message.date.getTime() < config.initialDate.getTime() || messageHasLabel_(message, label.id) ||
         messageHasSystemExclusionLabel_(message)) {
-      return;
+      return true;
     }
     var expectedCodes = [];
     extractCouponCodes_(message.subject, message.plainText).forEach(function(code) {
@@ -189,8 +192,34 @@ function runMyCouponsImport_(config) {
       if (!verifiedLiveExpectedCouponRows_(sheet, message, expectedCodes, config)) {
         throw new Error('Verified coupon rows changed and no longer prove their complete message and code identity before Gmail mutation.');
       }
-      mutateImportedMessage_(message.id, label.id, config.archiveImported);
+      var currentMessage;
+      try {
+        currentMessage = toMyCouponsMessage_(Gmail.Users.Messages.get('me', message.id, {format: 'full'}));
+      } catch (error) {
+        if (isGmailRateLimitError_(error)) {
+          return false;
+        }
+        if (isExactGmailMessageNotFound_(error)) {
+          return true;
+        }
+        throw error;
+      }
+      if (currentMessage.id !== message.id) {
+        throw new Error('Gmail returned a different message during final import authorization.');
+      }
+      if (messageHasLabel_(currentMessage, label.id) || messageHasSystemExclusionLabel_(currentMessage)) {
+        return true;
+      }
+      try {
+        mutateImportedMessage_(message.id, label.id, config.archiveImported);
+      } catch (error) {
+        if (isGmailRateLimitError_(error)) {
+          return false;
+        }
+        throw error;
+      }
     }
+    return true;
   }
 
   while (true) {
@@ -211,7 +240,10 @@ function runMyCouponsImport_(config) {
         }
         throw error;
       }
-      processMessage_(message);
+      if (!processMessage_(message)) {
+        saveScanState_(scan);
+        return {complete: false, imported: imported, scanned: scanned, watermark: null};
+      }
       scan.pendingIds.shift();
       saveScanState_(scan);
     }
@@ -223,7 +255,7 @@ function runMyCouponsImport_(config) {
       }
       PropertiesService.getScriptProperties().setProperty(MYCOUPONS_WATERMARK_PROPERTY, watermark);
       PropertiesService.getScriptProperties().setProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY,
-        watermarkTargetIdentity_(config, label.id));
+        watermarkTargetIdentity_(config, label.id, sheetId));
       PropertiesService.getScriptProperties().deleteProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
       return {complete: true, imported: imported, scanned: scanned, watermark: watermark};
     }
@@ -443,6 +475,14 @@ function resolveCouponSheet_(config) {
   return sheet;
 }
 
+function resolveCouponSheetId_(sheet) {
+  var sheetId = sheet && sheet.getSheetId && sheet.getSheetId();
+  if (!Number.isInteger(sheetId) || sheetId < 0) {
+    throw new Error('Configured coupon sheet has no valid stable sheet ID.');
+  }
+  return sheetId;
+}
+
 function assertCouponSheetEditable_(sheet) {
   var range = sheet.getRange(sheet.getLastRow() + 1, 1, 1, sheet.getLastColumn());
   if (!range || typeof range.canEdit !== 'function' || range.canEdit() !== true) {
@@ -632,7 +672,7 @@ function buildRetentionQuery_(config, threshold) {
     Math.floor(threshold.getTime() / 1000) + ' -in:sent -in:drafts -in:spam -in:trash';
 }
 
-function scanStart_(config, labelId, now) {
+function scanStart_(config, labelId, sheetId, now) {
   var properties = PropertiesService.getScriptProperties();
   var rawWatermark = properties.getProperty(MYCOUPONS_WATERMARK_PROPERTY);
   if (!rawWatermark) {
@@ -643,7 +683,7 @@ function scanStart_(config, labelId, now) {
       watermark.toISOString() !== rawWatermark) {
     throw new Error('Stored MyCoupons watermark is invalid. Repair it deliberately before importing.');
   }
-  if (properties.getProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY) !== watermarkTargetIdentity_(config, labelId)) {
+  if (properties.getProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY) !== watermarkTargetIdentity_(config, labelId, sheetId)) {
     properties.deleteProperty(MYCOUPONS_WATERMARK_PROPERTY);
     properties.deleteProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY);
     return initialScanStart_(config);
@@ -661,14 +701,14 @@ function initialScanStart_(config) {
   return start;
 }
 
-function watermarkTargetIdentity_(config, labelId) {
+function watermarkTargetIdentity_(config, labelId, sheetId) {
   return JSON.stringify([config.ownerEmail.toLowerCase(), config.spreadsheetId, config.sheetName,
-    config.labelName, labelId]);
+    config.labelName, labelId, sheetId]);
 }
 
-function scanConfigIdentity_(config) {
+function scanConfigIdentity_(config, sheetId) {
   return JSON.stringify([config.ownerEmail.toLowerCase(), config.labelName, config.spreadsheetId, config.sheetName,
-    config.archiveImported, config.initialDate.toISOString(), config.watermarkOverlapDays]);
+    sheetId, config.archiveImported, config.initialDate.toISOString(), config.watermarkOverlapDays]);
 }
 
 function validScanTimestamp_(value, now) {
@@ -677,49 +717,62 @@ function validScanTimestamp_(value, now) {
     (!now || date.getTime() <= now.getTime());
 }
 
-function loadOrStartScanState_(config, labelId, boundary) {
+function loadOrStartScanState_(config, labelId, sheetId, boundary) {
   var properties = PropertiesService.getScriptProperties();
   var raw = properties.getProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
   if (!raw) {
-    return newScanState_(config, labelId, boundary);
+    return newScanState_(config, labelId, sheetId, boundary);
+  }
+  if (isKnownLegacyScanState_(raw, boundary)) {
+    clearPersistedImportState_(properties);
+    return newScanState_(config, labelId, sheetId, boundary);
   }
   var scan = parseStoredScanState_(raw, boundary);
-  if (scan.configIdentity !== scanConfigIdentity_(config) || scan.labelName !== config.labelName || scan.labelId !== labelId) {
-    properties.deleteProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
-    properties.deleteProperty(MYCOUPONS_WATERMARK_PROPERTY);
-    properties.deleteProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY);
-    return newScanState_(config, labelId, boundary);
+  if (scan.configIdentity !== scanConfigIdentity_(config, sheetId) || scan.labelName !== config.labelName ||
+      scan.labelId !== labelId || scan.sheetId !== sheetId) {
+    clearPersistedImportState_(properties);
+    return newScanState_(config, labelId, sheetId, boundary);
   }
   return scan;
 }
 
-function newScanState_(config, labelId, boundary) {
-  var start = scanStart_(config, labelId, boundary);
+function clearPersistedImportState_(properties) {
+  properties.deleteProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
+  properties.deleteProperty(MYCOUPONS_WATERMARK_PROPERTY);
+  properties.deleteProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY);
+}
+
+function newScanState_(config, labelId, sheetId, boundary) {
+  var start = scanStart_(config, labelId, sheetId, boundary);
   if (start.getTime() > boundary.getTime()) {
     throw new Error('MYCOUPONS_CONFIG.initialDate cannot be after the import boundary.');
   }
-  return {version: MYCOUPONS_SCAN_STATE_VERSION, configIdentity: scanConfigIdentity_(config), labelId: labelId,
-    labelName: config.labelName, start: start.toISOString(), boundary: boundary.toISOString(),
+  return {version: MYCOUPONS_SCAN_STATE_VERSION, configIdentity: scanConfigIdentity_(config, sheetId), labelId: labelId,
+    labelName: config.labelName, sheetId: sheetId, start: start.toISOString(), boundary: boundary.toISOString(),
     pageToken: '', pendingIds: [], listedFinalPage: false};
 }
 
 function parseStoredScanState_(raw, now) {
-  var scan;
-  try {
-    scan = JSON.parse(raw);
-  } catch (error) {
-    throw new Error('Stored MyCoupons scan state is invalid. Repair it deliberately before importing.');
-  }
+  var scan = parseStoredScanStateJson_(raw);
   if (!validStoredScanState_(scan, now)) {
     throw new Error('Stored MyCoupons scan state is invalid. Repair it deliberately before importing.');
   }
   return scan;
 }
 
-function validStoredScanState_(scan, now) {
+function parseStoredScanStateJson_(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error('Stored MyCoupons scan state is invalid. Repair it deliberately before importing.');
+  }
+}
+
+function isKnownLegacyScanState_(raw, now) {
+  var scan = parseStoredScanStateJson_(raw);
   return !!scan && typeof scan === 'object' && !Array.isArray(scan) &&
     Object.keys(scan).sort().join(',') === 'boundary,configIdentity,labelId,labelName,listedFinalPage,pageToken,pendingIds,start,version' &&
-    scan.version === MYCOUPONS_SCAN_STATE_VERSION && typeof scan.configIdentity === 'string' && !!scan.configIdentity &&
+    scan.version === MYCOUPONS_LEGACY_SCAN_STATE_VERSION && typeof scan.configIdentity === 'string' && !!scan.configIdentity &&
     typeof scan.labelName === 'string' && !!scan.labelName && typeof scan.labelId === 'string' && !!scan.labelId &&
     validScanTimestamp_(scan.start, now) && validScanTimestamp_(scan.boundary, now) &&
     new Date(scan.start).getTime() <= new Date(scan.boundary).getTime() && typeof scan.pageToken === 'string' &&
@@ -730,7 +783,22 @@ function validStoredScanState_(scan, now) {
     !(scan.listedFinalPage && !!scan.pageToken);
 }
 
-function inspectPersistedImportState_(config, labelId, now) {
+function validStoredScanState_(scan, now) {
+  return !!scan && typeof scan === 'object' && !Array.isArray(scan) &&
+    Object.keys(scan).sort().join(',') === 'boundary,configIdentity,labelId,labelName,listedFinalPage,pageToken,pendingIds,sheetId,start,version' &&
+    scan.version === MYCOUPONS_SCAN_STATE_VERSION && typeof scan.configIdentity === 'string' && !!scan.configIdentity &&
+    typeof scan.labelName === 'string' && !!scan.labelName && typeof scan.labelId === 'string' && !!scan.labelId &&
+    Number.isInteger(scan.sheetId) && scan.sheetId >= 0 &&
+    validScanTimestamp_(scan.start, now) && validScanTimestamp_(scan.boundary, now) &&
+    new Date(scan.start).getTime() <= new Date(scan.boundary).getTime() && typeof scan.pageToken === 'string' &&
+    scan.pageToken.length <= 1000 && Array.isArray(scan.pendingIds) &&
+    scan.pendingIds.length <= MYCOUPONS_SEARCH_PAGE_SIZE &&
+    !scan.pendingIds.some(function(id) { return typeof id !== 'string' || !id; }) &&
+    new Set(scan.pendingIds).size === scan.pendingIds.length && typeof scan.listedFinalPage === 'boolean' &&
+    !(scan.listedFinalPage && !!scan.pageToken);
+}
+
+function inspectPersistedImportState_(config, labelId, sheetId, now) {
   var properties = PropertiesService.getScriptProperties();
   var watermark = properties.getProperty(MYCOUPONS_WATERMARK_PROPERTY);
   var watermarkIdentity = properties.getProperty(MYCOUPONS_WATERMARK_IDENTITY_PROPERTY);
@@ -742,13 +810,17 @@ function inspectPersistedImportState_(config, labelId, now) {
     if (!validScanTimestamp_(watermark, now)) {
       throw new Error('Stored MyCoupons watermark is invalid. Repair it deliberately before importing.');
     }
-    restartRequired = watermarkIdentity !== watermarkTargetIdentity_(config, labelId);
+    restartRequired = watermarkIdentity !== watermarkTargetIdentity_(config, labelId, sheetId);
   }
   var rawScan = properties.getProperty(MYCOUPONS_SCAN_STATE_PROPERTY);
   if (rawScan) {
-    var scan = parseStoredScanState_(rawScan, now);
-    restartRequired = restartRequired || scan.configIdentity !== scanConfigIdentity_(config) ||
-      scan.labelName !== config.labelName || scan.labelId !== labelId;
+    if (isKnownLegacyScanState_(rawScan, now)) {
+      restartRequired = true;
+    } else {
+      var scan = parseStoredScanState_(rawScan, now);
+      restartRequired = restartRequired || scan.configIdentity !== scanConfigIdentity_(config, sheetId) ||
+        scan.labelName !== config.labelName || scan.labelId !== labelId || scan.sheetId !== sheetId;
+    }
   }
   return restartRequired ? 'restart-required' : 'current';
 }
@@ -905,12 +977,19 @@ function stripQuotedReplyHistory_(plainText) {
   var lines = plainText.replace(/\r\n?/gu, '\n').split('\n');
   var retained = [];
   for (var index = 0; index < lines.length; index += 1) {
-    if (isQuotedReplyHistoryMarker_(lines[index])) {
+    if (isQuotedReplyHistoryMarker_(lines[index]) || isOutlookQuotedHeaderBlock_(lines, index)) {
       return {hadQuotedHistory: true, text: retained.join('\n')};
     }
     retained.push(lines[index]);
   }
   return {hadQuotedHistory: false, text: retained.join('\n')};
+}
+
+function isOutlookQuotedHeaderBlock_(lines, index) {
+  var headers = ['from', 'sent', 'to', 'subject'];
+  return headers.every(function(name, offset) {
+    return new RegExp('^\\s*' + name + '\\s*:\\s*\\S', 'iu').test(lines[index + offset] || '');
+  });
 }
 
 function isQuotedReplyHistoryMarker_(line) {

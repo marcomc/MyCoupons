@@ -49,12 +49,14 @@ function createRuntime({
   coerceLastWrite = false,
   beforeLiveDeduplicationRead = null,
   beforeLiveDeduplicationReadAt = 2,
+  beforeFinalGmailAuthorization = null,
   beforeRetentionRecheck = null,
   formulaLastWriteColumns = [],
   attachmentText = '',
   advanceClockOnList = false,
   fetchFailureAfter = null,
   listFailureAfter = null,
+  modifyFailureAfter = null,
   trashFailureAfter = null,
   listPageSize = 100,
   missingMessageIds = [],
@@ -63,6 +65,7 @@ function createRuntime({
   listedMessageIds = messages.map(value => value.id),
   openedSpreadsheetName = undefined,
   sheetCanEdit = true,
+  sheetId = 12345,
   profileEmail = 'owner@example.com',
   triggers = [],
   dailyScheduleMetadata = undefined,
@@ -80,10 +83,12 @@ function createRuntime({
   const createdTriggers = [];
   let getMessageCount = 0;
   let listMessageCount = 0;
+  let modifyMessageCount = 0;
   let trashMessageCount = 0;
   const numberFormats = [];
   let externalAppendDone = false;
   let liveDeduplicationReadPending = Boolean(beforeLiveDeduplicationRead);
+  let finalGmailAuthorizationPending = Boolean(beforeFinalGmailAuthorization);
   let retentionRecheckPending = Boolean(beforeRetentionRecheck);
   let sheetValueReadCount = 0;
   const properties = new Map();
@@ -117,6 +122,7 @@ function createRuntime({
       properties.set('MYCOUPONS_WATERMARK_TARGET_IDENTITY', watermarkTargetIdentity === undefined ? JSON.stringify([
         installedConfig.ownerEmail.toLowerCase(), installedConfig.spreadsheetId,
         installedConfig.sheetName, installedConfig.labelName, labels[0]?.id,
+        sheetId,
       ]) : watermarkTargetIdentity);
     }
   }
@@ -140,6 +146,7 @@ function createRuntime({
     },
     getLastColumn: () => headers.length,
     getLastRow: () => values.length,
+    getSheetId: () => sheetId,
     appendRow(row) {
       values.push(row.map(cell => {
         const text = String(cell);
@@ -239,6 +246,10 @@ function createRuntime({
         Messages: {
           get: (userId, id) => {
             assert.equal(userId, 'me');
+            if (finalGmailAuthorizationPending && getMessageCount === 1) {
+              beforeFinalGmailAuthorization(gmailMessages);
+              finalGmailAuthorizationPending = false;
+            }
             if (retentionRecheckPending && getMessageCount === 0) {
               beforeRetentionRecheck(gmailMessages);
               retentionRecheckPending = false;
@@ -279,7 +290,13 @@ function createRuntime({
               ...(next < queryMessageIds.length ? {nextPageToken: String(next)} : {}),
             };
           },
-          modify: (resource, userId, id) => mutations.push({resource, userId, id}),
+          modify: (resource, userId, id) => {
+            if (modifyFailureAfter !== null && modifyMessageCount >= modifyFailureAfter) {
+              throw new Error("Quota exceeded for quota metric 'Total Query Cost'.");
+            }
+            modifyMessageCount += 1;
+            mutations.push({resource, userId, id});
+          },
           trash: (userId, id) => {
             if (trashFailureAfter !== null && trashMessageCount >= trashFailureAfter) {
               throw new Error("Quota exceeded for quota metric 'Total Query Cost'.");
@@ -348,6 +365,8 @@ function createRuntime({
     context, createdTriggers, formulas, mutations, numberFormats, properties, queries, rows: values, trashed,
     setFetchFailureAfter: value => { fetchFailureAfter = value; },
     setListFailureAfter: value => { listFailureAfter = value; },
+    setModifyFailureAfter: value => { modifyFailureAfter = value; },
+    setSheetId: value => { sheetId = value; },
   };
 }
 
@@ -370,7 +389,7 @@ test('imports an explicitly introduced code, then labels and archives its exact 
   }]);
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK'), '2026-01-11T10:00:00.000Z');
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY'), JSON.stringify([
-    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount', 'Label_Imported',
+    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount', 'Label_Imported', 12345,
   ]));
   assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
 });
@@ -419,12 +438,44 @@ test('keeps the watermark unchanged after a Gmail rate limit while committing th
   assert.equal(outcome.imported, 1);
   assert.equal(outcome.watermark, null);
   assert.equal(runtime.properties.has('MYCOUPONS_WATERMARK'), false);
-  assert.deepEqual(JSON.parse(JSON.stringify(runtime.mutations)), [{
-    resource: {addLabelIds: ['Label_Imported'], removeLabelIds: ['INBOX']},
-    userId: 'me',
-    id: 'first',
-  }]);
+  assert.deepEqual(runtime.mutations, []);
   assert.ok(runtime.properties.has('MYCOUPONS_SCAN_STATE'));
+});
+
+test('uses fresh Gmail labels at final authorization and avoids a stale mutation', () => {
+  const runtime = createRuntime({
+    beforeFinalGmailAuthorization: gmailMessages => {
+      gmailMessages.get('fresh-labels').labelIds.push('SPAM');
+    },
+    messages: [message({id: 'fresh-labels', body: 'Coupon code: SAFE20'})],
+  });
+
+  assert.equal(runtime.context.runMyCouponsImport().complete, true);
+  assert.equal(runtime.rows[1][1], 'SAFE20');
+  assert.deepEqual(runtime.mutations, []);
+});
+
+test('keeps the current message pending when Gmail modify is rate limited, then repairs it', () => {
+  const runtime = createRuntime({
+    modifyFailureAfter: 0,
+    messages: [message({id: 'modify-rate', body: 'Coupon code: RETRY20'})],
+  });
+
+  const first = runtime.context.runMyCouponsImport();
+  assert.equal(first.complete, false);
+  assert.equal(first.imported, 1);
+  assert.equal(first.watermark, null);
+  assert.deepEqual(JSON.parse(runtime.properties.get('MYCOUPONS_SCAN_STATE')).pendingIds, ['modify-rate']);
+  assert.equal(runtime.properties.has('MYCOUPONS_WATERMARK'), false);
+  assert.deepEqual(runtime.mutations, []);
+
+  runtime.setModifyFailureAfter(null);
+  const resumed = runtime.context.runMyCouponsImport();
+  assert.equal(resumed.complete, true);
+  assert.equal(resumed.imported, 0);
+  assert.equal(runtime.rows.length, 2);
+  assert.equal(runtime.mutations.length, 1);
+  assert.equal(runtime.mutations[0].id, 'modify-rate');
 });
 
 test('resumes a durable page cursor after a list rate limit instead of repeating an irrelevant prefix', () => {
@@ -494,7 +545,7 @@ test('resumes pending page IDs after a message read rate limit without duplicati
   const first = runtime.context.runMyCouponsImport();
   assert.equal(first.complete, false);
   assert.equal(first.imported, 1);
-  assert.deepEqual(JSON.parse(runtime.properties.get('MYCOUPONS_SCAN_STATE')).pendingIds, ['second']);
+  assert.deepEqual(JSON.parse(runtime.properties.get('MYCOUPONS_SCAN_STATE')).pendingIds, ['first', 'second']);
 
   runtime.setFetchFailureAfter(null);
   const resumed = runtime.context.runMyCouponsImport();
@@ -614,6 +665,11 @@ test('does not import coupon codes found only in quoted reply or forward history
       body: 'Nessun nuovo codice.\n\nIl giorno mar 6 gen 2026 alle 10:00 Offers <offers@example.com> ha scritto:\nCodice sconto: SAVE20',
     }),
     message({
+      id: 'outlook-header-block',
+      subject: 'FW: promotion',
+      body: 'No new offer.\n\nFrom: Offers <offers@example.com>\nSent: Tuesday, January 6, 2026 10:00 AM\nTo: Owner <owner@example.com>\nSubject: Your promotion\nCoupon code: SAVE20',
+    }),
+    message({
       id: 'new-top-content',
       subject: 'Re: promotion',
       body: 'Coupon code: NEW20\n\n---------- Forwarded Message ----------\nCoupon code: OLD20',
@@ -630,6 +686,16 @@ test('does not import coupon codes found only in quoted reply or forward history
     userId: 'me',
     id: 'new-top-content',
   }]);
+});
+
+test('does not treat a standalone From line as quoted history', () => {
+  const runtime = createRuntime({messages: [message({
+    id: 'standalone-from',
+    body: 'From: our promotions desk\nCoupon code: REAL20',
+  })]});
+
+  assert.equal(runtime.context.runMyCouponsImport().imported, 1);
+  assert.equal(runtime.rows[1][1], 'REAL20');
 });
 
 test('requires the opened spreadsheet to have the exact configured name before Gmail mutation', () => {
@@ -934,7 +1000,7 @@ test('restarts from initialDate when a watermark belongs to a different target',
   runtime.context.runMyCouponsImport();
   assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY'), JSON.stringify([
-    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Replacement Label', 'Label_Replacement',
+    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Replacement Label', 'Label_Replacement', 12345,
   ]));
 });
 
@@ -955,8 +1021,24 @@ test('restarts from initialDate when a same-name imported label is replaced', ()
   assert.equal(runtime.context.runMyCouponsImport().complete, true);
   assert.match(runtime.queries.at(-1), new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
   assert.equal(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY'), JSON.stringify([
-    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount', 'Label_New',
+    'owner@example.com', 'sheet-id', 'Coupon Manager', 'Coupon Code Discount', 'Label_New', 12345,
   ]));
+});
+
+test('restarts safely when the same-named coupon tab has a new stable sheet ID', () => {
+  const runtime = createRuntime({
+    fetchFailureAfter: 0,
+    messages: [message({id: 'pending-sheet-replacement', body: 'Coupon code: SAVE20'})],
+  });
+
+  assert.equal(runtime.context.runMyCouponsImport().complete, false);
+  assert.equal(JSON.parse(runtime.properties.get('MYCOUPONS_SCAN_STATE')).sheetId, 12345);
+  runtime.setSheetId(67890);
+  runtime.setFetchFailureAfter(null);
+
+  assert.equal(runtime.context.runMyCouponsImport().complete, true);
+  assert.match(runtime.queries.at(-1), new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
+  assert.equal(JSON.parse(runtime.properties.get('MYCOUPONS_WATERMARK_TARGET_IDENTITY')).at(-1), 67890);
 });
 
 test('rejects a provider read-back that coerces the coupon code before Gmail mutation', () => {
@@ -1174,16 +1256,17 @@ test('read-only status validates persisted import state without mutating it', ()
   const validScan = JSON.stringify({
     boundary: '2026-01-11T10:00:00.000Z',
     configIdentity: JSON.stringify([
-      'owner@example.com', 'Coupon Code Discount', 'sheet-id', 'Coupon Manager', true,
+      'owner@example.com', 'Coupon Code Discount', 'sheet-id', 'Coupon Manager', 12345, true,
       '2026-01-01T00:00:00.000Z', 1,
     ]),
     labelId: 'Label_Imported',
     labelName: 'Coupon Code Discount',
+    sheetId: 12345,
     listedFinalPage: true,
     pageToken: '',
     pendingIds: [],
     start: '2026-01-10T10:00:00.000Z',
-    version: 2,
+    version: 3,
   });
   const runtime = createRuntime({
     scanState: validScan,
@@ -1200,13 +1283,8 @@ test('read-only status validates persisted import state without mutating it', ()
   assert.equal(runtime.createdTriggers.length, 0);
 });
 
-test('read-only status fails closed for malformed persisted scan or watermark state', () => {
-  const malformedScan = createRuntime({scanState: '{"version":2}'});
-  const malformedScanBefore = [...malformedScan.properties.entries()];
-  assert.throws(() => malformedScan.context.getMyCouponsInstallationStatus(), /scan state is invalid/i);
-  assert.deepEqual([...malformedScan.properties.entries()], malformedScanBefore);
-
-  const malformedTimestamp = JSON.stringify({
+test('reports an exact legacy v2 scan as restart-required and restarts it safely on import', () => {
+  const legacyScan = JSON.stringify({
     boundary: '2026-01-11T10:00:00.000Z',
     configIdentity: JSON.stringify([
       'owner@example.com', 'Coupon Code Discount', 'sheet-id', 'Coupon Manager', true,
@@ -1217,8 +1295,46 @@ test('read-only status fails closed for malformed persisted scan or watermark st
     listedFinalPage: true,
     pageToken: '',
     pendingIds: [],
-    start: 'not-a-timestamp',
+    start: '2026-01-10T10:00:00.000Z',
     version: 2,
+  });
+  const runtime = createRuntime({
+    scanState: legacyScan,
+    watermark: '2026-01-10T10:00:00.000Z',
+    messages: [message({id: 'legacy-restart', body: 'Coupon code: LEGACY20'})],
+  });
+  const before = [...runtime.properties.entries()];
+
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.context.getMyCouponsInstallationStatus())), {
+    dailyTrigger: 'missing', importState: 'restart-required', ready: true,
+  });
+  assert.deepEqual([...runtime.properties.entries()], before);
+  assert.equal(runtime.context.runMyCouponsImport().complete, true);
+  assert.equal(runtime.rows[1][1], 'LEGACY20');
+  assert.match(runtime.queries[0], new RegExp(`after:${Math.floor(Date.parse('2025-12-31T23:59:59.000Z') / 1000)}`));
+  assert.equal(runtime.properties.has('MYCOUPONS_SCAN_STATE'), false);
+});
+
+test('read-only status fails closed for malformed persisted scan or watermark state', () => {
+  const malformedScan = createRuntime({scanState: '{"version":2}'});
+  const malformedScanBefore = [...malformedScan.properties.entries()];
+  assert.throws(() => malformedScan.context.getMyCouponsInstallationStatus(), /scan state is invalid/i);
+  assert.deepEqual([...malformedScan.properties.entries()], malformedScanBefore);
+
+  const malformedTimestamp = JSON.stringify({
+    boundary: '2026-01-11T10:00:00.000Z',
+    configIdentity: JSON.stringify([
+      'owner@example.com', 'Coupon Code Discount', 'sheet-id', 'Coupon Manager', 12345, true,
+      '2026-01-01T00:00:00.000Z', 1,
+    ]),
+    labelId: 'Label_Imported',
+    labelName: 'Coupon Code Discount',
+    sheetId: 12345,
+    listedFinalPage: true,
+    pageToken: '',
+    pendingIds: [],
+    start: 'not-a-timestamp',
+    version: 3,
   });
   const malformedScanTimestamp = createRuntime({scanState: malformedTimestamp});
   const malformedScanTimestampBefore = [...malformedScanTimestamp.properties.entries()];
@@ -1244,16 +1360,17 @@ test('rejects future persisted watermark and scan timestamps before import can c
   const futureScan = createRuntime({scanState: JSON.stringify({
     boundary: future,
     configIdentity: JSON.stringify([
-      'owner@example.com', 'Coupon Code Discount', 'sheet-id', 'Coupon Manager', true,
+      'owner@example.com', 'Coupon Code Discount', 'sheet-id', 'Coupon Manager', 12345, true,
       '2026-01-01T00:00:00.000Z', 1,
     ]),
     labelId: 'Label_Imported',
     labelName: 'Coupon Code Discount',
+    sheetId: 12345,
     listedFinalPage: true,
     pageToken: '',
     pendingIds: [],
     start: future,
-    version: 2,
+    version: 3,
   })});
   const scanBefore = [...futureScan.properties.entries()];
   assert.throws(() => futureScan.context.getMyCouponsInstallationStatus(), /scan state is invalid/i);
@@ -1267,11 +1384,12 @@ test('read-only status reports valid stale import state without clearing it', ()
     configIdentity: 'stale-config',
     labelId: 'stale-label',
     labelName: 'Coupon Code Discount',
+    sheetId: 12345,
     listedFinalPage: true,
     pageToken: '',
     pendingIds: [],
     start: '2026-01-10T10:00:00.000Z',
-    version: 2,
+    version: 3,
   });
   const runtime = createRuntime({
     scanState: staleScan,
