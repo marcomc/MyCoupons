@@ -1174,7 +1174,7 @@ function declaredPlainTextCharset_(part) {
       header.name.toLowerCase() === 'content-type';
   });
   if (!contentTypes.length) {
-    return 'UTF-8';
+    return 'US-ASCII';
   }
   if (contentTypes.length !== 1) {
     return null;
@@ -1320,7 +1320,7 @@ function stripQuotedReplyHistory_(plainText) {
 }
 
 function isWrappedQuotedReplyHistoryMarker_(lines, index) {
-  if (!/^\s*On\s+\S.+$/iu.test(lines[index] || '')) {
+  if (!/^\s*(?:On|Il\s+giorno)\s+\S.+$/iu.test(lines[index] || '')) {
     return false;
   }
   for (var offset = 1; offset <= 2; offset += 1) {
@@ -1328,7 +1328,7 @@ function isWrappedQuotedReplyHistoryMarker_(lines, index) {
     if (!continuation.trim()) {
       continue;
     }
-    return /\bwrote:\s*$/iu.test(continuation);
+    return /\b(?:wrote|ha\s+scritto):\s*$/iu.test(continuation);
   }
   return false;
 }
@@ -1361,30 +1361,26 @@ function isQuotedReplyHistoryMarker_(line) {
 }
 
 function collectExplicitCouponTokens_(text, found) {
-  var introducer = '(?:\\b(?:coupon|promo(?:tional)?|discount)\\s+code\\b|\\bcodice\\s+sconto\\b)';
-  var quoted = new RegExp(introducer + '\\s*(?::|=|-|–)?\\s*["“]([^\\s<>{}\\[\\]"“”]{1,64})["”](?=$|\\s|[.!?,;:])', 'giu');
-  var delimited = new RegExp(introducer + '\\s*(?::|=|-|–)\\s*([^\\s<>{}\\[\\]"“”]{1,64})(?=$|\\s)', 'giu');
-  [quoted, delimited].forEach(function(expression) {
-    var match;
-    while ((match = expression.exec(text)) !== null) {
-      if (hasNoCodeContextBeforeIntroducer_(text, match.index)) {
-        continue;
+  if (typeof text !== 'string') {
+    return;
+  }
+  // The baseline intentionally recognizes only a self-contained coupon line.
+  // It leaves contextual prose, replies, referrals and ambiguous offers alone.
+  var introducer = '^\\s*(?:(?:your|il tuo|la tua)\\s+)?(?:\\b(?:coupon|promo(?:tional)?|discount)\\s+code\\b|\\bcodice\\s+sconto\\b)';
+  var quoted = new RegExp(introducer + '\\s*(?::|=|-|–)?\\s*["“]([^\\s<>{}\\[\\]"“”]{1,64})["”](?=$|\\s|[.!?,;:])', 'iu');
+  var delimited = new RegExp(introducer + '\\s*(?::|=|-|–)\\s*([^\\s<>{}\\[\\]"“”]{1,64})(?=$|\\s)', 'iu');
+  text.replace(/\r\n?/gu, '\n').split('\n').forEach(function(line) {
+    [quoted, delimited].forEach(function(expression) {
+      var match = expression.exec(line);
+      if (!match) {
+        return;
       }
-      var code = acceptCouponToken_(match[1], expression === quoted, /\s+\p{L}/u.test(text.slice(expression.lastIndex)));
-      if (code && found.indexOf(code) === -1) {
+      var code = acceptCouponToken_(match[1], expression === quoted, false);
+      if (code && /\p{N}/u.test(code) && found.indexOf(code) === -1) {
         found.push(code);
       }
-    }
+    });
   });
-}
-
-function hasNoCodeContextBeforeIntroducer_(text, introducerIndex) {
-  var sameSentence = text.slice(0, introducerIndex).split(/[\n.!?]+/u).pop();
-  var context = sameSentence.slice(-160);
-  return /\bnot\s+(?:(?:an?|the)\s+)?$/iu.test(context) ||
-    /\bnon\s+(?:è|e)\s+(?:(?:un[oa]?|il|lo)\s+)?$/iu.test(context) ||
-    /\b(?:no(?:\s+need\s+for)?|without|none|do(?:es)?\s+not\s+(?:need|require)|do(?:es)?n['’]t\s+(?:need|require)|not\s+require)(?:\s+(?:an?|the))?\s*$/iu.test(context) ||
-    /\b(?:nessun[oa]?(?:\s+bisogno\s+di)?|senza|non\s+richiede|non\s+serve|non\s+(?:è|e)\s+necessario|non\s+occorre)(?:\s+(?:alcun|un[oa]?|il|lo))?\s*$/iu.test(context);
 }
 
 function acceptCouponToken_(token, quoted, hasFollowingWord) {

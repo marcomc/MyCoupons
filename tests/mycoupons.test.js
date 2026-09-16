@@ -591,6 +591,7 @@ test('decodes an ASCII MIME part that declares text/plain without a charset', ()
 test('skips lossy or unsupported MIME text charsets without blocking later messages', () => {
   const runtime = createRuntime({messages: [
     message({id: 'malformed-utf8', encodedBody: Buffer.from([67, 111, 100, 101, 58, 32, 0xc8, 50, 48]).toString('base64url')}),
+    message({id: 'headerless-non-ascii', body: 'Coupon code: ESTATEÈ20'}),
     message({
       id: 'unsupported-charset', body: 'Coupon code: UNKNOWN20',
       plainTextHeaders: [{name: 'Content-Type', value: 'text/plain; charset=windows-1252'}],
@@ -847,6 +848,7 @@ test('preserves case, Unicode, and supported punctuation only after an explicit 
   const runtime = createRuntime({messages: [message({
     id: 'unicode-punctuation',
     body: 'Promo code: "MiXeDÈ/20+VIP". Use NOT-A-CODE normally.',
+    plainTextHeaders: [{name: 'Content-Type', value: 'text/plain; charset=UTF-8'}],
   })]});
 
   const outcome = runtime.context.runMyCouponsImport();
@@ -935,6 +937,11 @@ test('does not import coupon codes found only in quoted reply or forward history
       id: 'wrapped-on-wrote',
       subject: 'Re: promotion',
       body: 'Thanks for the details.\n\nOn Tue, Jan 6, 2026 at 10:00 AM Offers\n<offers@example.com> wrote:\nCoupon code: SAVE20',
+    }),
+    message({
+      id: 'wrapped-italian-on-wrote',
+      subject: 'Re: promozione',
+      body: 'Grazie.\n\nIl giorno mar 6 gen 2026 alle 10:00 Offers\n<offers@example.com> ha scritto:\nCodice sconto: SAVE20',
     }),
     message({
       id: 'leading-quote',
@@ -1366,7 +1373,7 @@ test('ignores a delimiter-shaped Notes row with an unrelated valid Gmail thread 
 test('writes all codes before making one exact Gmail mutation for their source message', () => {
   const runtime = createRuntime({messages: [message({
     id: 'message-2',
-    body: 'Coupon code: SAVE20 Promo code: FREESHIP',
+    body: 'Coupon code: SAVE20\nPromo code: FREESHIP20',
   })]});
 
   const outcome = runtime.context.runMyCouponsImport();
@@ -1386,7 +1393,7 @@ test('verifies every appended code for one message before its Gmail mutation', (
     },
     messages: [message({
       id: 'multi-code-race',
-      body: 'Coupon code: SAVE20 Promo code: FREESHIP',
+      body: 'Coupon code: SAVE20\nPromo code: FREESHIP20',
     })],
   });
 

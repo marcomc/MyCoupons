@@ -71,9 +71,13 @@ limit. It is cleared only after that fixed range completes.
 2. Resolve the configured imported label to exactly one user-created Gmail
    label, then exclude messages already carrying it or a Spam, Trash, Sent or
    Draft label.
-3. Inspect only subject and non-quoted plain-text message content.
-4. Import only a complete code immediately introduced by an explicit form such
-   as `coupon code`, `promo code`, `discount code` or `codice sconto`.
+3. Inspect only a non-reply/non-forward subject and bounded, non-quoted
+   `text/plain` content. A part without a content-type header is accepted only
+   as US-ASCII; uncertain decoding remains untouched.
+4. Import only a complete, digit-containing code on a self-contained line that
+   begins with an explicit form such as `coupon code`, `promo code`, `discount
+   code` or `codice sconto` (optionally `your`, `il tuo` or `la tua`).
+   Contextual prose is deliberately not interpreted.
 5. For every imported code, atomically append and verify a deduplicated Sheet
    row before mutating Gmail; an ambiguous append reservation fails closed.
 6. Label the exact source message and, when configured, remove only that
