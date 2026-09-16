@@ -894,6 +894,8 @@ test('does not mutate referral-only, authentication, ambiguous, or already impor
     message({id: 'friends-after-code', body: 'Promo code: FRIEND20 — invite friends'}),
     message({id: 'cross-field-referral', subject: 'Refer a friend today', body: 'Promo code: FRIEND20'}),
     message({id: 'otp', body: 'Your verification code: 123456'}),
+    message({id: 'sign-in-action-code', body: 'Your sign-in code is below.\nUse code 123456'}),
+    message({id: 'security-action-code', body: 'Security code required.\nEnter code 867530'}),
     message({id: 'generic', body: 'Use SAVE20 at checkout'}),
     message({id: 'ordinary-prose', body: 'No coupon code is required.'}),
     message({id: 'expiry-prose', body: 'Coupon code expires tomorrow'}),
@@ -1218,6 +1220,14 @@ test('normalizes legacy Email Date strings through row 51 using the later row fo
   assert.deepEqual(runtime.numberFormats.at(-1), {
     column: 1, columnCount: 1, format: 'dd/MM/yyyy HH:mm', row: 2, rowCount: 50,
   });
+});
+
+test('refuses an ambiguous legacy Email Date string before changing the Sheet', () => {
+  const runtime = createRuntime({existingRows: [['10/11/2026', '', '', '', '', '', '']]});
+
+  assert.throws(() => runtime.context.normalizeMyCouponsEmailDates(), /unambiguous ISO 8601/);
+  assert.equal(runtime.rows[1][0], '10/11/2026');
+  assert.equal(runtime.numberFormats.length, 0);
 });
 
 test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {

@@ -202,12 +202,16 @@ function normalizedLegacyEmailDate_(value, rowNumber) {
   if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) {
     return value;
   }
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error('Email Date at row ' + rowNumber + ' is not a valid date.');
+  var match = typeof value === 'string' && /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z$/u.exec(value);
+  if (!match) {
+    throw new Error('Email Date at row ' + rowNumber + ' must use an unambiguous ISO 8601 timestamp.');
   }
   var parsed = new Date(value);
-  if (isNaN(parsed.getTime())) {
-    throw new Error('Email Date at row ' + rowNumber + ' is not a valid date.');
+  if (isNaN(parsed.getTime()) || parsed.getUTCFullYear() !== Number(match[1]) ||
+      parsed.getUTCMonth() + 1 !== Number(match[2]) || parsed.getUTCDate() !== Number(match[3]) ||
+      parsed.getUTCHours() !== Number(match[4]) || parsed.getUTCMinutes() !== Number(match[5]) ||
+      parsed.getUTCSeconds() !== Number(match[6]) || parsed.getUTCMilliseconds() !== Number(match[7] || 0)) {
+    throw new Error('Email Date at row ' + rowNumber + ' must use a real ISO 8601 timestamp.');
   }
   return parsed;
 }
@@ -1465,7 +1469,7 @@ function extractCouponCodes_(subject, plainText, promotionContextDictionaries) {
     }
   });
   var messageContext = content.join('\n');
-  if (/\b(?:otp|one[- ]time password|verification code|authentication code)\b|\bcodice\s+(?:di\s+)?verifica\b|\bcodice\s+otp\b/iu.test(messageContext) ||
+  if (/\b(?:otp|one[- ]time password|verification|authentication|sign[- ]in|login|security)\s+code\b|\bcodice\s+(?:(?:di\s+)?(?:verifica|accesso|sicurezza)|otp)\b/iu.test(messageContext) ||
       hasReferralCouponContext_(messageContext)) {
     return [];
   }
