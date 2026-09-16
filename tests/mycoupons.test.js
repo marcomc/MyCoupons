@@ -1272,6 +1272,7 @@ test('leaves HTML credits, referrals, and unintroduced codes untouched', () => {
     message({id: 'html-unquoted-hidden-code', htmlBody: '<p style=display:none>Coupon code: SAVE20</p>'}),
     message({id: 'html-stylesheet-hidden-code', htmlBody: '<style>.preview { display:none }</style><div class="preview">Coupon code: SAVE20</div>'}),
     message({id: 'html-head-code', htmlBody: '<head><title>Coupon code: SAVE20</title></head><body></body>'}),
+    message({id: 'html-quoted-attribute-code', htmlBody: '<div title="x>\nCoupon code: SAVE20\n">hello</div>'}),
     message({id: 'html-template-code', htmlBody: '<template><template>x</template><p>Coupon code: SAVE20</p></template>'}),
     message({id: 'html-anchor-boundary', htmlBody: '<p>Promo <a href="https://example.test">not a </a>code: SAVE20</p>'}),
     message({id: 'html-image-boundary', htmlBody: '<p>Promo <img src="cid:x" alt="not a ">code: SAVE20</p>'}),

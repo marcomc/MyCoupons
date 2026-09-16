@@ -1396,19 +1396,76 @@ function htmlToCouponText_(html) {
   if (/<(?:blockquote|style|template)\b|\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|style\s*=\s*[^"'\s>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)|&(?!amp;|apos;|gt;|lt;|nbsp;|quot;)[a-z][a-z0-9]+;/iu.test(html)) {
     return '';
   }
-  var withoutInactiveContent = html
-    .replace(/<!--[\s\S]*?-->/gu, '')
-    .replace(/<head\b[^>]*>[\s\S]*?<\/head\s*>/giu, '')
-    .replace(/<a\b[^>]*>[\s\S]*?<\/a\s*>/giu, ' [link omitted] ')
-    .replace(/<img\b[^>]*>/giu, ' [image omitted] ')
-    .replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote\s*>/giu, '')
-    .replace(/<([A-Za-z][A-Za-z0-9:-]*)\b(?=[^>]*(?:\bhidden\b|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']*["']))[^>]*>[\s\S]*?<\/\1\s*>/giu, '')
-    .replace(/<(?:script|style|noscript|template|title)\b[^>]*>[\s\S]*?<\/(?:script|style|noscript|template|title)\s*>/giu, '');
-  var lineAware = withoutInactiveContent
-    .replace(/<(?:br|hr)\b[^>]*>/giu, '\n')
-    .replace(/<\/(?:p|div|li|tr|h[1-6]|table|section|article|blockquote)\s*>/giu, '\n')
-    .replace(/<[^>]*>/gu, '');
-  return decodeHtmlEntities_(lineAware).replace(/\r\n?/gu, '\n');
+  var text = extractBoundedVisibleHtmlText_(html);
+  return text === null ? '' : decodeHtmlEntities_(text).replace(/\r\n?/gu, '\n');
+}
+
+function extractBoundedVisibleHtmlText_(html) {
+  var output = [];
+  var ignoredElement = null;
+  var index = 0;
+  while (index < html.length) {
+    if (html.slice(index, index + 4) === '<!--') {
+      var commentEnd = html.indexOf('-->', index + 4);
+      if (commentEnd === -1) {
+        return null;
+      }
+      index = commentEnd + 3;
+      continue;
+    }
+    if (html.charAt(index) !== '<') {
+      if (!ignoredElement) {
+        output.push(html.charAt(index));
+      }
+      index += 1;
+      continue;
+    }
+    var tagEnd = findHtmlTagEnd_(html, index + 1);
+    if (tagEnd === -1) {
+      return null;
+    }
+    var tag = html.slice(index + 1, tagEnd);
+    var match = /^\s*(\/)?\s*([A-Za-z][A-Za-z0-9:-]*)\b/u.exec(tag);
+    if (!match) {
+      index = tagEnd + 1;
+      continue;
+    }
+    var closing = Boolean(match[1]);
+    var name = match[2].toLowerCase();
+    if (ignoredElement) {
+      if (closing && name === ignoredElement) {
+        ignoredElement = null;
+      }
+    } else if (!closing && (name === 'a' || name === 'head' || name === 'noscript' || name === 'script' || name === 'title')) {
+      ignoredElement = name;
+      output.push(name === 'a' ? ' [link omitted] ' : ' ');
+    } else if (!closing && name === 'img') {
+      output.push(' [image omitted] ');
+    } else if (!closing && (name === 'br' || name === 'hr')) {
+      output.push('\n');
+    } else if (closing && /^(?:p|div|li|tr|h[1-6]|table|section|article)$/u.test(name)) {
+      output.push('\n');
+    }
+    index = tagEnd + 1;
+  }
+  return ignoredElement ? null : output.join('');
+}
+
+function findHtmlTagEnd_(html, start) {
+  var quote = '';
+  for (var index = start; index < html.length; index += 1) {
+    var character = html.charAt(index);
+    if (quote) {
+      if (character === quote) {
+        quote = '';
+      }
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === '>') {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function decodeHtmlEntities_(value) {
